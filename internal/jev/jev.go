@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/nekowasabi/jev-routing/internal/compact"
@@ -130,56 +131,67 @@ func ChoiceOf(r *Response, id string) string {
 
 func AskCompact(c *Client, items []compact.Item, o compact.Options) (compact.Result, error) {
 	o = compact.Resolve(o)
-	cands := compact.CollectCandidates(items, o.PreserveRecent)
 	if !c.Live() {
 		return compact.CompactLocal(items, o), nil
 	}
-	answers := map[string]float64{}
-	requests := 0
-	for _, cand := range cands {
-		if cand.Pinned {
-			continue
+	var cands []compact.Candidate
+	for _, cand := range compact.CollectCandidates(items, o.PreserveRecent) {
+		if !cand.Pinned {
+			cands = append(cands, cand)
 		}
-		qs := compact.QuestionsFor(cand)
-		jq := map[string]Question{}
-		for k, v := range qs {
-			jq[k] = Question{Type: v.Type, Instructions: v.Instructions}
-		}
-		state := map[string]any{
-			"context": "coding-agent transcript; tool bodies omitted",
-			"goal":    o.Goal,
-			"history": preview(items),
-		}
-		res, err := c.Ask(state, jq)
+	}
+	fitted := compact.FitState(items, o)
+	state := map[string]any{
+		"context": "coding-agent transcript; tool bodies omitted",
+		"goal":    o.Goal,
+		"history": fitted.History,
+	}
+	batches := compact.BatchCandidates(cands, fitted.Tokens, o)
+
+	// One request per batch, all in flight at once; each goroutine owns its slot.
+	results := make([]map[string]float64, len(batches))
+	errs := make([]error, len(batches))
+	var wg sync.WaitGroup
+	for i, batch := range batches {
+		wg.Add(1)
+		go func(i int, batch []compact.Candidate) {
+			defer wg.Done()
+			jq := map[string]Question{}
+			for _, cand := range batch {
+				for k, v := range compact.QuestionsFor(cand) {
+					jq[k] = Question{Type: v.Type, Instructions: v.Instructions}
+				}
+			}
+			res, err := c.Ask(state, jq)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			answers := make(map[string]float64, len(jq))
+			for k := range jq {
+				answers[k] = NoulOf(res, k)
+			}
+			results[i] = answers
+		}(i, batch)
+	}
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
 			return compact.CompactLocal(items, o), err
 		}
-		requests++
-		for k := range jq {
-			answers[k] = NoulOf(res, k)
+	}
+
+	answers := map[string]float64{}
+	for _, m := range results {
+		for k, v := range m {
+			answers[k] = v
 		}
 	}
 	out := compact.Compact(items, answers, o)
-	out.Stats.Requests = requests
-	out.Stats.StateStage = "live"
+	out.Stats.Requests = len(batches)
+	out.Stats.StateStage = fitted.Stage
+	out.Stats.StateTokens = fitted.Tokens
 	return out, nil
-}
-
-func preview(items []compact.Item) []map[string]any {
-	out := make([]map[string]any, 0, len(items))
-	for _, it := range items {
-		row := map[string]any{"id": it.ID, "kind": it.Kind, "chars": it.Chars}
-		if it.Tool != "" {
-			row["tool"] = it.Tool
-		}
-		if it.Kind == compact.KindResult {
-			row["result"] = fmt.Sprintf("ok, %d chars (omitted)", it.Chars)
-		} else if it.Preview != "" {
-			row["preview"] = clip(it.Preview, 200)
-		}
-		out = append(out, row)
-	}
-	return out
 }
 
 func clip(s string, n int) string {
