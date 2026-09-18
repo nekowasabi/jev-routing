@@ -159,3 +159,54 @@ func TestCompactTruncatesStaleToolResult(t *testing.T) {
 		t.Fatalf("compaction did nothing %+v outlen=%d inlen=%d", stats, len(out), len(raw))
 	}
 }
+
+func TestGrokMissingCatalogDoesNotWriteEmptyTools(t *testing.T) {
+	req := map[string]any{
+		"model": "grok-4",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "フィボナッチ数列を出力するコードを作成して"},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Chosen != "passthrough:no-catalog" {
+		t.Fatalf("chosen %s %+v", stats.Chosen, stats)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["tools"]; ok {
+		t.Fatalf("must not insert tools key: %+v", got["tools"])
+	}
+}
+
+func TestFibonacciWithCatalogDoesNotStrip(t *testing.T) {
+	req := map[string]any{
+		"model": "grok-4",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "フィボナッチ数列を出力するコードを作成して"},
+		},
+		"tools": []any{
+			map[string]any{"type": "function", "function": map[string]any{"name": "search_replace"}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "task"}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "run_terminal_cmd"}},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ToolAfter == 0 {
+		t.Fatalf("must not empty catalog %+v", stats)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	if len(got["tools"].([]any)) == 0 {
+		t.Fatal("stripped all tools")
+	}
+}

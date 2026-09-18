@@ -30,7 +30,10 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	if err := json.Unmarshal(body, &root); err != nil {
 		return body, RewriteStats{}, err
 	}
-	tools := asSlice(root["tools"])
+	if !isChatTurn(root) {
+		return body, RewriteStats{Host: h, Chosen: "passthrough:not-chat"}, nil
+	}
+	tools, toolsKey := extractTools(root)
 	names := plan.ToolNames(asMaps(tools))
 	msgs := asSlice(root["messages"])
 	if msgs == nil {
@@ -38,6 +41,12 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	}
 	items, user := itemsFromMessages(msgs)
 	actions := actionsFromItems(items)
+
+	if len(names) == 0 {
+		// Grok Build often omits tools[] and lets cli-chat-proxy inject the catalog.
+		// Writing "tools": [] disables that injection.
+		return body, RewriteStats{Host: h, ToolBefore: 0, ToolAfter: 0, Chosen: "passthrough:no-catalog"}, nil
+	}
 	preserve := 2
 	if len(items) > 16 {
 		preserve = 6
@@ -85,7 +94,7 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	}
 
 	if d.Tool == plan.Respond || (d.Done >= 0.5 && !d.Gated) {
-		root["tools"] = []any{}
+		setTools(root, toolsKey, []any{})
 		delete(root, "tool_choice")
 		stats.ToolAfter = 0
 		out, err := json.Marshal(root)
@@ -94,19 +103,39 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 
 	kept := filterTools(tools, d.Tool)
 	if len(kept) == 0 {
-		// Chosen name is not in this request (e.g. Agent vs Task). Leave the
-		// host catalog alone instead of sending tool_choice for a missing tool,
-		// which makes Claude Code abort the turn.
 		stats.Chosen = "passthrough:" + d.Tool
 		stats.ToolAfter = stats.ToolBefore
 		out, err := json.Marshal(root)
 		return out, stats, err
 	}
-	root["tools"] = kept
+	setTools(root, toolsKey, kept)
 	root["tool_choice"] = toolChoice(h, d.Tool, root)
 	stats.ToolAfter = 1
 	out, err := json.Marshal(root)
 	return out, stats, err
+}
+
+func isChatTurn(root map[string]any) bool {
+	_, hasMsg := root["messages"]
+	_, hasIn := root["input"]
+	return hasMsg || hasIn
+}
+
+func extractTools(root map[string]any) ([]any, string) {
+	if t := asSlice(root["tools"]); t != nil {
+		return t, "tools"
+	}
+	if t := asSlice(root["functions"]); t != nil {
+		return t, "functions"
+	}
+	return nil, "tools"
+}
+
+func setTools(root map[string]any, key string, tools []any) {
+	if key == "" {
+		key = "tools"
+	}
+	root[key] = tools
 }
 
 func askNextTool(c *jev.Client, user string, actions []plan.Action, specs []plan.Spec) (plan.Decision, error) {

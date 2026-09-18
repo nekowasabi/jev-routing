@@ -110,9 +110,7 @@ func looksLikeLLM(path string) bool {
 	p := strings.ToLower(path)
 	return strings.Contains(p, "/messages") ||
 		strings.Contains(p, "/chat/completions") ||
-		strings.Contains(p, "/responses") ||
-		strings.HasSuffix(p, "/v1") ||
-		strings.Contains(p, "/oauth/")
+		strings.Contains(p, "/responses")
 }
 
 func itoa(n int) string {
