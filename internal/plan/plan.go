@@ -193,56 +193,57 @@ func aliasIn(set map[string]bool, want string) string {
 }
 
 func scoreCatalog(request string, actions []Action, specs []Spec) (string, float64) {
-	req := strings.ToLower(request)
-	used := map[string]int{}
+	requestText := strings.ToLower(request)
+	requestWords := words(requestText)
+	usageCount := map[string]int{}
 	for _, a := range actions {
-		used[a.Tool]++
+		usageCount[a.Tool]++
 	}
 	best := ""
-	bestS := 0.0
+	bestScore := 0.0
 	for _, spec := range specs {
-		s := 0.0
+		score := 0.0
 		name := spec.Name
-		blob := strings.ToLower(name + " " + spec.Desc)
-		for _, w := range words(req) {
+		searchText := strings.ToLower(name + " " + spec.Desc)
+		for _, w := range requestWords {
 			if len(w) < 4 {
 				continue
 			}
-			if strings.Contains(blob, w) {
-				s++
+			if strings.Contains(searchText, w) {
+				score++
 			}
 		}
 		switch {
 		case isAgent(name):
-			if nestedAgent(req) {
-				s -= 8
-			} else if hasAny(req, "explore", "subagent", "sub-agent", "parallel", "look through",
+			if nestedAgent(requestText) {
+				score -= 8
+			} else if hasAny(requestText, "explore", "subagent", "sub-agent", "parallel", "look through",
 				"codebase", "thoroughly", "delegate", "spawn", "調査", "探索") {
-				s += 5
+				score += 5
 			} else {
-				s -= 1.5
+				score -= 1.5
 			}
 		case isGrep(name):
-			if hasAny(req, "find", "search", "grep", "where", "探") {
-				s += 3
+			if hasAny(requestText, "find", "search", "grep", "where", "探") {
+				score += 3
 			}
 		case isRead(name):
-			if hasAny(req, "read", "open", "show", "見て") {
-				s += 2
+			if hasAny(requestText, "read", "open", "show", "見て") {
+				score += 2
 			}
 		case isEdit(name):
-			if hasAny(req, "fix", "edit", "patch", "replace", "直") {
-				s += 2
+			if hasAny(requestText, "fix", "edit", "patch", "replace", "直") {
+				score += 2
 			}
 		}
-		if used[name] > 0 && !isRead(name) {
-			s -= 3
+		if usageCount[name] > 0 && !isRead(name) {
+			score -= 3
 		}
-		if s > bestS {
-			best, bestS = name, s
+		if score > bestScore {
+			best, bestScore = name, score
 		}
 	}
-	return best, bestS
+	return best, bestScore
 }
 
 func isAgent(n string) bool {

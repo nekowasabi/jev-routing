@@ -39,6 +39,8 @@ jev-routing run claude            # ANTHROPIC_BASE_URL をプロキシへ
 jev-routing run codex             # Responses プロバイダ
 ```
 
+`run` はまず `127.0.0.1:8787` を使い、使用中なら空きポートを自動割当します。`JEV_LISTEN` を指定すると、そのアドレスを優先します。
+
 既存の `grok login` / `claude login` / `codex login` はそのままです。
 
 手で環境を書く場合:

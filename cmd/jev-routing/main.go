@@ -12,6 +12,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -65,7 +66,7 @@ Commands:
 
 Environment:
   TYPESAFE_API_KEY / JEV_API_KEY   Jev key (optional; local classifier otherwise)
-  JEV_LISTEN                       default 127.0.0.1:8787
+  JEV_LISTEN                       preferred bind address (run falls back to an available port)
 `)
 }
 
@@ -124,7 +125,6 @@ func cmdRun(args []string) int {
 	if len(rest) > 0 && rest[0] == "--" {
 		rest = rest[1:]
 	}
-	listen := envOr("JEV_LISTEN", "127.0.0.1:8787")
 	client := jev.FromEnv()
 	// Why: the child owns the terminal in raw mode; async proxy logs on the
 	// shared stderr fd would corrupt its TUI. Best effort — never fail the run.
@@ -134,13 +134,15 @@ func cmdRun(args []string) int {
 		defer logFile.Close()
 		logW = logFile
 	}
-	srv, err := proxy.New(listen, h, client, logW)
+	ln, err := listenForRun()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	ln, err := net.Listen("tcp", listen)
+	listen := ln.Addr().String()
+	srv, err := proxy.New(listen, h, client, logW)
 	if err != nil {
+		_ = ln.Close()
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -173,6 +175,18 @@ func cmdRun(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func listenForRun() (net.Listener, error) {
+	if listen := os.Getenv("JEV_LISTEN"); listen != "" {
+		return net.Listen("tcp", listen)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:8787")
+	if err == nil || !errors.Is(err, syscall.EADDRINUSE) {
+		return ln, err
+	}
+	// Why: Retain 8787 for existing manual configurations; only concurrent runs need a private port.
+	return net.Listen("tcp", "127.0.0.1:0")
 }
 
 // openRunLog opens the append-mode log for `run`. Returns (nil, "") on failure,

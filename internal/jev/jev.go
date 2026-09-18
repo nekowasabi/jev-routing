@@ -143,19 +143,19 @@ func AskCompact(c *Client, items []compact.Item, o compact.Options) (compact.Res
 	if !c.Live() {
 		return compact.CompactLocal(items, o), nil
 	}
-	var cands []compact.Candidate
+	var unPinnedCandidates []compact.Candidate
 	for _, cand := range compact.CollectCandidates(items, o.PreserveRecent) {
 		if !cand.Pinned {
-			cands = append(cands, cand)
+			unPinnedCandidates = append(unPinnedCandidates, cand)
 		}
 	}
 	fitted := compact.FitState(items, o)
 
 	// Reuse cached verdicts; only ask Jev about candidates it has never judged.
 	answers := map[string]float64{}
-	var newCands []compact.Candidate
+	var uncachedCandidates []compact.Candidate
 	c.decidedMu.Lock()
-	for _, cand := range cands {
+	for _, cand := range unPinnedCandidates {
 		cached := true
 		for k := range compact.QuestionsFor(cand) {
 			v, ok := c.decided[k]
@@ -166,12 +166,12 @@ func AskCompact(c *Client, items []compact.Item, o compact.Options) (compact.Res
 			answers[k] = v
 		}
 		if !cached {
-			newCands = append(newCands, cand)
+			uncachedCandidates = append(uncachedCandidates, cand)
 		}
 	}
 	c.decidedMu.Unlock()
 
-	if len(newCands) == 0 {
+	if len(uncachedCandidates) == 0 {
 		out := compact.Compact(items, answers, o)
 		out.Stats.Requests = 0
 		out.Stats.StateStage = fitted.Stage
@@ -184,7 +184,7 @@ func AskCompact(c *Client, items []compact.Item, o compact.Options) (compact.Res
 		"goal":    o.Goal,
 		"history": fitted.History,
 	}
-	batches := compact.BatchCandidates(newCands, fitted.Tokens, o)
+	batches := compact.BatchCandidates(uncachedCandidates, fitted.Tokens, o)
 
 	// One request per batch, all in flight at once; each goroutine owns its slot.
 	results := make([]map[string]float64, len(batches))

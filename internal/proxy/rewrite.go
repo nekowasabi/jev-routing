@@ -34,6 +34,7 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 		return body, RewriteStats{Host: h, Chosen: "passthrough:not-chat"}, nil
 	}
 	tools, toolsKey := extractTools(root)
+	toolSpecs := plan.SpecsFrom(asMaps(tools))
 	names := plan.ToolNames(asMaps(tools))
 	msgs := asSlice(root["messages"])
 	if msgs == nil {
@@ -53,50 +54,50 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	if len(items) > 16 {
 		preserve = 6
 	}
-	comp := compact.CompactLocal(items, compact.Options{Goal: user, PreserveRecent: preserve})
+	compaction := compact.CompactLocal(items, compact.Options{Goal: user, PreserveRecent: preserve})
 	if client != nil && client.Live() && len(items) > 4 {
 		if live, err := jev.AskCompact(client, items, compact.Options{Goal: user, PreserveRecent: preserve}); err == nil {
-			comp = live
+			compaction = live
 		}
 	}
-	msgs = applyCompactToMessages(msgs, comp)
+	msgs = applyCompactToMessages(msgs, compaction)
 	if _, ok := root["messages"]; ok {
 		root["messages"] = msgs
 	} else if _, ok := root["input"]; ok {
 		root["input"] = msgs
 	}
 
-	d := plan.DecideSpecs(user, actions, plan.SpecsFrom(asMaps(tools)), h)
+	decision := plan.DecideSpecs(user, actions, toolSpecs, h)
 	// Local goal-based match (>=0.8) is trustworthy; skip the per-request Jev round trip.
-	if client != nil && client.Live() && len(names) > 0 && d.Confidence < 0.8 {
-		if live, err := askNextTool(client, user, actions, plan.SpecsFrom(asMaps(tools))); err == nil && live.Tool != "" {
-			d = live
+	if client != nil && client.Live() && len(names) > 0 && decision.Confidence < 0.8 {
+		if live, err := askNextTool(client, user, actions, toolSpecs); err == nil && live.Tool != "" {
+			decision = live
 		}
 	}
 
 	stats := RewriteStats{
 		Host:           h,
 		ToolBefore:     len(names),
-		Chosen:         d.Tool,
-		Done:           d.Done,
-		Gated:          d.Gated,
-		CharsBefore:    comp.Stats.CharsBefore,
-		CharsAfter:     comp.Stats.CharsAfter,
-		CompactDropped: comp.Stats.Dropped + comp.Stats.Truncated,
+		Chosen:         decision.Tool,
+		Done:           decision.Done,
+		Gated:          decision.Gated,
+		CharsBefore:    compaction.Stats.CharsBefore,
+		CharsAfter:     compaction.Stats.CharsAfter,
+		CompactDropped: compaction.Stats.Dropped + compaction.Stats.Truncated,
 		Engine:         "local",
 	}
 	if client != nil && client.Live() {
 		stats.Engine = "live"
 	}
 
-	if d.Passthrough {
+	if decision.Passthrough {
 		stats.Chosen = "passthrough"
 		stats.ToolAfter = stats.ToolBefore
 		out, err := json.Marshal(root)
 		return out, stats, err
 	}
 
-	if d.Tool == plan.Respond || (d.Done >= 0.5 && !d.Gated) {
+	if decision.Tool == plan.Respond || (decision.Done >= 0.5 && !decision.Gated) {
 		setTools(root, toolsKey, []any{})
 		delete(root, "tool_choice")
 		disableThinking(root, h)
@@ -105,15 +106,15 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 		return out, stats, err
 	}
 
-	kept := filterTools(tools, d.Tool)
+	kept := filterTools(tools, decision.Tool)
 	if len(kept) == 0 {
-		stats.Chosen = "passthrough:" + d.Tool
+		stats.Chosen = "passthrough:" + decision.Tool
 		stats.ToolAfter = stats.ToolBefore
 		out, err := json.Marshal(root)
 		return out, stats, err
 	}
 	setTools(root, toolsKey, kept)
-	root["tool_choice"] = toolChoice(h, d.Tool, root)
+	root["tool_choice"] = toolChoice(h, decision.Tool, root)
 	disableThinking(root, h)
 	stats.ToolAfter = 1
 	out, err := json.Marshal(root)

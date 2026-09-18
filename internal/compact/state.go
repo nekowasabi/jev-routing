@@ -52,14 +52,14 @@ func FitState(items []Item, o Options) FittedState {
 	}
 
 	// Oldest-first indices of entries that are not pinned.
-	var order []int
+	var reductionOrder []int
 	for i := range items {
 		if !isPinned(i, len(items), o.PreserveRecent) {
-			order = append(order, i)
+			reductionOrder = append(reductionOrder, i)
 		}
 	}
 
-	for _, i := range order {
+	for _, i := range reductionOrder {
 		if items[i].Kind != KindText || rows[i]["preview"] == nil {
 			continue
 		}
@@ -69,7 +69,7 @@ func FitState(items []Item, o Options) FittedState {
 		}
 	}
 
-	for _, i := range order {
+	for _, i := range reductionOrder {
 		if items[i].Kind != KindCall && items[i].Kind != KindResult {
 			continue
 		}
@@ -80,12 +80,12 @@ func FitState(items []Item, o Options) FittedState {
 		}
 	}
 
-	left := map[int]bool{}
-	for _, i := range order {
-		left[i] = true
+	omitted := map[int]bool{}
+	for _, i := range reductionOrder {
+		omitted[i] = true
 		kept := make([]map[string]any, 0, len(rows))
 		for j, row := range rows {
-			if !left[j] {
+			if !omitted[j] {
 				kept = append(kept, row)
 			}
 		}
@@ -94,13 +94,13 @@ func FitState(items []Item, o Options) FittedState {
 		}
 	}
 
-	final := make([]map[string]any, 0, len(rows))
+	remainingRows := make([]map[string]any, 0, len(rows))
 	for j, row := range rows {
-		if !left[j] {
-			final = append(final, row)
+		if !omitted[j] {
+			remainingRows = append(remainingRows, row)
 		}
 	}
-	return FittedState{History: final, Tokens: rowsTokens(final), Stage: "too_large"}
+	return FittedState{History: remainingRows, Tokens: rowsTokens(remainingRows), Stage: "too_large"}
 }
 
 // BatchCandidates splits candidates into batches whose questions, together with
