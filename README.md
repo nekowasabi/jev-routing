@@ -1,6 +1,6 @@
 # jev-routing
 
-Claude Code / Codex / **Grok Build** 向けの Jev ハーネス。単一の Go バイナリです。**npx は使いません。MCP サーバーでもありません。**
+Claude Code / Codex / **Grok Build** 向けの Jev ハーネス。単一の Go バイナリです。**npx は使いません。MCP サーバーでもありません。** [nekowasabi/jev-routing-mcp](https://github.com/nekowasabi/jev-routing-mcp) の置き換えです。既存リポジトリへは Contents 権限の都合でブランチを押せなかったため、このリポジトリに置きました。
 
 `claude mcp add` / `codex mcp add` / `grok mcp add` で足すと、ホストの組み込みツールも他の MCP も残ったまま往復が増え、トークンは悪化します。このバイナリはリクエスト前に:
 
@@ -20,8 +20,8 @@ go install github.com/nekowasabi/jev-routing-go/cmd/jev-routing@latest
 ソースから:
 
 ```bash
-git clone https://github.com/nekowasabi/jev-routing-go
-cd jev-routing-mcp
+git clone https://github.com/nekowasabi/jev-routing-go.git
+cd jev-routing-go
 go install ./cmd/jev-routing
 ```
 
