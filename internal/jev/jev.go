@@ -20,6 +20,15 @@ type Client struct {
 	BaseURL string
 	HTTP    *http.Client
 	Model   string
+
+	// Verdicts for tool calls already judged, keyed by question id ("call_<id>",
+	// "result_<id>", "summary_<id>"). The host resends the whole transcript on every
+	// stateless Messages API call, so without this every proxied request re-asks Jev
+	// about every old tool pair (O(n^2) requests as the conversation grows).
+	// ponytail: unbounded in-process map, no TTL — a verdict never changes and the
+	// process dies with the conversation; add an LRU only if memory ever shows up.
+	decidedMu sync.Mutex
+	decided   map[string]float64
 }
 
 func FromEnv() *Client {
@@ -141,12 +150,41 @@ func AskCompact(c *Client, items []compact.Item, o compact.Options) (compact.Res
 		}
 	}
 	fitted := compact.FitState(items, o)
+
+	// Reuse cached verdicts; only ask Jev about candidates it has never judged.
+	answers := map[string]float64{}
+	var newCands []compact.Candidate
+	c.decidedMu.Lock()
+	for _, cand := range cands {
+		cached := true
+		for k := range compact.QuestionsFor(cand) {
+			v, ok := c.decided[k]
+			if !ok {
+				cached = false
+				break
+			}
+			answers[k] = v
+		}
+		if !cached {
+			newCands = append(newCands, cand)
+		}
+	}
+	c.decidedMu.Unlock()
+
+	if len(newCands) == 0 {
+		out := compact.Compact(items, answers, o)
+		out.Stats.Requests = 0
+		out.Stats.StateStage = fitted.Stage
+		out.Stats.StateTokens = fitted.Tokens
+		return out, nil
+	}
+
 	state := map[string]any{
 		"context": "coding-agent transcript; tool bodies omitted",
 		"goal":    o.Goal,
 		"history": fitted.History,
 	}
-	batches := compact.BatchCandidates(cands, fitted.Tokens, o)
+	batches := compact.BatchCandidates(newCands, fitted.Tokens, o)
 
 	// One request per batch, all in flight at once; each goroutine owns its slot.
 	results := make([]map[string]float64, len(batches))
@@ -181,12 +219,18 @@ func AskCompact(c *Client, items []compact.Item, o compact.Options) (compact.Res
 		}
 	}
 
-	answers := map[string]float64{}
+	c.decidedMu.Lock()
+	if c.decided == nil {
+		c.decided = map[string]float64{}
+	}
 	for _, m := range results {
 		for k, v := range m {
 			answers[k] = v
+			c.decided[k] = v
 		}
 	}
+	c.decidedMu.Unlock()
+
 	out := compact.Compact(items, answers, o)
 	out.Stats.Requests = len(batches)
 	out.Stats.StateStage = fitted.Stage

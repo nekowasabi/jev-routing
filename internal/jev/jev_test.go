@@ -81,6 +81,29 @@ func TestAskCompactSplitsWhenRequestBudgetIsSmall(t *testing.T) {
 	}
 }
 
+func TestAskCompactReusesVerdictsAcrossCalls(t *testing.T) {
+	var calls int64
+	c := fakeJev(t, &calls)
+	items := transcript(6)
+	if _, err := AskCompact(c, items, compact.Options{PreserveRecent: 2}); err != nil {
+		t.Fatal(err)
+	}
+	first := atomic.LoadInt64(&calls)
+	if first == 0 {
+		t.Fatal("first call made no requests")
+	}
+	res, err := AskCompact(c, items, compact.Options{PreserveRecent: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt64(&calls); got != first {
+		t.Fatalf("second call made %d extra requests; want 0", got-first)
+	}
+	if res.Stats.Requests != 0 {
+		t.Fatalf("Requests = %d, want 0", res.Stats.Requests)
+	}
+}
+
 func TestAskCompactFallsBackLocallyOnError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusInternalServerError)
