@@ -38,6 +38,13 @@ func TestGatePrematureRespond(t *testing.T) {
 	}
 }
 
+func TestPendingAgentAllowsRespond(t *testing.T) {
+	d := Decide("/ship", []Action{{Tool: "Agent", Pending: true}}, nil, host.Claude)
+	if d.Tool != Respond || d.Confidence < 0.8 {
+		t.Fatalf("pending subagent should let the host stop and wait, got %+v", d)
+	}
+}
+
 func TestPRReviewNotCreate(t *testing.T) {
 	p := "Review GitHub PR 842. Fetch the PR, read the changed local files, and leave a review comment. Do not open a new pull request."
 	g0 := Remaining(p, nil, host.Grok)

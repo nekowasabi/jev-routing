@@ -466,10 +466,16 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 }
 
 func actionsFromItems(items []compact.Item) []plan.Action {
+	completed := map[string]bool{}
+	for _, it := range items {
+		if it.Kind == compact.KindResult {
+			completed[it.PairID] = true
+		}
+	}
 	var out []plan.Action
 	for _, it := range items {
 		if it.Kind == compact.KindCall {
-			out = append(out, plan.Action{Tool: it.Tool, Input: it.Body})
+			out = append(out, plan.Action{Tool: it.Tool, Input: it.Body, Pending: !completed[it.ID]})
 		}
 		if it.Kind == compact.KindResult && len(out) > 0 && out[len(out)-1].Result == "" {
 			out[len(out)-1].Result = it.Body

@@ -10,9 +10,10 @@ import (
 const Respond = "respond_to_user"
 
 type Action struct {
-	Tool   string
-	Result string
-	Input  string
+	Tool    string
+	Result  string
+	Input   string
+	Pending bool
 }
 
 type Decision struct {
@@ -126,7 +127,23 @@ func Decide(request string, actions []Action, available []string, h host.ID) Dec
 	return DecideSpecs(request, actions, specs, h)
 }
 
+// pendingAgent reports whether a subagent (Agent/Task) launch is still running
+// in the background with no tool_result yet. Forcing another tool call while
+// true starves the host into looping on filler commands until the subagent
+// reports back — see the /ship Bash(true) loop this guards against.
+func pendingAgent(actions []Action) bool {
+	for _, a := range actions {
+		if a.Pending && isAgent(a.Tool) {
+			return true
+		}
+	}
+	return false
+}
+
 func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Decision {
+	if pendingAgent(actions) {
+		return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.9}
+	}
 	available := make([]string, 0, len(specs))
 	set := map[string]bool{}
 	for _, s := range specs {
