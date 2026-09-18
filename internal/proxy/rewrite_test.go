@@ -2,12 +2,16 @@ package proxy
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/compact"
 
 	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
 )
 
 func TestGrokRewriteStripsCatalog(t *testing.T) {
@@ -293,5 +297,43 @@ func TestMCPToolsSurviveUnknownPrompt(t *testing.T) {
 	}
 	if stats.Chosen == "passthrough" && !kept["mcp__slack__post_message"] {
 		t.Fatal("passthrough dropped the Slack MCP tool")
+	}
+}
+
+// A high-confidence local decision must not cost a Jev round trip.
+func TestRewriteSkipsLiveWhenLocalConfident(t *testing.T) {
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&calls, 1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "fake", "answers": map[string]any{}})
+	}))
+	defer srv.Close()
+	client := &jev.Client{APIKey: "test", BaseURL: srv.URL, Model: "fake", HTTP: srv.Client()}
+	if !client.Live() {
+		t.Fatal("client not live")
+	}
+
+	req := map[string]any{
+		"model": "grok-4",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "The auth middleware test is failing. Find it, fix the assertion in place, and re-run the tests."},
+		},
+		"tools": []any{
+			map[string]any{"type": "function", "function": map[string]any{"name": "read_file"}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "grep"}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "search_replace"}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "run_terminal_cmd"}},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	_, stats, err := Rewrite(raw, host.Grok, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Chosen != "grep" {
+		t.Fatalf("chosen %s; want the local decision", stats.Chosen)
+	}
+	if n := atomic.LoadInt64(&calls); n != 0 {
+		t.Fatalf("made %d live Jev requests; want 0", n)
 	}
 }

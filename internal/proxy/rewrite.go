@@ -67,7 +67,8 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	}
 
 	d := plan.DecideSpecs(user, actions, plan.SpecsFrom(asMaps(tools)), h)
-	if client != nil && client.Live() && len(names) > 0 {
+	// Local goal-based match (>=0.8) is trustworthy; skip the per-request Jev round trip.
+	if client != nil && client.Live() && len(names) > 0 && d.Confidence < 0.8 {
 		if live, err := askNextTool(client, user, actions, plan.SpecsFrom(asMaps(tools))); err == nil && live.Tool != "" {
 			d = live
 		}
