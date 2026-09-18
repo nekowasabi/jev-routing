@@ -46,17 +46,23 @@ func DefaultUpstream(h host.ID) string {
 	}
 }
 
-func New(listen string, h host.ID, client *jev.Client) (*Server, error) {
+// New builds the proxy. logWriter receives the rewrite log; nil means os.Stderr.
+// Why: `run` hands the terminal to a raw-mode child (Claude Code TUI), so async
+// log lines must go to a file instead of the shared stderr fd.
+func New(listen string, h host.ID, client *jev.Client, logWriter io.Writer) (*Server, error) {
 	u, err := url.Parse(DefaultUpstream(h))
 	if err != nil {
 		return nil, err
+	}
+	if logWriter == nil {
+		logWriter = os.Stderr
 	}
 	return &Server{
 		Listen:   listen,
 		Host:     h,
 		Upstream: u,
 		Client:   client,
-		Log:      log.New(os.Stderr, "jev-routing ", log.LstdFlags),
+		Log:      log.New(logWriter, "jev-routing ", log.LstdFlags),
 	}, nil
 }
 

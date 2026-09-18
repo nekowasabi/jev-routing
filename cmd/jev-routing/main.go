@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -83,7 +84,7 @@ func cmdServe(args []string) int {
 
 func serve(h host.ID, listen string) int {
 	client := jev.FromEnv()
-	srv, err := proxy.New(listen, h, client)
+	srv, err := proxy.New(listen, h, client, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -125,7 +126,15 @@ func cmdRun(args []string) int {
 	}
 	listen := envOr("JEV_LISTEN", "127.0.0.1:8787")
 	client := jev.FromEnv()
-	srv, err := proxy.New(listen, h, client)
+	// Why: the child owns the terminal in raw mode; async proxy logs on the
+	// shared stderr fd would corrupt its TUI. Best effort — never fail the run.
+	logFile, logPath := openRunLog()
+	var logW io.Writer // nil interface, not a typed-nil *os.File
+	if logFile != nil {
+		defer logFile.Close()
+		logW = logFile
+	}
+	srv, err := proxy.New(listen, h, client, logW)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -138,6 +147,9 @@ func cmdRun(args []string) int {
 	httpSrv := &http.Server{Handler: srv.Handler()}
 	go func() { _ = httpSrv.Serve(ln) }()
 	defer httpSrv.Close()
+	if logPath != "" {
+		fmt.Fprintf(os.Stderr, "jev-routing: logging to %s\n", logPath)
+	}
 	if err := waitHealthy("http://" + listen + "/healthz"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -161,6 +173,25 @@ func cmdRun(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// openRunLog opens the append-mode log for `run`. Returns (nil, "") on failure,
+// which makes the caller fall back to stderr.
+func openRunLog() (*os.File, string) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	dir = filepath.Join(dir, "jev-routing")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, ""
+	}
+	path := filepath.Join(dir, "run.log")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, ""
+	}
+	return f, path
 }
 
 func cmdCompact(args []string) int {

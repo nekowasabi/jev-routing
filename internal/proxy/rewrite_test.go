@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nekowasabi/jev-routing/internal/compact"
+
 	"github.com/nekowasabi/jev-routing/internal/host"
 )
 
@@ -187,6 +189,26 @@ func TestCompactTruncatesStaleToolResult(t *testing.T) {
 	}
 	if stats.CharsAfter >= stats.CharsBefore && stats.CompactDropped == 0 {
 		t.Fatalf("compaction did nothing %+v outlen=%d inlen=%d", stats, len(out), len(raw))
+	}
+}
+
+func TestCompactDropsMessageWhenAllBlocksDropped(t *testing.T) {
+	res := compact.Result{Decisions: []compact.Decision{{ID: "t1", Action: compact.ActionDrop}}}
+	msgs := []any{
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "tool_result", "tool_use_id": "t1", "content": "dropped"},
+		}},
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "kept"},
+		}},
+	}
+	out := applyCompactToMessages(msgs, res)
+	if len(out) != 1 {
+		t.Fatalf("want 1 message, got %d: %+v", len(out), out)
+	}
+	m := out[0].(map[string]any)
+	if c, _ := m["content"].([]any); len(c) != 1 {
+		t.Fatalf("wrong message survived: %+v", m)
 	}
 }
 

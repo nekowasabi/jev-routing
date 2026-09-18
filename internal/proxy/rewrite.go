@@ -166,7 +166,7 @@ func askNextTool(c *jev.Client, user string, actions []plan.Action, specs []plan
 	}
 	tool := jev.ChoiceOf(res, "next_tool")
 	done := jev.NoulOf(res, "done")
-	if (tool == plan.Respond || tool == "") && done < 0.5 {
+	if tool == plan.Respond || tool == "" {
 		return plan.Decision{Tool: plan.Respond, Done: 0, Passthrough: true, Confidence: 0.3}, nil
 	}
 	return plan.Decision{Tool: tool, Done: done, Confidence: 0.8}, nil
@@ -401,7 +401,8 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 			continue
 		}
 		if content, ok := m["content"].([]any); ok {
-			var kept []any
+			// Why: nil slice marshals to JSON null; the API requires content to stay an array.
+			kept := make([]any, 0, len(content))
 			for _, c := range content {
 				b, ok := c.(map[string]any)
 				if !ok {
@@ -428,10 +429,16 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 				}
 				kept = append(kept, b)
 			}
+			if len(kept) == 0 && len(content) > 0 {
+				// Why: an empty content array is rejected ("must have non-empty content").
+				// compact.go always drops a tool_use and its tool_result together, so
+				// dropping the whole message cannot orphan the other half.
+				continue
+			}
 			m["content"] = kept
 		}
 		if tcs, ok := m["tool_calls"].([]any); ok {
-			var kept []any
+			kept := make([]any, 0, len(tcs))
 			for _, c := range tcs {
 				b, _ := c.(map[string]any)
 				id, _ := b["id"].(string)
@@ -440,7 +447,16 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 				}
 				kept = append(kept, c)
 			}
-			m["tool_calls"] = kept
+			if len(kept) == 0 && len(tcs) > 0 {
+				if s, _ := m["content"].(string); s == "" {
+					// Why: same as above — an assistant turn left with neither text nor
+					// tool_calls is an empty message; its paired tool results are dropped too.
+					continue
+				}
+				delete(m, "tool_calls")
+			} else {
+				m["tool_calls"] = kept
+			}
 		}
 		out = append(out, m)
 	}
