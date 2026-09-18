@@ -13,7 +13,11 @@ import (
 	"github.com/nekowasabi/jev-routing/internal/compact"
 )
 
-const DefaultURL = "https://api.typesafe.ai/v1/systemone"
+const (
+	DefaultURL = "https://api.typesafe.ai/v1/systemone"
+	// InputBudget is TypeSafe's cap for state plus the longest question (tokens).
+	InputBudget = 32_000
+)
 
 type Client struct {
 	APIKey  string
@@ -78,6 +82,9 @@ func (c *Client) Ask(state any, questions map[string]Question) (*Response, error
 	if !c.Live() {
 		return nil, fmt.Errorf("no TYPESAFE_API_KEY")
 	}
+	// Why: TypeSafe rejects (and bills) state+longest-question over 32k tokens;
+	// Grok first-user blobs exceed that if sent raw.
+	state, questions = FitInput(state, questions)
 	body, err := json.Marshal(map[string]any{
 		"model":     c.Model,
 		"state":     state,
@@ -243,4 +250,115 @@ func clip(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// JointTokens is state plus the longest question, matching TypeSafe's 32k input cap.
+func JointTokens(state any, questions map[string]Question) int {
+	st := 0
+	if b, err := json.Marshal(state); err == nil {
+		st = compact.EstimateTokens(string(b))
+	}
+	longest := 0
+	for _, q := range questions {
+		b, err := json.Marshal(q)
+		if err != nil {
+			continue
+		}
+		if n := compact.EstimateTokens(string(b)); n > longest {
+			longest = n
+		}
+	}
+	return st + longest
+}
+
+// FitInput shrinks state (then criteria) until JointTokens is within InputBudget.
+func FitInput(state any, questions map[string]Question) (any, map[string]Question) {
+	if JointTokens(state, questions) <= InputBudget {
+		return state, questions
+	}
+	qs := cloneQuestions(questions)
+	state = clipStateStrings(state, qs)
+	if JointTokens(state, qs) <= InputBudget {
+		return state, qs
+	}
+	for id, q := range qs {
+		if q.Criteria == nil {
+			continue
+		}
+		trimmed := make(map[string]string, len(q.Criteria))
+		for k, v := range q.Criteria {
+			if len(v) > 40 {
+				v = v[:40]
+			}
+			trimmed[k] = v
+		}
+		q.Criteria = trimmed
+		qs[id] = q
+	}
+	if JointTokens(state, qs) <= InputBudget {
+		return state, qs
+	}
+	return clipStateStrings(state, qs), qs
+}
+
+func cloneQuestions(in map[string]Question) map[string]Question {
+	out := make(map[string]Question, len(in))
+	for k, q := range in {
+		if q.Criteria != nil {
+			c := make(map[string]string, len(q.Criteria))
+			for ck, cv := range q.Criteria {
+				c[ck] = cv
+			}
+			q.Criteria = c
+		}
+		out[k] = q
+	}
+	return out
+}
+
+func clipStateStrings(state any, qs map[string]Question) any {
+	m, ok := state.(map[string]any)
+	if !ok {
+		return state
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	keys := make([]string, 0, len(out))
+	if _, ok := out["user_request"].(string); ok {
+		keys = append(keys, "user_request")
+	}
+	for k, v := range out {
+		if k == "user_request" {
+			continue
+		}
+		if _, ok := v.(string); ok {
+			keys = append(keys, k)
+		}
+	}
+	for _, k := range keys {
+		s, ok := out[k].(string)
+		if !ok {
+			continue
+		}
+		runes := []rune(s)
+		lo, hi := 0, len(runes)
+		best := 0
+		for lo <= hi {
+			mid := (lo + hi) / 2
+			out[k] = string(runes[:mid])
+			if JointTokens(out, qs) <= InputBudget {
+				best = mid
+				lo = mid + 1
+			} else {
+				hi = mid - 1
+			}
+		}
+		out[k] = string(runes[:best])
+		if JointTokens(out, qs) <= InputBudget {
+			return out
+		}
+	}
+	return out
 }

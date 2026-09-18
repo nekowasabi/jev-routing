@@ -3,6 +3,7 @@ package jev
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -116,5 +117,50 @@ func TestAskCompactFallsBackLocallyOnError(t *testing.T) {
 	}
 	if res.Stats.StateStage != "local" {
 		t.Fatalf("want local fallback, got %+v", res.Stats)
+	}
+}
+
+func TestAskFitsOversizedState(t *testing.T) {
+	var posted []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posted, _ = io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model":   "fake",
+			"answers": map[string]any{"next_tool": map[string]any{"type": "choice", "choice": "grep"}},
+		})
+	}))
+	defer srv.Close()
+	c := &Client{APIKey: "test", BaseURL: srv.URL, Model: "fake", HTTP: srv.Client()}
+	huge := strings.Repeat("。", 40_000)
+	raw := JointTokens(map[string]any{"user_request": huge}, map[string]Question{
+		"next_tool": {Type: "choice", Instructions: "pick", Criteria: map[string]string{"grep": "search"}},
+	})
+	if raw <= InputBudget {
+		t.Fatalf("fixture too small: %d", raw)
+	}
+	if _, err := c.Ask(map[string]any{"user_request": huge}, map[string]Question{
+		"next_tool": {Type: "choice", Instructions: "pick", Criteria: map[string]string{"grep": "search"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) == 0 {
+		t.Fatal("no POST")
+	}
+	var in struct {
+		State     json.RawMessage            `json:"state"`
+		Questions map[string]json.RawMessage `json:"questions"`
+	}
+	if err := json.Unmarshal(posted, &in); err != nil {
+		t.Fatal(err)
+	}
+	longest := 0
+	for _, q := range in.Questions {
+		if n := compact.EstimateTokens(string(q)); n > longest {
+			longest = n
+		}
+	}
+	joint := compact.EstimateTokens(string(in.State)) + longest
+	if joint > InputBudget {
+		t.Fatalf("posted joint %d > %d", joint, InputBudget)
 	}
 }
