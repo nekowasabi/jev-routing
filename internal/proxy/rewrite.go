@@ -45,7 +45,9 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	if len(names) == 0 {
 		// Grok Build often omits tools[] and lets cli-chat-proxy inject the catalog.
 		// Writing "tools": [] disables that injection.
-		return body, RewriteStats{Host: h, ToolBefore: 0, ToolAfter: 0, Chosen: "passthrough:no-catalog"}, nil
+		disableThinking(root, h)
+		out, err := json.Marshal(root)
+		return out, RewriteStats{Host: h, ToolBefore: 0, ToolAfter: 0, Chosen: "passthrough:no-catalog"}, err
 	}
 	preserve := 2
 	if len(items) > 16 {
@@ -96,6 +98,7 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	if d.Tool == plan.Respond || (d.Done >= 0.5 && !d.Gated) {
 		setTools(root, toolsKey, []any{})
 		delete(root, "tool_choice")
+		disableThinking(root, h)
 		stats.ToolAfter = 0
 		out, err := json.Marshal(root)
 		return out, stats, err
@@ -110,6 +113,7 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	}
 	setTools(root, toolsKey, kept)
 	root["tool_choice"] = toolChoice(h, d.Tool, root)
+	disableThinking(root, h)
 	stats.ToolAfter = 1
 	out, err := json.Marshal(root)
 	return out, stats, err
@@ -204,12 +208,53 @@ func toolChoice(h host.ID, name string, root map[string]any) any {
 	return map[string]any{"type": "function", "function": map[string]any{"name": name}}
 }
 
-func disableThinking(root map[string]any) {
+func disableThinking(root map[string]any, h host.ID) {
 	if _, ok := root["thinking"]; ok {
 		root["thinking"] = map[string]any{"type": "disabled"}
 	}
+	off := reasoningOff(h)
 	if _, ok := root["reasoning"]; ok {
-		root["reasoning"] = map[string]any{"effort": "none"}
+		root["reasoning"] = map[string]any{"effort": off}
+	}
+	if _, ok := root["reasoning_effort"]; ok {
+		root["reasoning_effort"] = off
+	}
+	removeClearThinkingEdit(root)
+}
+
+// reasoningOff is the cheapest effort the host accepts when we want no extra thinking.
+func reasoningOff(h host.ID) string {
+	if h == host.Grok {
+		// Why: Instead of effort "none" (OpenAI/Codex disable), adopted "low".
+		// xAI grok-4.5/4.6 reject "none"; reasoning cannot be disabled.
+		return "low"
+	}
+	return "none"
+}
+
+// removeClearThinkingEdit drops the clear_thinking_20251015 context-management
+// strategy, which the API rejects when thinking is disabled.
+func removeClearThinkingEdit(root map[string]any) {
+	cm, ok := root["context_management"].(map[string]any)
+	if !ok {
+		return
+	}
+	edits, ok := cm["edits"].([]any)
+	if !ok {
+		return
+	}
+	kept := edits[:0]
+	for _, e := range edits {
+		m, ok := e.(map[string]any)
+		if ok && m["type"] == "clear_thinking_20251015" {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if len(kept) == 0 {
+		delete(cm, "edits")
+	} else {
+		cm["edits"] = kept
 	}
 }
 

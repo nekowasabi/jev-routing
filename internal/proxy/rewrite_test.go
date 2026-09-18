@@ -43,6 +43,36 @@ func TestGrokRewriteStripsCatalog(t *testing.T) {
 	}
 }
 
+func TestGrokRewriteDoesNotSendReasoningNone(t *testing.T) {
+	req := map[string]any{
+		"model": "grok-4.6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hello"},
+		},
+		"reasoning":        map[string]any{"effort": "high"},
+		"reasoning_effort": "high",
+	}
+	raw, _ := json.Marshal(req)
+	out, _, err := Rewrite(raw, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `"none"`) {
+		t.Fatalf("xAI rejects effort none: %s", out)
+	}
+	r, ok := got["reasoning"].(map[string]any)
+	if !ok || r["effort"] != "low" {
+		t.Fatalf("reasoning=%v", got["reasoning"])
+	}
+	if got["reasoning_effort"] != "low" {
+		t.Fatalf("reasoning_effort=%v", got["reasoning_effort"])
+	}
+}
+
 func TestClaudeRespondStripsAll(t *testing.T) {
 	req := map[string]any{
 		"model":  "claude-opus-4-6",
