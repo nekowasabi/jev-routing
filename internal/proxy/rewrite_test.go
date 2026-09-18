@@ -210,3 +210,36 @@ func TestFibonacciWithCatalogDoesNotStrip(t *testing.T) {
 		t.Fatal("stripped all tools")
 	}
 }
+
+func TestMCPToolsSurviveUnknownPrompt(t *testing.T) {
+	req := map[string]any{
+		"model":  "claude-opus-4-6",
+		"system": "claude",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "Slack に今日のまとめを投稿して"},
+		},
+		"tools": []any{
+			map[string]any{"name": "Read"},
+			map[string]any{"name": "Bash"},
+			map[string]any{"name": "mcp__slack__post_message", "description": "Post a message to Slack"},
+			map[string]any{"name": "mcp__github__create_issue", "description": "Create a GitHub issue"},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Claude, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ToolAfter == 0 {
+		t.Fatalf("MCP catalog was stripped %+v", stats)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	kept := map[string]bool{}
+	for _, rawTool := range got["tools"].([]any) {
+		kept[rawTool.(map[string]any)["name"].(string)] = true
+	}
+	if stats.Chosen == "passthrough" && !kept["mcp__slack__post_message"] {
+		t.Fatal("passthrough dropped the Slack MCP tool")
+	}
+}
