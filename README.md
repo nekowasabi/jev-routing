@@ -36,7 +36,7 @@ export TYPESAFE_API_KEY=ts_...    # https://console.typesafe.ai/settings/keys
 ```bash
 jev-routing run grok              # GROK_CLI_CHAT_PROXY_BASE_URL をプロキシへ
 jev-routing run claude            # ANTHROPIC_BASE_URL をプロキシへ
-jev-routing run codex             # Responses プロバイダ
+jev-routing run codex             # 現在のプロキシアドレスを一時設定で渡す
 ```
 
 `run` はまず `127.0.0.1:8787` を使い、使用中なら空きポートを自動割当します。`JEV_LISTEN` を指定すると、そのアドレスを優先します。
@@ -59,16 +59,10 @@ jev-routing serve --host claude &
 claude
 ```
 
-Codex は `~/.codex/config.toml`:
+Codex を手動で起動する場合だけ、`~/.codex/config.toml` に設定します。
 
 ```toml
-model_provider = "jev"
-
-[model_providers.jev]
-name = "jev-routing"
-base_url = "http://127.0.0.1:8787/v1"
-wire_api = "responses"
-requires_openai_auth = true
+openai_base_url = "http://127.0.0.1:8787/v1"
 ```
 
 ## やらないこと

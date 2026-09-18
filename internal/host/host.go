@@ -3,6 +3,7 @@ package host
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -114,4 +115,15 @@ func ChildEnv(h ID, listen string) []string {
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+func ChildArgs(h ID, listen string) []string {
+	if h != Codex {
+		return nil
+	}
+	// Why: CLI settings override both default and legacy custom providers without changing user config.
+	return []string{
+		"--config", `model_provider="openai"`,
+		"--config", "openai_base_url=" + strconv.Quote("http://"+listen+"/v1"),
+	}
 }

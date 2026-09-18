@@ -164,7 +164,7 @@ func cmdRun(args []string) int {
 		printEnvHint(h, listen)
 		<-make(chan struct{})
 	}
-	cmd := exec.Command(path, rest...)
+	cmd := exec.Command(path, append(host.ChildArgs(h, listen), rest...)...)
 	cmd.Env = host.ChildEnv(h, listen)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -271,7 +271,7 @@ func printEnvHint(h host.ID, listen string) {
 	case host.Grok:
 		fmt.Fprintf(os.Stderr, "  unset XAI_API_KEY GROK_MODELS_BASE_URL\n  export GROK_CLI_CHAT_PROXY_BASE_URL=http://%s/v1\n  grok\n", listen)
 	case host.Codex:
-		fmt.Fprintf(os.Stderr, "  # ~/.codex/config.toml\n  model_provider = \"jev\"\n  [model_providers.jev]\n  base_url = \"http://%s/v1\"\n  wire_api = \"responses\"\n", listen)
+		fmt.Fprintf(os.Stderr, "  # ~/.codex/config.toml\n  openai_base_url = \"http://%s/v1\"\n", listen)
 	}
 }
 
