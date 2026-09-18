@@ -121,9 +121,13 @@ func ChildArgs(h ID, listen string) []string {
 	if h != Codex {
 		return nil
 	}
-	// Why: CLI settings override both default and legacy custom providers without changing user config.
+	// Why: Use a custom provider with OpenAI login rather than the built-in API-key provider.
+	// The latter selects stored API credentials, which may not have Responses write scope.
 	return []string{
-		"--config", `model_provider="openai"`,
-		"--config", "openai_base_url=" + strconv.Quote("http://"+listen+"/v1"),
+		"--config", `model_provider="jev"`,
+		"--config", `model_providers.jev.name="jev-routing"`,
+		"--config", "model_providers.jev.base_url=" + strconv.Quote("http://"+listen+"/v1"),
+		"--config", `model_providers.jev.wire_api="responses"`,
+		"--config", `model_providers.jev.requires_openai_auth=true`,
 	}
 }
