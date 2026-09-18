@@ -215,7 +215,11 @@ func disableThinking(root map[string]any, h host.ID) {
 		root["thinking"] = map[string]any{"type": "disabled"}
 	}
 	off := reasoningOff(h)
-	if _, ok := root["reasoning"]; ok {
+	if h == host.Codex {
+		// Why: Codex Responses Lite rejects requests without this context even
+		// when Jev disables reasoning effort to minimize the request.
+		root["reasoning"] = map[string]any{"effort": off, "context": "all_turns"}
+	} else if _, ok := root["reasoning"]; ok {
 		root["reasoning"] = map[string]any{"effort": off}
 	}
 	if _, ok := root["reasoning_effort"]; ok {

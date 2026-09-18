@@ -2,8 +2,10 @@ package proxy
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,6 +15,45 @@ import (
 	"github.com/nekowasabi/jev-routing/internal/host"
 	"github.com/nekowasabi/jev-routing/internal/jev"
 )
+
+func TestCodexChatGPTBackendStripsV1Prefix(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	u, err := url.Parse(upstream.URL + "/backend-api/codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New("", host.Codex, nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Upstream = u
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.6-terra","input":[]}`))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if gotPath != "/backend-api/codex/responses" {
+		t.Fatalf("path=%q", gotPath)
+	}
+}
+
+func TestCodexReasoningKeepsAllTurnsContext(t *testing.T) {
+	root := map[string]any{"reasoning": map[string]any{"effort": "high"}}
+	disableThinking(root, host.Codex)
+
+	reasoning := root["reasoning"].(map[string]any)
+	if reasoning["effort"] != "none" || reasoning["context"] != "all_turns" {
+		t.Fatalf("reasoning=%v", reasoning)
+	}
+}
 
 func TestGrokRewriteStripsCatalog(t *testing.T) {
 	req := map[string]any{

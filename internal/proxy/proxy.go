@@ -37,7 +37,7 @@ func DefaultUpstream(h host.ID) string {
 		if u := os.Getenv("CODEX_UPSTREAM"); u != "" {
 			return u
 		}
-		return "https://api.openai.com"
+		return "https://chatgpt.com/backend-api/codex"
 	default:
 		if u := os.Getenv("GROK_OAUTH_UPSTREAM"); u != "" {
 			return u
@@ -81,6 +81,12 @@ func (s *Server) Handler() http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(s.Upstream)
 	orig := proxy.Director
 	proxy.Director = func(r *http.Request) {
+		// Why: Codex sends custom-provider requests to /v1, while ChatGPT
+		// authentication is accepted only by its /backend-api/codex endpoint.
+		if s.Host == host.Codex && strings.HasPrefix(s.Upstream.Path, "/backend-api/codex") {
+			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/v1")
+			r.URL.RawPath = strings.TrimPrefix(r.URL.RawPath, "/v1")
+		}
 		orig(r)
 		r.Host = s.Upstream.Host
 		r.Header.Set("host", s.Upstream.Host)
