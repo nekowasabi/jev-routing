@@ -57,18 +57,72 @@ func TestClaudeRespondStripsAll(t *testing.T) {
 		"thinking": map[string]any{"type": "enabled", "budget_tokens": 8000},
 	}
 	raw, _ := json.Marshal(req)
+	_, stats, err := Rewrite(raw, host.Claude, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ToolAfter == 0 {
+		t.Fatalf("unknown first turn must not strip the catalog %+v", stats)
+	}
+}
+
+func TestExploreKeepsAgent(t *testing.T) {
+	req := map[string]any{
+		"model":  "claude-opus-4-6",
+		"system": "you are claude",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "Explore the auth package thoroughly and report how sessions are stored."},
+		},
+		"tools": []any{
+			map[string]any{"name": "Read", "description": "Read a file"},
+			map[string]any{"name": "Grep", "description": "Search file contents"},
+			map[string]any{"name": "Agent", "description": "Launch a new agent to handle complex multi-step tasks autonomously"},
+			map[string]any{"name": "Bash", "description": "Run a shell command"},
+		},
+	}
+	raw, _ := json.Marshal(req)
 	out, stats, err := Rewrite(raw, host.Claude, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.ToolAfter != 0 && stats.Chosen != "respond_to_user" {
-		// "thanks" has no remaining coding goals → respond
-		if stats.ToolAfter != 0 {
-			t.Fatalf("expected empty catalog %+v", stats)
-		}
+	if stats.Chosen != "Agent" {
+		t.Fatalf("chosen %s %+v", stats.Chosen, stats)
 	}
-	if !strings.Contains(string(out), `"type":"disabled"`) && stats.ToolAfter == 0 {
-		// thinking disabled only when we rewrote
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	tools := got["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("kept %d", len(tools))
+	}
+	if tools[0].(map[string]any)["name"] != "Agent" {
+		t.Fatalf("kept %+v", tools[0])
+	}
+}
+
+func TestUnknownToolNameFailsOpen(t *testing.T) {
+	req := map[string]any{
+		"model":  "claude-opus-4-6",
+		"system": "x",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "Explore the repo."},
+		},
+		"tools": []any{
+			map[string]any{"name": "Read"},
+			map[string]any{"name": "Task", "description": "Launch a new agent"},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Claude, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ToolAfter == 0 {
+		t.Fatalf("must not empty the catalog %+v", stats)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	if len(got["tools"].([]any)) == 0 {
+		t.Fatal("empty tools")
 	}
 }
 

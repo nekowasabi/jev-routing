@@ -55,9 +55,9 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 		root["input"] = msgs
 	}
 
-	d := plan.Decide(user, actions, names, h)
+	d := plan.DecideSpecs(user, actions, plan.SpecsFrom(asMaps(tools)), h)
 	if client != nil && client.Live() && len(names) > 0 {
-		if live, err := askNextTool(client, user, actions, names); err == nil && live.Tool != "" {
+		if live, err := askNextTool(client, user, actions, plan.SpecsFrom(asMaps(tools))); err == nil && live.Tool != "" {
 			d = live
 		}
 	}
@@ -77,33 +77,54 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 		stats.Engine = "live"
 	}
 
-	if d.Tool == plan.Respond || d.Done >= 0.5 && !d.Gated {
+	if d.Passthrough {
+		stats.Chosen = "passthrough"
+		stats.ToolAfter = stats.ToolBefore
+		out, err := json.Marshal(root)
+		return out, stats, err
+	}
+
+	if d.Tool == plan.Respond || (d.Done >= 0.5 && !d.Gated) {
 		root["tools"] = []any{}
 		delete(root, "tool_choice")
-		disableThinking(root)
 		stats.ToolAfter = 0
 		out, err := json.Marshal(root)
 		return out, stats, err
 	}
 
 	kept := filterTools(tools, d.Tool)
+	if len(kept) == 0 {
+		// Chosen name is not in this request (e.g. Agent vs Task). Leave the
+		// host catalog alone instead of sending tool_choice for a missing tool,
+		// which makes Claude Code abort the turn.
+		stats.Chosen = "passthrough:" + d.Tool
+		stats.ToolAfter = stats.ToolBefore
+		out, err := json.Marshal(root)
+		return out, stats, err
+	}
 	root["tools"] = kept
 	root["tool_choice"] = toolChoice(h, d.Tool, root)
-	disableThinking(root)
 	stats.ToolAfter = 1
 	out, err := json.Marshal(root)
 	return out, stats, err
 }
 
-func askNextTool(c *jev.Client, user string, actions []plan.Action, names []string) (plan.Decision, error) {
+func askNextTool(c *jev.Client, user string, actions []plan.Action, specs []plan.Spec) (plan.Decision, error) {
 	criteria := map[string]string{}
-	for _, n := range names {
-		criteria[n] = n
+	for _, s := range specs {
+		desc := s.Desc
+		if desc == "" {
+			desc = s.Name
+		}
+		if len(desc) > 240 {
+			desc = desc[:240]
+		}
+		criteria[s.Name] = desc
 	}
-	criteria[plan.Respond] = "stop calling tools and answer the user"
+	criteria[plan.Respond] = "stop calling tools and answer the user. Do not pick this if any requested work remains, including launching a subagent (Agent/Task)."
 	qs := map[string]jev.Question{
-		"next_tool": {Type: "choice", Instructions: "Which single tool should run next?", Criteria: criteria},
-		"done":      {Type: "noul", Instructions: "The user request is fully satisfied; no further tool call is needed."},
+		"next_tool": {Type: "choice", Instructions: "Which single tool should run next? Agent or Task launches a Claude Code subagent — pick it for broad exploration or parallel work. Pick respond_to_user only when the user request is fully satisfied.", Criteria: criteria},
+		"done":      {Type: "noul", Instructions: "The user request is fully satisfied; no further tool call is needed, including no subagent."},
 	}
 	state := map[string]any{"user_request": user, "actions_taken": actions}
 	res, err := c.Ask(state, qs)
@@ -112,12 +133,10 @@ func askNextTool(c *jev.Client, user string, actions []plan.Action, names []stri
 	}
 	tool := jev.ChoiceOf(res, "next_tool")
 	done := jev.NoulOf(res, "done")
-	gated := false
-	if (tool == plan.Respond || tool == "") && done < 0.5 && len(names) > 0 {
-		tool = names[0]
-		gated = true
+	if (tool == plan.Respond || tool == "") && done < 0.5 {
+		return plan.Decision{Tool: plan.Respond, Done: 0, Passthrough: true, Confidence: 0.3}, nil
 	}
-	return plan.Decision{Tool: tool, Done: done, Gated: gated, Confidence: 0.8}, nil
+	return plan.Decision{Tool: tool, Done: done, Confidence: 0.8}, nil
 }
 
 func filterTools(tools []any, name string) []any {

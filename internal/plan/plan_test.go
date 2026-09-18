@@ -45,11 +45,54 @@ func TestPRReviewNotCreate(t *testing.T) {
 		t.Fatalf("got %v", g0)
 	}
 	after := Remaining(p, []Action{{Tool: "github_get_pr"}, {Tool: "read_file"}}, host.Grok)
-	joined := ""
-	for _, n := range after[0] {
-		joined += n + ","
-	}
 	if after[0][0] != "github_pr_review" && after[0][0] != "github_comment" {
 		t.Fatalf("got %v", after[0])
+	}
+}
+
+func TestUnknownPromptDoesNotEndSession(t *testing.T) {
+	specs := []Spec{
+		{Name: "Read"}, {Name: "Grep"}, {Name: "Agent", Desc: "Launch a new agent"}, {Name: "Bash"},
+	}
+	d := DecideSpecs("summarize this repo's architecture for me", nil, specs, host.Claude)
+	if !d.Passthrough && d.Tool == Respond {
+		t.Fatalf("unknown prompt ended the session %+v", d)
+	}
+}
+
+func TestExplorePicksAgentOrTask(t *testing.T) {
+	p := "Explore the auth package thoroughly and report how sessions are stored."
+	d := DecideSpecs(p, nil, []Spec{
+		{Name: "Read"},
+		{Name: "Grep"},
+		{Name: "Agent", Desc: "Launch a new agent to handle complex multi-step tasks autonomously"},
+		{Name: "Bash"},
+	}, host.Claude)
+	if d.Passthrough {
+		t.Fatal("should pick a tool, not passthrough")
+	}
+	if d.Tool != "Agent" {
+		t.Fatalf("got %s", d.Tool)
+	}
+	d2 := DecideSpecs(p, nil, []Spec{
+		{Name: "Read"},
+		{Name: "Task", Desc: "Launch a new agent"},
+		{Name: "Grep"},
+	}, host.Claude)
+	if d2.Tool != "Task" && d2.Tool != "Agent" {
+		t.Fatalf("Task alias got %s", d2.Tool)
+	}
+}
+
+func TestSubagentBriefDoesNotRespond(t *testing.T) {
+	brief := "You are a subagent. Search src/ for session cookie parsing and return the file path and a 4-line summary. Do not edit."
+	d := DecideSpecs(brief, nil, []Spec{
+		{Name: "Read", Desc: "Read a file"},
+		{Name: "Grep", Desc: "Search file contents"},
+		{Name: "Glob", Desc: "Find files by glob"},
+		{Name: "Agent", Desc: "Launch a new agent"},
+	}, host.Claude)
+	if d.Tool == Respond && !d.Passthrough {
+		t.Fatalf("subagent brief was treated as done %+v", d)
 	}
 }
