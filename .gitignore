@@ -1,0 +1,5 @@
+/jev-routing
+*.exe
+.env
+.env.*
+!.env.example
