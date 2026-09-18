@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/nekowasabi/jev-routing-go/internal/compact"
+	"github.com/nekowasabi/jev-routing/internal/compact"
 )
 
 const DefaultURL = "https://api.typesafe.ai/v1/systemone"

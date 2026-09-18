@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nekowasabi/jev-routing-go/internal/host"
-	"github.com/nekowasabi/jev-routing-go/internal/jev"
+	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
 )
 
 type Server struct {

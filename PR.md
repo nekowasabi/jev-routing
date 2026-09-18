@@ -18,6 +18,6 @@ gh pr create --title "Rewrite as a Go proxy (no npx, Grok Build + compaction)" -
 
 この PR は Node MCP サーバーを **Go のリクエスト書き換えプロキシ** に置き換える。
 
-- `go install github.com/nekowasabi/jev-routing-go/cmd/jev-routing@latest`
+- `go install github.com/nekowasabi/jev-routing/cmd/jev-routing@latest`
 - `jev-routing run grok|claude|codex`
 - compaction は tamaratran/fast-jev-compaction と同じ契約（本文は要約しない）

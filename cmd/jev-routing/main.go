@@ -3,7 +3,7 @@
 // It is not an MCP server. Do not `claude mcp add` / `codex mcp add` / `grok mcp add`.
 // Install the binary and wrap the host:
 //
-//	go install github.com/nekowasabi/jev-routing-go/cmd/jev-routing@latest
+//	go install github.com/nekowasabi/jev-routing/cmd/jev-routing@latest
 //	export TYPESAFE_API_KEY=ts_...
 //	jev-routing run grok
 //	jev-routing run claude
@@ -23,11 +23,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nekowasabi/jev-routing-go/internal/compact"
-	"github.com/nekowasabi/jev-routing-go/internal/host"
-	"github.com/nekowasabi/jev-routing-go/internal/jev"
-	"github.com/nekowasabi/jev-routing-go/internal/plan"
-	"github.com/nekowasabi/jev-routing-go/internal/proxy"
+	"github.com/nekowasabi/jev-routing/internal/compact"
+	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
+	"github.com/nekowasabi/jev-routing/internal/plan"
+	"github.com/nekowasabi/jev-routing/internal/proxy"
 )
 
 func main() {

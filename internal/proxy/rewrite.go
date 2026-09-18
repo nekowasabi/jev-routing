@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nekowasabi/jev-routing-go/internal/compact"
-	"github.com/nekowasabi/jev-routing-go/internal/host"
-	"github.com/nekowasabi/jev-routing-go/internal/jev"
-	"github.com/nekowasabi/jev-routing-go/internal/plan"
+	"github.com/nekowasabi/jev-routing/internal/compact"
+	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
+	"github.com/nekowasabi/jev-routing/internal/plan"
 )
 
 type RewriteStats struct {

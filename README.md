@@ -14,14 +14,14 @@ Claude Code / Codex / **Grok Build** 向けの Jev ハーネス。単一の Go �
 Node は不要です。Go 1.22+。
 
 ```bash
-go install github.com/nekowasabi/jev-routing-go/cmd/jev-routing@latest
+go install github.com/nekowasabi/jev-routing/cmd/jev-routing@latest
 ```
 
 ソースから:
 
 ```bash
-git clone https://github.com/nekowasabi/jev-routing-go.git
-cd jev-routing-go
+git clone https://github.com/nekowasabi/jev-routing.git
+cd jev-routing
 go install ./cmd/jev-routing
 ```
 

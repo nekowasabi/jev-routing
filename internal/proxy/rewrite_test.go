@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nekowasabi/jev-routing-go/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/host"
 )
 
 func TestGrokRewriteStripsCatalog(t *testing.T) {

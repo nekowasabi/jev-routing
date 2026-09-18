@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/nekowasabi/jev-routing-go/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/host"
 )
 
 const Respond = "respond_to_user"

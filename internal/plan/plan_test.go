@@ -3,7 +3,7 @@ package plan
 import (
 	"testing"
 
-	"github.com/nekowasabi/jev-routing-go/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/host"
 )
 
 func TestGrokMapsGrepThenReadThenSearchReplace(t *testing.T) {
