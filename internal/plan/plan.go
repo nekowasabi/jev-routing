@@ -65,6 +65,22 @@ func nestedAgent(t string) bool {
 
 func Native(h host.ID, claude string) string { return host.Native(h, claude) }
 
+// WorkRequest is the text local scoring and Jev next-tool should see.
+// Grok prepends a large injected preamble and wraps the real ask in
+// <user_query>; scoring that blob as the request pins send_feedback.
+func WorkRequest(s string) string {
+	const open, close = "<user_query>", "</user_query>"
+	i := strings.Index(s, open)
+	if i < 0 {
+		return s
+	}
+	s = s[i+len(open):]
+	if j := strings.Index(s, close); j >= 0 {
+		s = s[:j]
+	}
+	return strings.TrimSpace(s)
+}
+
 func Remaining(request string, actions []Action, h host.ID) [][]string {
 	s := Extract(request)
 	done := map[string]bool{}

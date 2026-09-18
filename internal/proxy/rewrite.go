@@ -42,6 +42,9 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	}
 	items, user := itemsFromMessages(msgs)
 	actions := actionsFromItems(items)
+	// Why: Grok prepends an injected preamble; scoring that blob as the request
+	// pins send_feedback at confidence 1.0 and skips the live Jev call.
+	user = plan.WorkRequest(user)
 
 	if len(names) == 0 {
 		// Grok Build often omits tools[] and lets cli-chat-proxy inject the catalog.

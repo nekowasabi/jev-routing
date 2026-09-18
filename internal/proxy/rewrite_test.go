@@ -378,3 +378,130 @@ func TestRewriteSkipsLiveWhenLocalConfident(t *testing.T) {
 		t.Fatalf("made %d live Jev requests; want 0", n)
 	}
 }
+
+func grokFn(name, desc string) any {
+	return map[string]any{"type": "function", "function": map[string]any{"name": name, "description": desc}}
+}
+
+func grokCatalog() []any {
+	sendFeedback := strings.Repeat("Save or update user feedback for later review. Drafts, messages, session, tool output, user request. ", 40)
+	return []any{
+		grokFn("run_terminal_command", "Run a bash command and return its output."),
+		grokFn("read_file", "Read a file from the workspace."),
+		grokFn("search_replace", "Replace an exact string in a file."),
+		grokFn("list_dir", "List files and directories."),
+		grokFn("grep", "Search file contents with regular expressions."),
+		grokFn("kill_command_or_subagent", "Terminate a running background task."),
+		grokFn("todo_write", "Create and manage a structured task list."),
+		grokFn("get_command_or_subagent_output", "Get output from a background task."),
+		grokFn("spawn_subagent", "Start a subagent that works on a task independently."),
+		grokFn("scheduler_create", "Create a scheduled task."),
+		grokFn("scheduler_delete", "Cancel a scheduled task."),
+		grokFn("scheduler_list", "List scheduled tasks."),
+		grokFn("monitor", "Start a background monitor."),
+		grokFn("search_tool", "Search for MCP tools by keyword and retrieve their input schemas."),
+		grokFn("use_tool", "Call an MCP integration tool."),
+		grokFn("workflow", "Launch or control a workflow."),
+		grokFn("enter_plan_mode", "Enter plan mode."),
+		grokFn("exit_plan_mode", "Exit plan mode."),
+		grokFn("ask_user_question", "Ask the user a multiple-choice question."),
+		grokFn("send_feedback", sendFeedback),
+		grokFn("web_fetch", "Fetch a URL as markdown."),
+		grokFn("image_gen", "Generate an image."),
+		grokFn("image_edit", "Edit an image."),
+		grokFn("image_to_video", "Generate a video from an image."),
+		grokFn("reference_to_video", "Generate a video from references."),
+		grokFn("write", "Create or overwrite a file."),
+	}
+}
+
+func TestGrokPreambleDoesNotPinSendFeedbackAndFitsJevBudget(t *testing.T) {
+	var bodies [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, raw)
+		var in struct {
+			Questions map[string]json.RawMessage `json:"questions"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		answers := map[string]any{}
+		if _, ok := in.Questions["next_tool"]; ok {
+			answers["next_tool"] = map[string]any{
+				"type": "choice", "choice": "search_tool", "confidence": 0.7,
+				"probabilities": map[string]float64{"search_tool": 0.7},
+			}
+		}
+		if _, ok := in.Questions["done"]; ok {
+			answers["done"] = map[string]any{"type": "noul", "noul": 0.05, "confidence": 0.9}
+		}
+		for k := range in.Questions {
+			if _, ok := answers[k]; !ok {
+				answers[k] = map[string]any{"type": "noul", "noul": 0.2, "confidence": 1}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "fake", "answers": answers})
+	}))
+	defer srv.Close()
+	client := &jev.Client{APIKey: "test", BaseURL: srv.URL, Model: "fake", HTTP: srv.Client()}
+
+	preamble := strings.Repeat("Keep every explicit requirement of the request in view until it is completed. Match the user's intent. user message session tool output draft feedback review comments. ", 80)
+	if len(preamble) < 10_000 {
+		t.Fatalf("preamble too short: %d", len(preamble))
+	}
+	query := "jev-routingを使っている状態です。jev apiを実行できているか、ツールカタログを tool call する処理をキャッシュされないように少しずつ値を変更して20階層浸漬してください。"
+	user := preamble + "\n<user_query>\n" + query + "\n</user_query>\n"
+	tools := grokCatalog()
+	if len(tools) != 26 {
+		t.Fatalf("catalog %d", len(tools))
+	}
+	req := map[string]any{
+		"model": "grok-4.6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": user},
+		},
+		"tools": tools,
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Grok, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) == 0 {
+		t.Fatalf("want a live Jev POST so the 32k budget is exercised; chosen=%s", stats.Chosen)
+	}
+	for i, body := range bodies {
+		var posted struct {
+			State     json.RawMessage            `json:"state"`
+			Questions map[string]json.RawMessage `json:"questions"`
+		}
+		if err := json.Unmarshal(body, &posted); err != nil {
+			t.Fatalf("body %d: %v", i, err)
+		}
+		longest := 0
+		for _, q := range posted.Questions {
+			if n := compact.EstimateTokens(string(q)); n > longest {
+				longest = n
+			}
+		}
+		joint := compact.EstimateTokens(string(posted.State)) + longest
+		if joint > jev.InputBudget {
+			t.Fatalf("body %d joint tokens %d > %d", i, joint, jev.InputBudget)
+		}
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	kept, _ := got["tools"].([]any)
+	if len(kept) == 1 {
+		t0, _ := kept[0].(map[string]any)
+		fn, _ := t0["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		if name == "" {
+			name, _ = t0["name"].(string)
+		}
+		if name == "send_feedback" {
+			t.Fatalf("catalog pinned to send_feedback; stats=%+v", stats)
+		}
+	}
+}

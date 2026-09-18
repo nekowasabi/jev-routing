@@ -1,10 +1,24 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/host"
 )
+
+func TestWorkRequestUsesUserQueryNotPreamble(t *testing.T) {
+	preamble := strings.Repeat("user message session tool output draft feedback review. ", 200)
+	want := "grep for the failing test and fix it"
+	got := WorkRequest(preamble + "\n<user_query>\n" + want + "\n</user_query>\n")
+	if got != want {
+		t.Fatalf("got %q", got)
+	}
+	plain := "just a short prompt"
+	if WorkRequest(plain) != plain {
+		t.Fatalf("untagged request was rewritten")
+	}
+}
 
 func TestGrokMapsGrepThenReadThenSearchReplace(t *testing.T) {
 	p := "The auth middleware test is failing. Find the test, read it, fix the assertion in place, and re-run the tests."
