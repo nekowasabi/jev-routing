@@ -84,7 +84,7 @@ requires_openai_auth = true
 ```
 
 
-Cursor Agent CLI は既定で `https://api2.cursor.sh` の Connect RPC（`/aiserver` / `/agent.v1`）に送ります。JSON の `tools[]` または `mcpTools` を含む POST を書き換え、protobuf 本体はそのまま上流へ渡します。Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`・`/sessions` および `prompt`/`message` + `tools[]` JSON を想定しています。Codex ChatGPT ログインは Responses Lite の `functions` 名前空間を展開してローカルツールだけ絞り、`mcp__` 名前空間と hosted ツールは残します。
+Cursor Agent CLI は既定で `https://api2.cursor.sh` の Connect RPC（`/aiserver` / `/agent.v1`）に送ります。JSON の `tools[]` または `mcpTools` を含む POST を書き換え、protobuf 本体はそのまま上流へ渡します。Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`・`/sessions` および `prompt`/`message` + `tools[]` JSON を想定しています。Codex ChatGPT ログインは Responses Lite の `input` 内にある `additional_tools` から `functions` 名前空間を展開し、元の位置を保ってローカルツールを絞ります。外部名前空間と提供側の実行ツールは残します。
 
 ## やらないこと
 
@@ -107,6 +107,8 @@ Grok の `PreCompact` / Claude の `PreToolUse` は、モデルが全スキー�
 - `keepCall` のみ → 結果を先頭 300 字に truncate
 - どちらも閾値未満 → 両方 drop
 - 先頭と直近はピン留め
+
+ツール選択が不確実でも、安全に適用できる履歴圧縮は実行します。Claude の `system` 境界、署名付き思考、ツール参照、呼び出しと結果の対応は維持します。
 
 ```bash
 jev-routing compact < transcript.json
