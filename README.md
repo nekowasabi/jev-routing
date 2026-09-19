@@ -84,7 +84,7 @@ requires_openai_auth = true
 ```
 
 
-Cursor Agent CLI は既定で `https://api2.cursor.sh` の Connect RPC（`/aiserver`）に送ります。JSON の `tools[]` を含む POST だけを書き換え、protobuf 本体はそのまま上流へ渡します。Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）経由の `/messages` を想定しています。
+Cursor Agent CLI は既定で `https://api2.cursor.sh` の Connect RPC（`/aiserver` / `/agent.v1`）に送ります。JSON の `tools[]` または `mcpTools` を含む POST を書き換え、protobuf 本体はそのまま上流へ渡します。Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`・`/sessions` および `prompt`/`message` + `tools[]` JSON を想定しています。Codex ChatGPT ログインは Responses Lite の `functions` 名前空間を展開してローカルツールだけ絞り、`mcp__` 名前空間と hosted ツールは残します。
 
 ## やらないこと
 
@@ -165,7 +165,7 @@ make test-x-cell           # Claude Code → Codex → Grok Build → Cursor →
 make test-x-cell claude    # 1 製品だけ
 ```
 
-結果は `artifacts/x-cell/<日時>/<host>/comparison.json` に出ます。`valid: true` の結果だけを比較に使ってください。`jev` 側でプロキシの書換えリクエストが 1 件も観測されなければ `valid: false` となり、削減値は出力しません。請求トークンは独立セッション間のキャッシュ状態で大きく変わるため、単発結果では比較しません。代わりに `routing_request_chars`（実際にプロキシが受け取り上流へ送った JSON 本文の削減バイト数）と、出力トークン・実行時間の差分を記録します。特に ChatGPT ログインで WebSocket を使う Codex は HTTP プロキシを通らない場合があり、その計測値は無効です。
+結果は `artifacts/x-cell/<日時>/<host>/comparison.json` に出ます。`comparable: true`（`valid: true`）の結果だけを比較に使ってください。プロキシ未到達、`rewritten=0`（passthrough のみ）、または完了条件不一致は `comparable: false` で、削減値は出しません。請求トークンは独立セッション間のキャッシュ状態で大きく変わるため、単発結果では比較しません。代わりに `routing_request_chars`（実際にプロキシが受け取り上流へ送った JSON 本文の削減バイト数）と、出力トークン・実行時間の差分を記録します。ChatGPT ログインの Codex は `-m gpt-5.6-terra`（`CODEX_MODEL` で上書き）を使います。短名 `terra` は 400 になります。
 
 保存済み観測の再集計（外部 CLI / ネットワークなし）:
 

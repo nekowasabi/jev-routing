@@ -196,6 +196,25 @@ func TestGatewayEligibility(t *testing.T) {
 			map[string]any{"name": "Read"},
 			map[string]any{"name": "mcp__slack__post_message"},
 		}
+		raw, _ := json.Marshal(req)
+		_, stats, err := Rewrite(raw, host.Grok, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.Reason == reasonNamespacedTools {
+			t.Fatalf("mixed local+MCP must stay filterable: %+v", stats)
+		}
+	})
+	t.Run("mcp-namespace-only", func(t *testing.T) {
+		req := map[string]any{
+			"model": "x",
+			"input": []any{map[string]any{"role": "user", "content": "hi"}},
+			"tools": []any{
+				map[string]any{"type": "namespace", "name": "mcp__slack", "tools": []any{
+					map[string]any{"type": "function", "name": "post_message"},
+				}},
+			},
+		}
 		mustPassthrough(t, req, reasonNamespacedTools)
 	})
 	t.Run("invalid-json", func(t *testing.T) {

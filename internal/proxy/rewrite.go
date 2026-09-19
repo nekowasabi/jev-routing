@@ -112,8 +112,10 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		return body, stats, nil
 	}
 
+	rawTools := extractRawTools(root)
 	tools, toolsKey := extractTools(root)
-	names := plan.ToolNames(asMaps(tools))
+	filterable := filterableTools(tools)
+	names := plan.ToolNames(asMaps(filterable))
 	stats.ToolBefore = len(names)
 	stats.ToolAfter = len(names)
 
@@ -125,7 +127,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		return body, stats, nil
 	}
 
-	toolSpecs := plan.SpecsFrom(asMaps(tools))
+	toolSpecs := plan.SpecsFrom(asMaps(filterable))
 	if len(names) == 0 {
 		stats.Chosen = "passthrough:" + reasonNoCatalog
 		stats.Reason = reasonNoCatalog
@@ -138,6 +140,9 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		msgs = asSlice(root["input"])
 	}
 	items, user := itemsFromMessages(msgs)
+	if user == "" {
+		user = fallbackUser(root)
+	}
 	actions := actionsFromItems(items)
 	user = plan.WorkRequest(user)
 
@@ -253,7 +258,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		}
 	}
 
-	setTools(work, toolsKey, kept)
+	setTools(work, toolsKey, reconstructCatalog(rawTools, kept))
 	if _, ok := work["additional_tools"]; ok {
 		delete(work, "additional_tools")
 	}
@@ -321,11 +326,17 @@ func inspectRequest(root map[string]any) eligibility {
 	}
 	_, hasMsg := root["messages"]
 	_, hasIn := root["input"]
-	if !hasMsg && !hasIn {
-		return eligibility{Reason: reasonNotChat}
-	}
 	protocol := "chat"
-	if hasIn && !hasMsg {
+	if !hasMsg && !hasIn {
+		switch {
+		case looksCursorAgent(root):
+			protocol = "cursor"
+		case looksPromptChat(root):
+			protocol = "prompt"
+		default:
+			return eligibility{Reason: reasonNotChat}
+		}
+	} else if hasIn && !hasMsg {
 		protocol = "responses"
 	} else if looksAnthropic(root) {
 		protocol = "anthropic"
@@ -360,6 +371,8 @@ func inspectRequest(root map[string]any) eligibility {
 		if thinkingEnabled(root) || hasCacheControl(root) {
 			forcedOK = false
 		}
+	case "cursor", "prompt":
+		forcedOK = false
 	default:
 		forcedOK = false
 	}
@@ -442,13 +455,22 @@ func toolChoiceReason(v any) (string, bool) {
 
 func catalogReason(tools []any) string {
 	seen := map[string]int{}
+	filterable := 0
+	stickyReason := ""
 	for _, raw := range tools {
 		m, ok := raw.(map[string]any)
 		if !ok {
 			return reasonUnrecognizedFormat
 		}
-		if isProviderExecuted(m) {
-			return reasonProviderExecuted
+		if isSticky(m) {
+			if stickyReason == "" {
+				if isExternalNamespace(m) || isMCPNamespace(m) {
+					stickyReason = reasonNamespacedTools
+				} else {
+					stickyReason = reasonProviderExecuted
+				}
+			}
+			continue
 		}
 		n := toolNameOf(m)
 		if n == "" {
@@ -457,13 +479,14 @@ func catalogReason(tools []any) string {
 			}
 			return reasonUnrecognizedFormat
 		}
-		if isNamespaced(n, m) {
-			return reasonNamespacedTools
-		}
 		seen[n]++
 		if seen[n] > 1 {
 			return reasonDuplicateNames
 		}
+		filterable++
+	}
+	if filterable == 0 {
+		return stickyReason
 	}
 	return ""
 }
@@ -472,7 +495,7 @@ func isProviderExecuted(m map[string]any) bool {
 	typ, _ := m["type"].(string)
 	switch typ {
 	case "web_search", "file_search", "code_interpreter", "computer", "computer_use",
-		"hosted", "server_tool", "mcp":
+		"hosted", "server_tool", "mcp", "tool_search", "local_shell", "image_generation":
 		return true
 	}
 	if _, ok := m["server_label"]; ok {
@@ -481,17 +504,71 @@ func isProviderExecuted(m map[string]any) bool {
 	return false
 }
 
-func isNamespaced(name string, m map[string]any) bool {
-	if _, ok := m["namespace"]; ok {
+const defaultFunctionNamespace = "functions"
+
+func localNamespace(ns string) bool {
+	switch strings.ToLower(strings.TrimSpace(ns)) {
+	case "", defaultFunctionNamespace, "default":
+		return true
+	default:
+		return false
+	}
+}
+
+func mcpPrefixed(s string) bool {
+	s = strings.ToLower(s)
+	return strings.HasPrefix(s, "mcp__") || strings.HasPrefix(s, "mcp.")
+}
+
+func namespaceString(m map[string]any) string {
+	switch v := m["namespace"].(type) {
+	case string:
+		return v
+	case map[string]any:
+		if n, _ := v["name"].(string); n != "" {
+			return n
+		}
+	}
+	return ""
+}
+
+func isLocalNamespaceWrapper(m map[string]any) bool {
+	typ, _ := m["type"].(string)
+	return typ == "namespace" && localNamespace(str(m["name"]))
+}
+
+func isExternalNamespace(m map[string]any) bool {
+	typ, _ := m["type"].(string)
+	return typ == "namespace" && !localNamespace(str(m["name"]))
+}
+
+func isMCPNamespace(m map[string]any) bool {
+	if mcpPrefixed(str(m["name"])) || mcpPrefixed(namespaceString(m)) {
 		return true
 	}
-	if strings.Contains(name, "__") {
+	return isExternalNamespace(m)
+}
+
+func isSticky(m map[string]any) bool {
+	if isProviderExecuted(m) || isExternalNamespace(m) {
 		return true
 	}
-	if i := strings.IndexByte(name, '.'); i > 0 && i < len(name)-1 {
+	if ns := namespaceString(m); ns != "" && !localNamespace(ns) {
 		return true
 	}
 	return false
+}
+
+// isNamespaced reports a true MCP/external namespace. Local Codex tools
+// live under namespace "functions" or names with "." / "__" that are not mcp-prefixed.
+func isNamespaced(name string, m map[string]any) bool {
+	if isExternalNamespace(m) {
+		return true
+	}
+	if ns := namespaceString(m); ns != "" && !localNamespace(ns) {
+		return true
+	}
+	return mcpPrefixed(name)
 }
 
 func historyReason(msgs []any) string {
@@ -582,27 +659,229 @@ func applyForcedChoice(root map[string]any, protocol, name string) error {
 	return nil
 }
 
-func extractTools(root map[string]any) ([]any, string) {
+func extractRawTools(root map[string]any) []any {
 	if t := asSlice(root["tools"]); t != nil {
 		if extra := asSlice(root["additional_tools"]); extra != nil {
 			out := make([]any, 0, len(t)+len(extra))
-			out = append(out, t...)
-			out = append(out, extra...)
-			return out, "tools"
+			return append(append(out, t...), extra...)
 		}
-		return t, "tools"
+		return t
 	}
 	if t := asSlice(root["functions"]); t != nil {
-		return t, "functions"
+		return t
+	}
+	return cursorToolDefs(root)
+}
+
+func extractTools(root map[string]any) ([]any, string) {
+	if t := asSlice(root["tools"]); t != nil {
+		if extra := asSlice(root["additional_tools"]); extra != nil {
+			t = append(append([]any{}, t...), extra...)
+		}
+		return flattenCatalog(t), "tools"
+	}
+	if t := asSlice(root["functions"]); t != nil {
+		return flattenCatalog(t), "functions"
+	}
+	if t := cursorToolDefs(root); t != nil {
+		return t, "mcpTools"
 	}
 	return nil, "tools"
 }
 
+func flattenCatalog(tools []any) []any {
+	var out []any
+	for _, raw := range tools {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			out = append(out, raw)
+			continue
+		}
+		if isLocalNamespaceWrapper(m) {
+			out = append(out, asSlice(m["tools"])...)
+			continue
+		}
+		out = append(out, raw)
+	}
+	return out
+}
+
+func filterableTools(tools []any) []any {
+	var out []any
+	for _, t := range tools {
+		m, ok := t.(map[string]any)
+		if !ok || isSticky(m) {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func reconstructCatalog(original, kept []any) []any {
+	if len(original) == 0 {
+		return kept
+	}
+	keep := map[string]bool{}
+	for _, t := range kept {
+		m, ok := t.(map[string]any)
+		if !ok || isSticky(m) {
+			continue
+		}
+		if n := toolNameOf(m); n != "" {
+			keep[n] = true
+		}
+	}
+	var out []any
+	for _, raw := range original {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if isLocalNamespaceWrapper(m) {
+			var inner []any
+			for _, c := range asSlice(m["tools"]) {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				if keep[toolNameOf(cm)] {
+					inner = append(inner, c)
+				}
+			}
+			if len(inner) == 0 {
+				continue
+			}
+			cp := cloneMap(m)
+			cp["tools"] = inner
+			out = append(out, cp)
+			continue
+		}
+		if isSticky(m) {
+			out = append(out, raw)
+			continue
+		}
+		if keep[toolNameOf(m)] {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
 func setTools(root map[string]any, key string, tools []any) {
+	if key == "mcpTools" {
+		setCursorTools(root, tools)
+		return
+	}
 	if key == "" {
 		key = "tools"
 	}
 	root[key] = tools
+}
+
+func cursorToolDefs(root map[string]any) []any {
+	for _, key := range []string{"mcpTools", "mcp_tools"} {
+		switch v := root[key].(type) {
+		case []any:
+			if len(v) > 0 {
+				return v
+			}
+		case map[string]any:
+			for _, inner := range []string{"mcpTools", "mcp_tools", "tools"} {
+				if t := asSlice(v[inner]); len(t) > 0 {
+					return t
+				}
+			}
+		}
+	}
+	if action, ok := root["action"].(map[string]any); ok {
+		if t := cursorToolDefs(action); t != nil {
+			return t
+		}
+	}
+	return nil
+}
+
+func setCursorTools(root map[string]any, tools []any) {
+	for _, key := range []string{"mcpTools", "mcp_tools"} {
+		switch v := root[key].(type) {
+		case []any:
+			root[key] = tools
+			return
+		case map[string]any:
+			for _, inner := range []string{"mcpTools", "mcp_tools", "tools"} {
+				if _, ok := v[inner]; ok {
+					v[inner] = tools
+					return
+				}
+			}
+		}
+	}
+	root["mcpTools"] = map[string]any{"mcpTools": tools}
+}
+
+func looksCursorAgent(root map[string]any) bool {
+	if cursorToolDefs(root) != nil {
+		return true
+	}
+	_, hasAction := root["action"]
+	if _, ok := root["conversationId"]; ok && hasAction {
+		return true
+	}
+	if _, ok := root["conversation_id"]; ok && hasAction {
+		return true
+	}
+	return false
+}
+
+func looksPromptChat(root map[string]any) bool {
+	if _, ok := root["prompt"].(string); !ok {
+		if _, ok := root["message"].(string); !ok {
+			return false
+		}
+	}
+	tools, _ := extractTools(root)
+	return len(filterableTools(tools)) > 0
+}
+
+func fallbackUser(root map[string]any) string {
+	if s, _ := root["prompt"].(string); s != "" {
+		return s
+	}
+	if s, _ := root["message"].(string); s != "" {
+		return s
+	}
+	if action, ok := root["action"].(map[string]any); ok {
+		return userFromAction(action)
+	}
+	return ""
+}
+
+func userFromAction(action map[string]any) string {
+	for _, k := range []string{"messages", "history", "conversationHistory", "conversation_history"} {
+		if s := asSlice(action[k]); s != nil {
+			_, user := itemsFromMessages(s)
+			if user != "" {
+				return user
+			}
+		}
+	}
+	for _, k := range []string{"userMessage", "user_message", "message"} {
+		switch v := action[k].(type) {
+		case string:
+			if v != "" {
+				return v
+			}
+		case map[string]any:
+			if s := textOf(v); s != "" {
+				return s
+			}
+			if s := firstString(v, "text", "content", "prompt"); s != "" {
+				return s
+			}
+		}
+	}
+	return firstString(action, "prompt", "text", "content")
 }
 
 func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan.Action, specs []plan.Spec) (plan.Decision, string, error) {
@@ -661,10 +940,14 @@ func finite01(v float64) bool {
 }
 
 func filterTools(tools []any, name string) []any {
-	var kept []any
+	var kept, sticky []any
 	for _, t := range tools {
 		m, ok := t.(map[string]any)
 		if !ok {
+			continue
+		}
+		if isSticky(m) {
+			sticky = append(sticky, t)
 			continue
 		}
 		if toolNameOf(m) == name {
@@ -674,7 +957,7 @@ func filterTools(tools []any, name string) []any {
 	if len(kept) == 0 {
 		return tools[:0]
 	}
-	return kept
+	return append(kept, sticky...)
 }
 
 func toolNameOf(m map[string]any) string {

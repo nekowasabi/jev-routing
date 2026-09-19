@@ -40,8 +40,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ChatGPT-login Codex rejects the short model id `terra` (HTTP 400).
+# Use the config.toml id. `CODEX_MODEL` overrides. Closed stdin
+# (`Reading additional input from stdin...`) is OK once the id is correct.
+CODEX_MODEL=${CODEX_MODEL:-gpt-5.6-terra}
+
 run_one() {
-  local host=$1 mode=$2 case_dir worktree raw result proxy_stats started ended exit_code proxy_requests=0 proxy_chars_before=0 proxy_chars_after=0
+  local host=$1 mode=$2 case_dir worktree raw result proxy_stats started ended exit_code proxy_requests=0 proxy_chars_before=0 proxy_chars_after=0 proxy_rewritten=0
   case_dir="$out_dir/$host/$mode"
   worktree="$case_dir/worktree"
   mkdir -p "$case_dir"
@@ -57,9 +62,9 @@ run_one() {
     claude:jev)
       (cd "$worktree" && JEV_RUN_STATS="$proxy_stats" "$binary" run claude -- -p --output-format json --no-session-persistence --permission-mode bypassPermissions --disallowed-tools Agent -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
     codex:baseline)
-      (cd "$worktree" && codex exec --json --ephemeral -s workspace-write "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
+      (cd "$worktree" && codex exec --json --ephemeral -s workspace-write -m "$CODEX_MODEL" "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
     codex:jev)
-      (cd "$worktree" && JEV_RUN_STATS="$proxy_stats" "$binary" run codex -- exec --json --ephemeral -s workspace-write "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
+      (cd "$worktree" && JEV_RUN_STATS="$proxy_stats" "$binary" run codex -- exec --json --ephemeral -s workspace-write -m "$CODEX_MODEL" "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
     grok:baseline)
       (cd "$worktree" && grok --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
     grok:jev)
@@ -82,10 +87,11 @@ run_one() {
     [[ -f "$proxy_stats" ]] && proxy_requests=$(jq -r '.requests // 0' "$proxy_stats")
     [[ -f "$proxy_stats" ]] && proxy_chars_before=$(jq -r '.charsBefore // 0' "$proxy_stats")
     [[ -f "$proxy_stats" ]] && proxy_chars_after=$(jq -r '.charsAfter // 0' "$proxy_stats")
+    [[ -f "$proxy_stats" ]] && proxy_rewritten=$(jq -r '.rewritten // 0' "$proxy_stats")
   fi
-  python3 - "$host" "$mode" "$raw" "$result" "$started" "$ended" "$exit_code" "$proxy_requests" "$proxy_chars_before" "$proxy_chars_after" "$commit" <<'PY'
+  python3 - "$host" "$mode" "$raw" "$result" "$started" "$ended" "$exit_code" "$proxy_requests" "$proxy_chars_before" "$proxy_chars_after" "$proxy_rewritten" "$commit" <<'PY'
 import json, pathlib, sys
-host, mode, raw_path, result_path, started, ended, exit_code, valid, chars_before, chars_after, commit = sys.argv[1:]
+host, mode, raw_path, result_path, started, ended, exit_code, valid, chars_before, chars_after, rewritten, commit = sys.argv[1:]
 raw = pathlib.Path(raw_path).read_text(errors="replace")
 data = {}
 try:
@@ -112,6 +118,7 @@ out = {
     "wall_ms": round((int(ended)-int(started))/1_000_000, 3),
     "proxy_requests": int(valid) if mode == "jev" else None,
     "proxy_observed": bool(int(valid)) if mode == "jev" else None,
+    "rewritten": int(rewritten) if mode == "jev" else None,
     "routing_chars_before": int(chars_before) if mode == "jev" else None,
     "routing_chars_after": int(chars_after) if mode == "jev" else None,
     "success_marker": "CHECK: PASS" in result and not data.get("is_error", False),
@@ -131,17 +138,20 @@ summarize() {
     def delta($field): ($baseline[0][$field] - $jev[0][$field]);
     def pct($field): if $baseline[0][$field] == 0 then null else (delta($field) / $baseline[0][$field] * 100) end;
     def safe_delta($field): if ($baseline[0][$field] == null or $jev[0][$field] == null) then null else delta($field) end;
-    ($jev[0].proxy_observed and $baseline[0].success_marker and $jev[0].success_marker) as $valid |
-    {host: $baseline[0].host, baseline: $baseline[0], jev: $jev[0], valid: $valid,
-     reduction: (if $valid then {wall_ms: delta("wall_ms"), wall_percent: pct("wall_ms"),
+    ($jev[0].proxy_observed and (($jev[0].rewritten // 0) > 0) and $baseline[0].success_marker and $jev[0].success_marker) as $comparable |
+    {host: $baseline[0].host, baseline: $baseline[0], jev: $jev[0], valid: $comparable, comparable: $comparable,
+     reduction: (if $comparable then {wall_ms: delta("wall_ms"), wall_percent: pct("wall_ms"),
        output_tokens: (($baseline[0].usage.output_tokens // 0) - ($jev[0].usage.output_tokens // 0)),
        routing_request_chars: (($jev[0].routing_chars_before // 0) - ($jev[0].routing_chars_after // 0)),
        cost_usd: safe_delta("total_cost_usd"),
        duration_api_ms: safe_delta("duration_api_ms")}
        else null end),
-     invalid_reason: (if $valid then null elif ($jev[0].proxy_requests // 0) == 0 then "jev-routing を経由したリクエストが観測されませんでした" else "両条件で同じ完了条件を満たしていません" end)}
+     invalid_reason: (if $comparable then null
+       elif ($jev[0].proxy_requests // 0) == 0 then "jev-routing を経由したリクエストが観測されませんでした"
+       elif (($jev[0].rewritten // 0) == 0) then "書換えが 0 件のため削減は比較不能（passthrough のみ）"
+       else "両条件で同じ完了条件を満たしていません" end)}
   ' >"$out_dir/$host/comparison.json"
-  jq -r 'if .valid then "\(.host): コスト差分=\(.reduction.cost_usd // "N/A")USD API時間差分=\(.reduction.duration_api_ms // "N/A")ms 書換えリクエスト削減=\(.reduction.routing_request_chars)文字 出力トークン差分=\(.reduction.output_tokens) 実行時間差分=\(.reduction.wall_ms)ms (num_turns: baseline=\(.baseline.num_turns // "N/A") jev=\(.jev.num_turns // "N/A"))" else "\(.host): 比較不能 — \(.invalid_reason)" end' "$out_dir/$host/comparison.json"
+  jq -r 'if .comparable then "\(.host): コスト差分=\(.reduction.cost_usd // "N/A")USD API時間差分=\(.reduction.duration_api_ms // "N/A")ms 書換えリクエスト削減=\(.reduction.routing_request_chars)文字 出力トークン差分=\(.reduction.output_tokens) 実行時間差分=\(.reduction.wall_ms)ms (num_turns: baseline=\(.baseline.num_turns // "N/A") jev=\(.jev.num_turns // "N/A"))" else "\(.host): 比較不能 — \(.invalid_reason)" end' "$out_dir/$host/comparison.json"
 }
 
 for host in "${hosts[@]}"; do

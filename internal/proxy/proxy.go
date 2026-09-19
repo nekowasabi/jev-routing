@@ -299,6 +299,8 @@ func (s *Server) Handler() http.Handler {
 				stats.Chosen = "passthrough:" + reasonNotJSON
 				s.mu.Lock()
 				s.Passthrough++
+				s.CharsBefore += len(raw)
+				s.CharsAfter += len(raw)
 				s.mu.Unlock()
 			}
 			ev := Event{
@@ -374,7 +376,12 @@ func looksLikeLLM(path string) bool {
 	return strings.Contains(p, "/messages") ||
 		strings.Contains(p, "/chat/completions") ||
 		strings.Contains(p, "/responses") ||
-		strings.Contains(p, "/aiserver")
+		strings.Contains(p, "/aiserver") ||
+		strings.Contains(p, "/agent.") ||
+		strings.Contains(p, "/agent/") ||
+		strings.Contains(p, "/sessions") ||
+		strings.Contains(p, "/inference") ||
+		strings.Contains(p, "/complete")
 }
 
 func itoa(n int) string {

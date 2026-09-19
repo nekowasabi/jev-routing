@@ -869,3 +869,201 @@ func TestRewriteTwoSequentialTurnsDump(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCodexFunctionsNamespaceIsFilterable(t *testing.T) {
+	req := map[string]any{
+		"model": "gpt-5.6-terra",
+		"input": []any{
+			map[string]any{"role": "user", "content": "The auth middleware test is failing. Find it, fix the assertion in place, and re-run the tests."},
+		},
+		"tools": []any{
+			map[string]any{
+				"type": "namespace", "name": "functions",
+				"tools": []any{
+					map[string]any{"type": "function", "name": "grep_files", "namespace": "functions"},
+					map[string]any{"type": "function", "name": "read_file", "namespace": "functions"},
+					map[string]any{"type": "function", "name": "apply_patch", "namespace": "functions"},
+					map[string]any{"type": "function", "name": "shell", "namespace": "functions"},
+				},
+			},
+			map[string]any{"type": "web_search"},
+			map[string]any{
+				"type": "namespace", "name": "mcp__slack",
+				"tools": []any{map[string]any{"type": "function", "name": "post_message"}},
+			},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Codex, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Reason == reasonNamespacedTools || stats.Reason == reasonProviderExecuted {
+		t.Fatalf("local Codex catalog refused: %+v", stats)
+	}
+	if !stats.Changed || stats.ToolAfter != 1 {
+		t.Fatalf("want local filter, got %+v", stats)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	var local, hosted, mcp int
+	for _, rawTool := range asSlice(got["tools"]) {
+		m := rawTool.(map[string]any)
+		switch {
+		case isLocalNamespaceWrapper(m):
+			local = len(asSlice(m["tools"]))
+		case isProviderExecuted(m):
+			hosted++
+		case isExternalNamespace(m):
+			mcp++
+		}
+	}
+	if local != 1 {
+		t.Fatalf("functions namespace should keep 1 local tool, got %d; stats=%+v", local, stats)
+	}
+	if hosted != 1 || mcp != 1 {
+		t.Fatalf("sticky hosted/MCP dropped: hosted=%d mcp=%d out=%s", hosted, mcp, out)
+	}
+}
+
+func TestGrokMixedHostedToolsStillFiltersFunctions(t *testing.T) {
+	req := map[string]any{
+		"model": "grok-4",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "The auth middleware test is failing. Find it, fix the assertion in place, and re-run the tests."},
+		},
+		"tools": []any{
+			map[string]any{"type": "function", "function": map[string]any{"name": "grep"}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "read_file"}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "search_replace"}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "run_terminal_command"}},
+			map[string]any{"type": "web_search"},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Reason == reasonProviderExecuted {
+		t.Fatalf("mixed hosted+functions refused: %+v", stats)
+	}
+	if !stats.Changed || stats.Chosen != "grep" {
+		t.Fatalf("want grep filter, got %+v", stats)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	names := toolNames(got)
+	if len(names) != 1 || names[0] != "grep" {
+		t.Fatalf("function tools=%v", names)
+	}
+	hosted := false
+	for _, rawTool := range asSlice(got["tools"]) {
+		if isProviderExecuted(rawTool.(map[string]any)) {
+			hosted = true
+		}
+	}
+	if !hosted {
+		t.Fatal("hosted web_search was stripped")
+	}
+}
+
+func TestCursorMcpToolsCatalogIsFilterable(t *testing.T) {
+	req := map[string]any{
+		"conversationId": "conv-1",
+		"action": map[string]any{
+			"userMessage": map[string]any{"text": "The auth middleware test is failing. Find it, fix the assertion, and re-run the tests."},
+		},
+		"mcpTools": map[string]any{
+			"mcpTools": []any{
+				map[string]any{"name": "Read", "description": "Read a file"},
+				map[string]any{"name": "Grep", "description": "Search file contents"},
+				map[string]any{"name": "Shell", "description": "Run a command"},
+				map[string]any{"name": "Write", "description": "Write a file"},
+			},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Cursor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Reason == reasonNotChat {
+		t.Fatalf("cursor mcpTools was not_chat: %+v", stats)
+	}
+	if !stats.Changed || stats.ToolAfter != 1 || stats.Chosen != "Grep" {
+		t.Fatalf("want Grep filter, got %+v", stats)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	defs := cursorToolDefs(got)
+	if len(defs) != 1 {
+		t.Fatalf("mcpTools after=%d", len(defs))
+	}
+	if toolNameOf(defs[0].(map[string]any)) != "Grep" {
+		t.Fatalf("kept %v", defs[0])
+	}
+}
+
+func TestDevinPromptToolsCatalogIsFilterable(t *testing.T) {
+	req := map[string]any{
+		"prompt": "The auth middleware test is failing. Find it, fix the assertion in place, and re-run the tests.",
+		"tools": []any{
+			map[string]any{"name": "read", "description": "Read a file"},
+			map[string]any{"name": "grep", "description": "Search files"},
+			map[string]any{"name": "edit", "description": "Edit a file"},
+			map[string]any{"name": "exec", "description": "Run a command"},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Devin, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Reason == reasonNotChat {
+		t.Fatalf("devin prompt+tools was not_chat: %+v", stats)
+	}
+	if !stats.Changed || stats.ToolAfter != 1 || stats.Chosen != "grep" {
+		t.Fatalf("want grep filter, got %+v", stats)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(asSlice(got["tools"])) != 1 {
+		t.Fatalf("tools after=%v", got["tools"])
+	}
+}
+
+func TestCursorControlJSONWithoutToolsStaysNotChat(t *testing.T) {
+	req := map[string]any{"requestedModel": map[string]any{"model": "auto"}}
+	raw, _ := json.Marshal(req)
+	_, stats, err := Rewrite(raw, host.Cursor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Reason != reasonNotChat {
+		t.Fatalf("control frame reason=%s %+v", stats.Reason, stats)
+	}
+}
+
+func TestIsNamespacedLocalCodexVsMCP(t *testing.T) {
+	local := map[string]any{"type": "function", "name": "shell", "namespace": "functions"}
+	if isNamespaced("shell", local) {
+		t.Fatal("functions.shell is local")
+	}
+	dotted := map[string]any{"type": "function", "name": "fs.read"}
+	if isNamespaced("fs.read", dotted) {
+		t.Fatal("dotted local name is not MCP")
+	}
+	mcp := map[string]any{"name": "mcp__slack__post_message"}
+	if !isNamespaced("mcp__slack__post_message", mcp) {
+		t.Fatal("mcp__ prefix must stay namespaced")
+	}
+}

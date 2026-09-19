@@ -244,8 +244,9 @@ func aliasIn(set map[string]bool, want string) string {
 		"Grep":                 {"grep", "grep_files"},
 		"Read":                 {"read_file"},
 		"Edit":                 {"search_replace", "apply_patch"},
-		"Bash":                 {"run_terminal_command", "run_terminal_cmd", "exec_command"},
-		"run_terminal_command": {"run_terminal_cmd", "exec_command", "Bash"},
+		"Bash":                 {"run_terminal_command", "run_terminal_cmd", "exec_command", "shell", "shell_command", "exec"},
+		"run_terminal_command": {"run_terminal_cmd", "exec_command", "shell", "shell_command", "Bash"},
+		"exec_command":         {"shell", "shell_command", "run_terminal_command", "Bash"},
 	}
 	for _, a := range alts[want] {
 		if set[a] {
