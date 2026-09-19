@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -123,8 +125,20 @@ func (s *Server) Handler() http.Handler {
 		r.Header.Del("Accept-Encoding")
 	}
 	proxy.ModifyResponse = func(res *http.Response) error { return nil }
+	proxy.ErrorLog = s.Log
+	// Why: Instead of ReverseProxy default ErrorHandler (prints to log.Default / TUI stderr), adopted custom handler. Reason: Grok TUI shares stderr; client cancel is expected noise.
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		s.Log.Printf("proxy error: %v", err)
+		w.WriteHeader(http.StatusBadGateway)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && looksLikeLLM(r.URL.Path) {
+			s.mu.Lock()
+			s.Requests++
+			s.mu.Unlock()
 			raw, err := io.ReadAll(r.Body)
 			_ = r.Body.Close()
 			if err == nil && json.Valid(raw) {
