@@ -4,9 +4,138 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+
+LIVE_TARGETS = {
+    "RewriteWith": "internal/proxy/rewrite.go",
+    "extractTools": "internal/proxy/rewrite.go",
+    "applyCompactToMessages": "internal/proxy/rewrite.go",
+    "DefaultOptions": "internal/proxy/options.go",
+    "DefaultUpstream": "internal/proxy/proxy.go",
+}
+
+
+def expected_live_answers(worktree: Path) -> dict[str, str]:
+    answers = {}
+    for name, filename in LIVE_TARGETS.items():
+        for line, text in enumerate((worktree / filename).read_text().splitlines(), 1):
+            if re.match(r"^func " + re.escape(name) + r"\(", text):
+                answers[name] = f"{filename}:{line}"
+                break
+        else:
+            raise ValueError(f"missing definition: {name}")
+    return answers
+
+
+def extract_cli_payload(host: str, raw: str) -> tuple[dict[str, Any], str]:
+    """Parse a CLI --output-format json payload. Grok emits `text`; Claude uses `result`."""
+    if host == "codex":
+        data: dict[str, Any] = {}
+        messages: list[str] = []
+        for line in raw.splitlines():
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if event.get("type") == "turn.completed":
+                data = event
+            item = event.get("item") or {}
+            if event.get("type") == "item.completed" and item.get("type") == "agent_message":
+                messages.append(item.get("text", ""))
+        return data, messages[-1] if messages else ""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {}, raw if host == "devin" else ""
+    result = data.get("result", data.get("text", ""))
+    if isinstance(result, dict):
+        result = json.dumps(result, ensure_ascii=False)
+    elif result is None:
+        result = ""
+    elif not isinstance(result, str):
+        result = str(result)
+    if host == "devin" and not result:
+        result = raw
+    return data, result
+
+
+def parse_live_answers(result: str, expected: dict[str, str]) -> dict[str, str]:
+    """Recover the answer object from a CLI final string. Grok prepends host text."""
+    text = result.strip()
+    blobs: list[Any] = []
+    if "```" in text:
+        blocks = re.findall(r"```json[ \t]*\r?\n(.*?)```", text, re.DOTALL)
+        if len(blocks) == 1 and text.count("```") == 2:
+            blobs.append(blocks[0].strip())
+    else:
+        blobs.append(text)
+        decoder = json.JSONDecoder()
+        i = 0
+        while True:
+            start = text.find("{", i)
+            if start < 0:
+                break
+            try:
+                obj, end = decoder.raw_decode(text, start)
+            except json.JSONDecodeError:
+                i = start + 1
+                continue
+            blobs.append(obj)
+            i = max(end, start + 1)
+    for blob in blobs:
+        if isinstance(blob, str):
+            try:
+                blob = json.loads(blob)
+            except (ValueError, TypeError):
+                continue
+        if isinstance(blob, dict) and blob.keys() == expected.keys():
+            return {str(k): str(v) for k, v in blob.items()}
+    return {}
+
+
+def live_quality(case: dict[str, Any], result: str, worktree: Path,
+                 expected: dict[str, str]) -> dict[str, Any]:
+    answers = parse_live_answers(result, expected)
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=worktree, capture_output=True, text=True, check=True,
+    )
+    return external_quality({
+        **case, "expected_answers": expected,
+        "external_checks": {"worktree_clean": not status.stdout,
+                            "answers": answers, "sources": list(expected.values())},
+    })
+
+
+def live_acceptance(baseline: dict[str, Any], jev: dict[str, Any]) -> dict[str, Any]:
+    failures = []
+    for case in (baseline, jev):
+        if case.get("exit_code") != 0 or not case.get("quality", {}).get("success"):
+            failures.append(f"{case.get('mode')}: external_quality_failed")
+    stats = jev.get("proxy_stats") or {}
+    if stats.get("selectionApplied", 0) <= 0:
+        failures.append("selection_not_applied")
+    completed = [event for event in (stats.get("events") or [])
+                 if isinstance(event.get("upstreamStatus"), int)
+                 and 200 <= event["upstreamStatus"] < 300
+                 and event.get("upstreamFinish") == "complete"
+                 and not event.get("canceled")]
+    if not any(event.get("apply") in ("filter", "forced") for event in completed):
+        failures.append("selection_not_completed_upstream")
+    if stats.get("compaction") == "on":
+        if stats.get("compactionApplied", 0) <= 0:
+            failures.append("compaction_not_applied")
+        if not any(event.get("compactApplied") is True and event.get("apply") != "direct"
+                   for event in completed):
+            failures.append("compaction_not_completed_upstream")
+    elif stats.get("compaction") != "off":
+        failures.append("compaction_setting_missing")
+    return {"valid": not failures, "failures": failures}
 
 
 def load_json(path: Path) -> Any:

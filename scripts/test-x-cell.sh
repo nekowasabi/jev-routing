@@ -30,7 +30,7 @@ mkdir -p "$out_dir"
 binary="$root/bin/jev-routing"
 go build -o "$binary" ./cmd/jev-routing
 commit=$(git rev-parse HEAD)
-prompt='internal/proxy/rewrite.go に定義されている関数（func で始まる各定義）それぞれについて、リポジトリ全体から呼び出し箇所を検索し、関数名ごとにファイル:行番号の一覧を作成してください。ファイルは変更せず、最後に `CHECK: PASS` と一行だけ出力してください。'
+prompt='ファイルを変更せず、RewriteWith、extractTools、applyCompactToMessages、DefaultOptions、DefaultUpstream の定義を調べてください。各関数について個別のツール呼び出しで定義を検索し、別のツール呼び出しで本文を読んで確認してください（合計10回以上、並列化せず順に実行）。最終回答は関数名をキー、リポジトリ相対パス:定義行番号を値にしたJSONオブジェクトだけにしてください。説明文や完了マーカーは不要です。'
 
 cleanup() {
   local dir
@@ -51,6 +51,11 @@ run_one() {
   worktree="$case_dir/worktree"
   mkdir -p "$case_dir"
   git worktree add --detach "$worktree" "$commit" >/dev/null
+  PYTHONPATH="$root/scripts" python3 - "$worktree" "$case_dir/expected.json" <<'PY'
+import json, pathlib, sys
+from summarize_x_cell import expected_live_answers
+pathlib.Path(sys.argv[2]).write_text(json.dumps(expected_live_answers(pathlib.Path(sys.argv[1]))))
+PY
   raw="$case_dir/raw.json"
   result="$case_dir/result.json"
   proxy_stats="$case_dir/proxy.json"
@@ -62,9 +67,9 @@ run_one() {
     claude:jev)
       (cd "$worktree" && JEV_RUN_STATS="$proxy_stats" "$binary" run claude -- -p --output-format json --no-session-persistence --permission-mode bypassPermissions --disallowed-tools Agent -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
     codex:baseline)
-      (cd "$worktree" && codex exec --json --ephemeral -s workspace-write -m "$CODEX_MODEL" "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
+      (cd "$worktree" && codex exec --json --ephemeral -s workspace-write --model "$CODEX_MODEL" -c 'model_reasoning_effort="low"' "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
     codex:jev)
-      (cd "$worktree" && JEV_RUN_STATS="$proxy_stats" "$binary" run codex -- exec --json --ephemeral -s workspace-write -m "$CODEX_MODEL" "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
+      (cd "$worktree" && JEV_REASONING=preserve JEV_RUN_STATS="$proxy_stats" "$binary" run codex -- exec --json --ephemeral -s workspace-write --model "$CODEX_MODEL" -c 'model_reasoning_effort="low"' "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
     grok:baseline)
       (cd "$worktree" && grok --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
     grok:jev)
@@ -89,32 +94,21 @@ run_one() {
     [[ -f "$proxy_stats" ]] && proxy_chars_after=$(jq -r '.charsAfter // 0' "$proxy_stats")
     [[ -f "$proxy_stats" ]] && proxy_rewritten=$(jq -r '.rewritten // 0' "$proxy_stats")
   fi
-  python3 - "$host" "$mode" "$raw" "$result" "$started" "$ended" "$exit_code" "$proxy_requests" "$proxy_chars_before" "$proxy_chars_after" "$proxy_rewritten" "$commit" <<'PY'
+  PYTHONPATH="$root/scripts" python3 - "$host" "$mode" "$raw" "$result" "$started" "$ended" "$exit_code" "$proxy_requests" "$proxy_chars_before" "$proxy_chars_after" "$proxy_rewritten" "$commit" "$worktree" "$proxy_stats" "$case_dir/expected.json" "$CODEX_MODEL" <<'PY'
 import json, pathlib, sys
-host, mode, raw_path, result_path, started, ended, exit_code, valid, chars_before, chars_after, rewritten, commit = sys.argv[1:]
+from summarize_x_cell import extract_cli_payload, live_quality
+host, mode, raw_path, result_path, started, ended, exit_code, valid, chars_before, chars_after, rewritten, commit, worktree, proxy_path, expected_path, codex_model = sys.argv[1:]
 raw = pathlib.Path(raw_path).read_text(errors="replace")
-data = {}
-try:
-    if host == "codex":
-        for line in raw.splitlines():
-            event = json.loads(line)
-            if event.get("type") == "turn.completed": data = event
-        usage = data.get("usage", {})
-        result = "".join(x.get("item", {}).get("text", "") for x in map(json.loads, raw.splitlines()) if x.get("type") == "item.completed")
-    else:
-        data = json.loads(raw)
-        usage = data.get("usage", {})
-        result = data.get("result", data.get("text", ""))
-        if host == "devin" and not result:
-            result = raw
-except (json.JSONDecodeError, ValueError):
-    usage, result = {}, raw if host == "devin" else ""
+data, result = extract_cli_payload(host, raw)
+usage = data.get("usage", {})
 def n(*keys):
     for key in keys:
         if key in usage: return usage[key]
     return None
 out = {
     "host": host, "mode": mode, "commit": commit, "exit_code": int(exit_code),
+    "model": codex_model if host == "codex" else data.get("model"),
+    "effort": "low" if host == "codex" else None,
     "wall_ms": round((int(ended)-int(started))/1_000_000, 3),
     "proxy_requests": int(valid) if mode == "jev" else None,
     "proxy_observed": bool(int(valid)) if mode == "jev" else None,
@@ -127,6 +121,9 @@ out = {
     "duration_api_ms": data.get("duration_api_ms", data.get("durationApiMs")),
     "num_turns": data.get("num_turns", data.get("numTurns")),
 }
+out["quality"] = live_quality(out, result, pathlib.Path(worktree), json.loads(pathlib.Path(expected_path).read_text()))
+out["proxy_stats"] = json.loads(pathlib.Path(proxy_path).read_text()) if pathlib.Path(proxy_path).exists() else {}
+out["routing_reasoning"] = out["proxy_stats"].get("reasoning") if mode == "jev" else None
 pathlib.Path(result_path).write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n")
 PY
   git worktree remove --force "$worktree" >/dev/null
@@ -134,11 +131,18 @@ PY
 
 summarize() {
   local host=$1 baseline="$out_dir/$host/baseline/result.json" jev="$out_dir/$host/jev/result.json"
-  jq -n --slurpfile baseline "$baseline" --slurpfile jev "$jev" '
+  local acceptance
+  acceptance=$(PYTHONPATH="$root/scripts" python3 - "$baseline" "$jev" <<'PY'
+import json, pathlib, sys
+from summarize_x_cell import live_acceptance
+print(json.dumps(live_acceptance(*(json.loads(pathlib.Path(p).read_text()) for p in sys.argv[1:]))))
+PY
+)
+  jq -n --slurpfile baseline "$baseline" --slurpfile jev "$jev" --argjson acceptance "$acceptance" '
     def delta($field): ($baseline[0][$field] - $jev[0][$field]);
     def pct($field): if $baseline[0][$field] == 0 then null else (delta($field) / $baseline[0][$field] * 100) end;
     def safe_delta($field): if ($baseline[0][$field] == null or $jev[0][$field] == null) then null else delta($field) end;
-    ($jev[0].proxy_observed and (($jev[0].rewritten // 0) > 0) and $baseline[0].success_marker and $jev[0].success_marker) as $comparable |
+    $acceptance.valid as $comparable |
     {host: $baseline[0].host, baseline: $baseline[0], jev: $jev[0], valid: $comparable, comparable: $comparable,
      reduction: (if $comparable then {wall_ms: delta("wall_ms"), wall_percent: pct("wall_ms"),
        output_tokens: (($baseline[0].usage.output_tokens // 0) - ($jev[0].usage.output_tokens // 0)),
@@ -146,20 +150,20 @@ summarize() {
        cost_usd: safe_delta("total_cost_usd"),
        duration_api_ms: safe_delta("duration_api_ms")}
        else null end),
-     invalid_reason: (if $comparable then null
-       elif ($jev[0].proxy_requests // 0) == 0 then "jev-routing を経由したリクエストが観測されませんでした"
-       elif (($jev[0].rewritten // 0) == 0) then "書換えが 0 件のため削減は比較不能（passthrough のみ）"
-       else "両条件で同じ完了条件を満たしていません" end)}
+     invalid_reason: (if $comparable then null else ($acceptance.failures | join(", ")) end)}
   ' >"$out_dir/$host/comparison.json"
   jq -r 'if .comparable then "\(.host): コスト差分=\(.reduction.cost_usd // "N/A")USD API時間差分=\(.reduction.duration_api_ms // "N/A")ms 書換えリクエスト削減=\(.reduction.routing_request_chars)文字 出力トークン差分=\(.reduction.output_tokens) 実行時間差分=\(.reduction.wall_ms)ms (num_turns: baseline=\(.baseline.num_turns // "N/A") jev=\(.jev.num_turns // "N/A"))" else "\(.host): 比較不能 — \(.invalid_reason)" end' "$out_dir/$host/comparison.json"
+  jq -e '.valid == true' "$out_dir/$host/comparison.json" >/dev/null
 }
 
+failed=0
 for host in "${hosts[@]}"; do
   case "$host" in claude|codex|grok|cursor|devin) ;; *) echo "対象は claude, codex, grok, cursor, devin です: $host" >&2; exit 2;; esac
   bin=$host; [[ $host == cursor ]] && bin=cursor-agent
   command -v "$bin" >/dev/null || { echo "$bin が PATH にありません" >&2; exit 2; }
   run_one "$host" baseline
   run_one "$host" jev
-  summarize "$host"
+  summarize "$host" || failed=1
 done
 echo "結果: $out_dir"
+exit "$failed"
