@@ -30,6 +30,11 @@ type Event struct {
 	CompactDropped int              `json:"compactDropped"`
 	CompactApplied bool             `json:"compactApplied"`
 	RequestPath    string           `json:"requestPath,omitempty"`
+	Method         string           `json:"method,omitempty"`
+	ContentType    string           `json:"contentType,omitempty"`
+	BodyBytes      int              `json:"bodyBytes,omitempty"`
+	JsonValid      *bool            `json:"jsonValid,omitempty"`
+	URLHosts       []string         `json:"urlHosts,omitempty"`
 	Catalog        *CatalogShape    `json:"catalog,omitempty"`
 	JevAttempts    []JevAttempt     `json:"jevAttempts,omitempty"`
 	JevCalls       int              `json:"jevCalls"`
@@ -44,6 +49,7 @@ type Event struct {
 	UsageMissing   string           `json:"usageMissing,omitempty"`
 	Canceled       bool             `json:"canceled,omitempty"`
 	Protocol       string           `json:"protocol,omitempty"`
+	ConnectFrames  int              `json:"connectFrames,omitempty"`
 }
 
 type JevAttempt struct {
@@ -100,6 +106,8 @@ func (l *EventLog) Add(e Event) Event {
 	e.Apply = clipEvent(e.Apply)
 	e.OriginalModel = clipEvent(e.OriginalModel)
 	e.SentModel = clipEvent(e.SentModel)
+	e.Method = clipEvent(e.Method)
+	e.ContentType = clipEvent(e.ContentType)
 	if len(l.items) >= eventLimit {
 		l.items = l.items[1:]
 	}

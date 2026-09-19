@@ -128,10 +128,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 
 	toolSpecs := plan.SpecsFrom(asMaps(filterable))
-	msgs := asSlice(root["messages"])
-	if msgs == nil {
-		msgs = asSlice(root["input"])
-	}
+	msgs, _ := locateHistory(root)
 	items, user := itemsFromMessages(msgs)
 	if user == "" {
 		user = fallbackUser(root)
@@ -162,17 +159,12 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	// an uncertain or unnecessary next tool does not invalidate stale history.
 	work := cloneMap(root)
 	if compactOK {
-		workMsgs := asSlice(work["messages"])
-		key := "messages"
-		if workMsgs == nil {
-			workMsgs = asSlice(work["input"])
-			key = "input"
-		}
+		workMsgs, writeHist := locateHistory(work)
 		before, _ := json.Marshal(workMsgs)
 		beforeItems, _ := itemsFromMessages(workMsgs)
 		workMsgs = applyCompactToMessages(workMsgs, compaction)
 		if workMsgs != nil {
-			work[key] = workMsgs
+			writeHist(workMsgs)
 		}
 		after, _ := json.Marshal(workMsgs)
 		stats.CharsBefore = len(before)
@@ -264,6 +256,9 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 
 	kept := filterTools(tools, decision.Tool, toolReferences(msgs))
+	if plan.SequentialLocate(user) {
+		kept = keepLocatePair(tools, kept)
+	}
 	if len(kept) == 0 {
 		stats.Chosen = "passthrough:" + decision.Tool
 		stats.Reason = "missing_tool"
@@ -889,21 +884,41 @@ func cursorToolDefs(root map[string]any) []any {
 }
 
 func setCursorTools(root map[string]any, tools []any) {
+	if setCursorToolsAt(root, tools) {
+		return
+	}
+	if action, ok := root["action"].(map[string]any); ok {
+		// Why: cursorToolDefs walks action; write the filtered catalog back
+		// there instead of inventing a sibling top-level mcpTools key.
+		if setCursorToolsAt(action, tools) {
+			return
+		}
+		if cursorToolDefs(action) != nil {
+			setCursorTools(action, tools)
+			return
+		}
+	}
+	root["mcpTools"] = map[string]any{"mcpTools": tools}
+}
+
+func setCursorToolsAt(root map[string]any, tools []any) bool {
 	for _, key := range []string{"mcpTools", "mcp_tools"} {
 		switch v := root[key].(type) {
 		case []any:
-			root[key] = tools
-			return
+			if len(v) > 0 {
+				root[key] = tools
+				return true
+			}
 		case map[string]any:
 			for _, inner := range []string{"mcpTools", "mcp_tools", "tools"} {
-				if _, ok := v[inner]; ok {
+				if t := asSlice(v[inner]); len(t) > 0 {
 					v[inner] = tools
-					return
+					return true
 				}
 			}
 		}
 	}
-	root["mcpTools"] = map[string]any{"mcpTools": tools}
+	return false
 }
 
 func looksCursorAgent(root map[string]any) bool {
@@ -967,7 +982,127 @@ func userFromAction(action map[string]any) string {
 			}
 		}
 	}
-	return firstString(action, "prompt", "text", "content")
+	if s := firstString(action, "prompt", "text", "content"); s != "" {
+		return s
+	}
+	// Why: Cursor AgentRunRequest nests the latest user turn under userMessageAction.
+	for _, k := range []string{"userMessageAction", "user_message_action"} {
+		if inner, ok := action[k].(map[string]any); ok {
+			if s := userFromAction(inner); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+type historySlot struct {
+	prefix string
+	msgs   []any
+	write  func([]any)
+}
+
+// Why: Cursor AgentRunRequest keeps chat history in conversationState
+// (JSON strings) or nested action fields, not only top-level messages/input.
+func locateHistory(root map[string]any) ([]any, func([]any)) {
+	if slots := historySlots(root); len(slots) > 0 {
+		return slots[0].msgs, slots[0].write
+	}
+	return nil, func([]any) {}
+}
+
+func historySlots(root map[string]any) []historySlot {
+	var slots []historySlot
+	addSlice := func(holder map[string]any, key, prefix string) {
+		if holder == nil {
+			return
+		}
+		raw := asSlice(holder[key])
+		if len(raw) == 0 {
+			return
+		}
+		h, k := holder, key
+		slots = append(slots, historySlot{
+			prefix: prefix,
+			msgs:   raw,
+			write:  func(compacted []any) { h[k] = compacted },
+		})
+	}
+	addSlice(root, "messages", "messages")
+	addSlice(root, "input", "input")
+	for _, stateKey := range []string{"conversationState", "conversation_state"} {
+		state, ok := root[stateKey].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, msgKey := range []string{"rootPromptMessagesJson", "root_prompt_messages_json"} {
+			raw := asSlice(state[msgKey])
+			if len(raw) == 0 {
+				continue
+			}
+			msgs, asString := parsePromptMessages(raw)
+			if len(msgs) == 0 {
+				continue
+			}
+			st, mk, stringify := state, msgKey, asString
+			slots = append(slots, historySlot{
+				prefix: stateKey + "." + msgKey,
+				msgs:   msgs,
+				write: func(compacted []any) {
+					st[mk] = encodePromptMessages(compacted, stringify)
+				},
+			})
+		}
+	}
+	if action, ok := root["action"].(map[string]any); ok {
+		for _, key := range []string{"messages", "history", "conversationHistory", "conversation_history"} {
+			addSlice(action, key, "action."+key)
+		}
+		for _, umaKey := range []string{"userMessageAction", "user_message_action"} {
+			uma, ok := action[umaKey].(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, key := range []string{"conversationHistory", "conversation_history"} {
+				addSlice(uma, key, "action."+umaKey+"."+key)
+			}
+		}
+	}
+	return slots
+}
+
+func parsePromptMessages(raw []any) ([]any, bool) {
+	var msgs []any
+	asString := false
+	for _, el := range raw {
+		switch v := el.(type) {
+		case string:
+			asString = true
+			var obj map[string]any
+			if json.Unmarshal([]byte(v), &obj) != nil || obj == nil {
+				continue
+			}
+			msgs = append(msgs, obj)
+		case map[string]any:
+			msgs = append(msgs, v)
+		}
+	}
+	return msgs, asString
+}
+
+func encodePromptMessages(msgs []any, asString bool) []any {
+	if !asString {
+		return msgs
+	}
+	out := make([]any, 0, len(msgs))
+	for _, m := range msgs {
+		b, err := json.Marshal(m)
+		if err != nil {
+			continue
+		}
+		out = append(out, string(b))
+	}
+	return out
 }
 
 func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan.Action, specs []plan.Spec) (plan.Decision, string, error) {
@@ -1048,6 +1183,41 @@ func filterTools(tools []any, name string, referenced map[string]bool) []any {
 		return tools[:0]
 	}
 	return append(kept, sticky...)
+}
+
+func locatePairName(n string) bool {
+	switch strings.ToLower(n) {
+	case "grep", "grep_files", "read", "read_file":
+		return true
+	default:
+		return false
+	}
+}
+
+func keepLocatePair(tools, kept []any) []any {
+	have := map[string]bool{}
+	for _, t := range kept {
+		m, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		if n := toolNameOf(m); n != "" {
+			have[n] = true
+		}
+	}
+	for _, t := range tools {
+		m, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		n := toolNameOf(m)
+		if !locatePairName(n) || have[n] {
+			continue
+		}
+		kept = append(kept, t)
+		have[n] = true
+	}
+	return kept
 }
 
 func toolNameOf(m map[string]any) string {
@@ -1170,7 +1340,7 @@ func itemsFromMessages(msgs []any) ([]compact.Item, string) {
 		case role == "user":
 			text := textOf(m)
 			if request := plan.WorkRequest(text); strings.TrimSpace(request) != "" {
-				user = request
+				user = plan.PreferTaskText(user, request)
 			}
 			items = append(items, compact.Item{ID: id(), Kind: compact.KindText, Chars: len(text), Preview: clip(text, 200), Body: text})
 			for _, tr := range toolResults(m) {

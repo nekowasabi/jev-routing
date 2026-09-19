@@ -18,13 +18,28 @@ func TestChildArgs(t *testing.T) {
 	if got := ChildArgs(Codex, listen); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ChildArgs(Codex) = %#v, want %#v", got, want)
 	}
-	if got := ChildArgs(Cursor, listen); !reflect.DeepEqual(got, []string{"--endpoint", "http://" + listen}) {
+	if got := ChildArgs(Cursor, listen); !reflect.DeepEqual(got, []string{"--endpoint", "http://localhost:45678"}) {
 		t.Fatalf("ChildArgs(Cursor) = %#v", got)
 	}
 	for _, h := range []ID{Claude, Grok, Devin} {
 		if got := ChildArgs(h, listen); got != nil {
 			t.Fatalf("ChildArgs(%s) = %#v, want nil", h, got)
 		}
+	}
+}
+
+func TestAdvertise(t *testing.T) {
+	if got := Advertise(Cursor, "127.0.0.1:8787"); got != "localhost:8787" {
+		t.Fatalf("Advertise(Cursor, 127.0.0.1) = %q", got)
+	}
+	if got := Advertise(Cursor, "[::1]:8787"); got != "localhost:8787" {
+		t.Fatalf("Advertise(Cursor, [::1]) = %q", got)
+	}
+	if got := Advertise(Cursor, "example.com:443"); got != "example.com:443" {
+		t.Fatalf("Advertise other host = %q", got)
+	}
+	if got := Advertise(Claude, "127.0.0.1:8787"); got != "127.0.0.1:8787" {
+		t.Fatalf("Advertise(Claude) = %q", got)
 	}
 }
 
@@ -148,10 +163,10 @@ func TestBinaryLabel(t *testing.T) {
 func TestChildEnvCursorDevin(t *testing.T) {
 	listen := "127.0.0.1:8787"
 	env := ChildEnv(Cursor, listen)
-	if !containsKV(env, "CURSOR_API_ENDPOINT=http://127.0.0.1:8787") {
+	if !containsKV(env, "CURSOR_API_ENDPOINT=http://localhost:8787") {
 		t.Fatalf("cursor env missing endpoint: %v", env)
 	}
-	if !containsKV(env, "CURSOR_API_BASE_URL=http://127.0.0.1:8787") {
+	if !containsKV(env, "CURSOR_API_BASE_URL=http://localhost:8787") {
 		t.Fatalf("cursor env missing base url: %v", env)
 	}
 	if containsKVPrefix(env, "OPENAI_BASE_URL=") {
@@ -160,6 +175,9 @@ func TestChildEnvCursorDevin(t *testing.T) {
 	env = ChildEnv(Devin, listen)
 	if !containsKV(env, "DEVIN_API_URL=http://127.0.0.1:8787") {
 		t.Fatalf("devin env missing url: %v", env)
+	}
+	if !containsKV(env, "WINDSURF_API_SERVER_URL=http://127.0.0.1:8787") {
+		t.Fatalf("devin env missing windsurf url: %v", env)
 	}
 }
 

@@ -36,19 +36,43 @@ type Server struct {
 	listenPort  string
 	saveErr     error
 
-	Reached           int
-	Rewritten         int
-	Passthrough       int
-	JevHTTP           int
-	JevOK             int
-	JevFail           int
-	JevCacheHits      int
-	TotalRequests     int
-	SelectionApplied  int
-	CompactionApplied int
-	SelectionSources  map[string]int
-	ApplicationModes  map[string]int
-	RequestRoutes     map[string]int
+	Reached             int
+	Rewritten           int
+	Passthrough         int
+	JevHTTP             int
+	JevOK               int
+	JevFail             int
+	JevCacheHits        int
+	TotalRequests       int
+	SelectionApplied    int
+	CompactionApplied   int
+	SelectionSources    map[string]int
+	ApplicationModes    map[string]int
+	RequestRoutes       map[string]int
+	RequestContentTypes map[string]int
+
+	cursorAgentHost string
+	cursorTask      string
+}
+
+func (s *Server) setCursorTask(task string) {
+	if s == nil || strings.TrimSpace(task) == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.cursorTask == "" {
+		s.cursorTask = task
+	}
+	s.mu.Unlock()
+}
+
+func (s *Server) cursorTaskCopy() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cursorTask
 }
 
 func (s *Server) RequestCount() int {
@@ -69,36 +93,37 @@ func (s *Server) StatsSnapshot() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return map[string]any{
-		"host":              s.Last.Host,
-		"toolBefore":        s.Last.ToolBefore,
-		"toolAfter":         s.Last.ToolAfter,
-		"chosen":            s.Last.Chosen,
-		"done":              s.Last.Done,
-		"gated":             s.Last.Gated,
-		"charsBefore":       s.CharsBefore,
-		"charsAfter":        s.CharsAfter,
-		"compactDropped":    s.Last.CompactDropped,
-		"engine":            s.Last.Engine,
-		"requests":          s.Requests,
-		"instanceId":        s.events.InstanceID,
-		"startedAt":         s.events.StartedAt,
-		"mode":              s.Options.Mode,
-		"compaction":        s.Options.Compaction,
-		"reasoning":         s.Options.Reasoning,
-		"runId":             s.Options.RunID,
-		"reached":           s.Reached,
-		"rewritten":         s.Rewritten,
-		"passthrough":       s.Passthrough,
-		"jevHTTP":           s.JevHTTP,
-		"jevOK":             s.JevOK,
-		"jevFail":           s.JevFail,
-		"jevCacheHits":      s.JevCacheHits,
-		"totalRequests":     s.TotalRequests,
-		"selectionApplied":  s.SelectionApplied,
-		"compactionApplied": s.CompactionApplied,
-		"selectionSources":  copyCounts(s.SelectionSources),
-		"applicationModes":  copyCounts(s.ApplicationModes),
-		"requestRoutes":     copyCounts(s.RequestRoutes),
+		"host":                s.Last.Host,
+		"toolBefore":          s.Last.ToolBefore,
+		"toolAfter":           s.Last.ToolAfter,
+		"chosen":              s.Last.Chosen,
+		"done":                s.Last.Done,
+		"gated":               s.Last.Gated,
+		"charsBefore":         s.CharsBefore,
+		"charsAfter":          s.CharsAfter,
+		"compactDropped":      s.Last.CompactDropped,
+		"engine":              s.Last.Engine,
+		"requests":            s.Requests,
+		"instanceId":          s.events.InstanceID,
+		"startedAt":           s.events.StartedAt,
+		"mode":                s.Options.Mode,
+		"compaction":          s.Options.Compaction,
+		"reasoning":           s.Options.Reasoning,
+		"runId":               s.Options.RunID,
+		"reached":             s.Reached,
+		"rewritten":           s.Rewritten,
+		"passthrough":         s.Passthrough,
+		"jevHTTP":             s.JevHTTP,
+		"jevOK":               s.JevOK,
+		"jevFail":             s.JevFail,
+		"jevCacheHits":        s.JevCacheHits,
+		"totalRequests":       s.TotalRequests,
+		"selectionApplied":    s.SelectionApplied,
+		"compactionApplied":   s.CompactionApplied,
+		"selectionSources":    copyCounts(s.SelectionSources),
+		"applicationModes":    copyCounts(s.ApplicationModes),
+		"requestRoutes":       copyCounts(s.RequestRoutes),
+		"requestContentTypes": copyCounts(s.RequestContentTypes),
 	}
 }
 
@@ -107,30 +132,31 @@ func (s *Server) RunStats() map[string]any {
 	events, _, _, truncated := s.events.Snapshot(0)
 	// Compatible keys first.
 	return map[string]any{
-		"requests":          snap["requests"],
-		"charsBefore":       snap["charsBefore"],
-		"charsAfter":        snap["charsAfter"],
-		"instanceId":        snap["instanceId"],
-		"mode":              snap["mode"],
-		"compaction":        snap["compaction"],
-		"reasoning":         snap["reasoning"],
-		"runId":             snap["runId"],
-		"reached":           snap["reached"],
-		"rewritten":         snap["rewritten"],
-		"passthrough":       snap["passthrough"],
-		"jevHTTP":           snap["jevHTTP"],
-		"jevOK":             snap["jevOK"],
-		"jevFail":           snap["jevFail"],
-		"jevCacheHits":      snap["jevCacheHits"],
-		"scope":             "single-process",
-		"totalRequests":     snap["totalRequests"],
-		"selectionApplied":  snap["selectionApplied"],
-		"compactionApplied": snap["compactionApplied"],
-		"selectionSources":  snap["selectionSources"],
-		"applicationModes":  snap["applicationModes"],
-		"requestRoutes":     snap["requestRoutes"],
-		"events":            events,
-		"eventsTruncated":   truncated || snap["requests"].(int) > len(events),
+		"requests":            snap["requests"],
+		"charsBefore":         snap["charsBefore"],
+		"charsAfter":          snap["charsAfter"],
+		"instanceId":          snap["instanceId"],
+		"mode":                snap["mode"],
+		"compaction":          snap["compaction"],
+		"reasoning":           snap["reasoning"],
+		"runId":               snap["runId"],
+		"reached":             snap["reached"],
+		"rewritten":           snap["rewritten"],
+		"passthrough":         snap["passthrough"],
+		"jevHTTP":             snap["jevHTTP"],
+		"jevOK":               snap["jevOK"],
+		"jevFail":             snap["jevFail"],
+		"jevCacheHits":        snap["jevCacheHits"],
+		"scope":               "single-process",
+		"totalRequests":       snap["totalRequests"],
+		"selectionApplied":    snap["selectionApplied"],
+		"compactionApplied":   snap["compactionApplied"],
+		"selectionSources":    snap["selectionSources"],
+		"applicationModes":    snap["applicationModes"],
+		"requestRoutes":       snap["requestRoutes"],
+		"requestContentTypes": snap["requestContentTypes"],
+		"events":              events,
+		"eventsTruncated":     truncated || snap["requests"].(int) > len(events),
 	}
 }
 
@@ -163,7 +189,7 @@ func DefaultUpstream(h host.ID) string {
 		if u := os.Getenv("DEVIN_UPSTREAM"); u != "" {
 			return u
 		}
-		return "https://api.devin.ai"
+		return "https://server.codeium.com"
 	default:
 		if u := os.Getenv("GROK_OAUTH_UPSTREAM"); u != "" {
 			return u
@@ -224,8 +250,12 @@ func (s *Server) Handler() http.Handler {
 			r.URL.RawPath = strings.TrimPrefix(r.URL.RawPath, "/v1")
 		}
 		orig(r)
-		r.Host = s.Upstream.Host
-		r.Header.Set("host", s.Upstream.Host)
+		if s.rewriteStreamingAgentURL(r) {
+			r.Header.Set("host", r.Host)
+		} else {
+			r.Host = s.Upstream.Host
+			r.Header.Set("host", s.Upstream.Host)
+		}
 		r.Header.Del("Accept-Encoding")
 	}
 	proxy.ModifyResponse = func(res *http.Response) error {
@@ -237,7 +267,19 @@ func (s *Server) Handler() http.Handler {
 			e.UpstreamStatus = &status
 			e.HeaderMs = &headerMs
 		})
-		res.Body = wrapUsage(res.Body, res.Header.Get("content-type"), func(u *NormalizedUsage, partial bool, missing string) {
+		ct := res.Header.Get("content-type")
+		if strings.Contains(strings.ToLower(ct), "proto") {
+			res.Body = wrapProtoHosts(res.Body, func(hosts []string) {
+				if len(hosts) == 0 {
+					return
+				}
+				s.rememberCursorAgentHost(hosts)
+				s.events.Update(seq, func(e *Event) {
+					e.URLHosts = mergeHosts(e.URLHosts, hosts)
+				})
+			})
+		}
+		res.Body = wrapUsage(res.Body, ct, func(u *NormalizedUsage, partial bool, missing string) {
 			bodyMs := time.Since(started).Seconds() * 1000
 			s.events.Update(seq, func(e *Event) {
 				e.Usage = u
@@ -275,14 +317,61 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.RequestRoutes[r.Method+" "+r.URL.Path]++
 		s.mu.Unlock()
-		if r.Method == http.MethodPost && looksLikeLLM(r.URL.Path) {
+		if r.Method == http.MethodPost && (looksStreamingAgent(r.URL.Path) || looksDevinInference(r.URL.Path)) {
+			ct := clipEvent(r.Header.Get("Content-Type"))
 			s.mu.Lock()
 			s.Requests++
 			s.Reached++
+			s.Passthrough++
+			if s.RequestContentTypes == nil {
+				s.RequestContentTypes = map[string]int{}
+			}
+			s.RequestContentTypes[r.Method+" "+r.URL.Path+" "+ct]++
+			s.mu.Unlock()
+			bodyBytes := 0
+			if r.ContentLength > 0 {
+				bodyBytes = int(r.ContentLength)
+			}
+			ev := s.events.Add(Event{
+				Host:        string(s.Host),
+				Reason:      reasonStream,
+				RequestPath: r.URL.Path,
+				Method:      r.Method,
+				ContentType: ct,
+				BodyBytes:   bodyBytes,
+			})
+			ctx := context.WithValue(r.Context(), eventSeqKey{}, ev.Seq)
+			ctx = context.WithValue(ctx, reqStartKey{}, time.Now())
+			r = r.WithContext(ctx)
+			if looksStreamingAgent(r.URL.Path) && s.Host == host.Cursor && connectCursorContentType(ct) {
+				r.Body = wrapConnectCursorBody(r.Body, s, ev.Seq, r.Context())
+				r.ContentLength = -1
+				r.Header.Del("Content-Length")
+			} else if looksDevinInference(r.URL.Path) && connectCursorContentType(ct) {
+				r.Body = wrapConnectDevinBody(r.Body, s, ev.Seq, r.Context())
+				r.ContentLength = -1
+				r.Header.Del("Content-Length")
+			}
+		} else if r.Method == http.MethodPost && looksLikeLLM(r.URL.Path) {
+			ct := clipEvent(r.Header.Get("Content-Type"))
+			s.mu.Lock()
+			s.Requests++
+			s.Reached++
+			if s.RequestContentTypes == nil {
+				s.RequestContentTypes = map[string]int{}
+			}
+			s.RequestContentTypes[r.Method+" "+r.URL.Path+" "+ct]++
 			s.mu.Unlock()
 			raw, err := io.ReadAll(r.Body)
 			_ = r.Body.Close()
+			origBytes := len(raw)
+			origJSON := json.Valid(raw)
 			shape := catalogShape(raw)
+			var urlHosts []string
+			if !origJSON {
+				urlHosts = protoURLHosts(raw)
+				s.rememberCursorAgentHost(urlHosts)
+			}
 			var attemptsMu sync.Mutex
 			var attempts []JevAttempt
 			var jevHTTP, jevOK, jevFail, jevCache int
@@ -368,6 +457,11 @@ func (s *Server) Handler() http.Handler {
 				CompactDropped: stats.CompactDropped,
 				CompactApplied: stats.CompactApplied,
 				RequestPath:    r.URL.Path,
+				Method:         r.Method,
+				ContentType:    ct,
+				BodyBytes:      origBytes,
+				JsonValid:      &origJSON,
+				URLHosts:       urlHosts,
 				Catalog:        shape,
 				JevAttempts:    attempts,
 				JevCalls:       jevHTTP,
@@ -399,6 +493,31 @@ func (s *Server) Handler() http.Handler {
 			r.Body = io.NopCloser(bytes.NewReader(raw))
 			r.ContentLength = int64(len(raw))
 			r.Header.Set("Content-Length", itoa(len(raw)))
+		} else if r.Method == http.MethodPost {
+			// Why: Control RPCs share the POST surface; record path/type only,
+			// without buffering or rewriting bodies that are not model inference.
+			ct := clipEvent(r.Header.Get("Content-Type"))
+			s.mu.Lock()
+			if s.RequestContentTypes == nil {
+				s.RequestContentTypes = map[string]int{}
+			}
+			s.RequestContentTypes[r.Method+" "+r.URL.Path+" "+ct]++
+			s.mu.Unlock()
+			bodyBytes := 0
+			if r.ContentLength > 0 {
+				bodyBytes = int(r.ContentLength)
+			}
+			ev := s.events.Add(Event{
+				Host:        string(s.Host),
+				Reason:      reasonNotLLMPath,
+				RequestPath: r.URL.Path,
+				Method:      r.Method,
+				ContentType: ct,
+				BodyBytes:   bodyBytes,
+			})
+			ctx := context.WithValue(r.Context(), eventSeqKey{}, ev.Seq)
+			ctx = context.WithValue(ctx, reqStartKey{}, time.Now())
+			r = r.WithContext(ctx)
 		}
 		proxy.ServeHTTP(w, r)
 	})
@@ -423,6 +542,49 @@ func (s *Server) writeDirect(w http.ResponseWriter, r *http.Request, stats Rewri
 
 func wantsSSE(r *http.Request) bool {
 	return strings.Contains(strings.ToLower(r.Header.Get("accept")), "text/event-stream")
+}
+
+const reasonNotLLMPath = "not_llm_path"
+const reasonStream = "stream"
+
+func (s *Server) rememberCursorAgentHost(hosts []string) {
+	for _, h := range hosts {
+		if !cursorAgentHost(h) {
+			continue
+		}
+		s.mu.Lock()
+		s.cursorAgentHost = h
+		s.mu.Unlock()
+		return
+	}
+}
+
+func (s *Server) rewriteStreamingAgentURL(r *http.Request) bool {
+	if s.Host != host.Cursor || !looksStreamingAgent(r.URL.Path) {
+		return false
+	}
+	s.mu.Lock()
+	h := s.cursorAgentHost
+	s.mu.Unlock()
+	if h == "" {
+		return false
+	}
+	r.URL.Scheme = "https"
+	r.URL.Host = h
+	r.Host = h
+	return true
+}
+
+func looksStreamingAgent(path string) bool {
+	p := strings.ToLower(path)
+	return strings.Contains(p, "/agent.v1.agentservice/run") ||
+		strings.Contains(p, "/bidiservice/") ||
+		strings.Contains(p, "bidiappend")
+}
+
+func looksDevinInference(path string) bool {
+	return strings.HasSuffix(path, "/exa.api_server_pb.ApiServerService/GetChatMessage") ||
+		strings.HasSuffix(path, "/exa.api_server_pb.ApiServerService/GetDevstralStream")
 }
 
 func looksLikeLLM(path string) bool {

@@ -2,9 +2,12 @@ package proxy
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/compact"
+	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/plan"
 )
 
 func TestUserRequestSkipsReminderOnlyTurns(t *testing.T) {
@@ -40,5 +43,38 @@ func TestUserRequestSkipsReminderOnlyTurns(t *testing.T) {
 	_, user = itemsFromMessages(msgs)
 	if user != "別の定義を検索してください" {
 		t.Fatalf("latest real request ignored: %q", user)
+	}
+}
+
+func TestItemsFromMessagesKeepsXCellAskOverCheckout(t *testing.T) {
+	ask := "ファイルを変更せず、RewriteWith、extractTools、applyCompactToMessages、DefaultOptions、DefaultUpstream の定義を調べてください。各関数について個別のツール呼び出しで定義を検索し、別のツール呼び出しで本文を読んで確認してください（合計10回以上、並列化せず順に実行）。最終回答は関数名をキー、リポジトリ相対パス:定義行番号を値にしたJSONオブジェクトだけにしてください。説明文や完了マーカーは不要です。"
+	checkout := "checkout the workspace and continue"
+	specs := []plan.Spec{
+		{Name: "read", Desc: "Read a file from the workspace."},
+		{Name: "grep", Desc: "Search file contents."},
+		{Name: "edit", Desc: "Edit a file."},
+		{Name: "run_subagent", Desc: "Launch a subagent that can read files, search the codebase, and handle complex multi-step tasks autonomously. Use this to explore thoroughly or delegate."},
+		{Name: "exec", Desc: "Run a shell command."},
+	}
+	_, user := itemsFromMessages([]any{
+		map[string]any{"role": "user", "content": ask},
+		map[string]any{"role": "user", "content": checkout},
+	})
+	if !strings.Contains(user, "定義を調べ") {
+		t.Fatalf("checkout stole sequentialLocate ask: %q", user)
+	}
+	d := plan.DecideSpecs(user, nil, specs, host.Devin)
+	if d.Tool == "exec" || d.Tool == "run_subagent" || d.Passthrough {
+		t.Fatalf("DecideSpecs on kept ask = %+v, want grep or read", d)
+	}
+	if d.Tool != "grep" && d.Tool != "read" {
+		t.Fatalf("want grep or read, got %+v", d)
+	}
+
+	_, only := itemsFromMessages([]any{
+		map[string]any{"role": "user", "content": checkout},
+	})
+	if strings.Contains(only, "定義を調べ") || strings.Contains(only, "ファイルを変更せず") {
+		t.Fatalf("checkout-only claimed x-cell ask: %q", only)
 	}
 }

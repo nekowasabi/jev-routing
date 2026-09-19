@@ -1096,6 +1096,44 @@ func TestDevinPromptToolsCatalogIsFilterable(t *testing.T) {
 	}
 }
 
+func TestRewriteXCellKeepsGrepAndRead(t *testing.T) {
+	const ask = "ファイルを変更せず、RewriteWith、extractTools、applyCompactToMessages、DefaultOptions、DefaultUpstream の定義を調べてください。各関数について個別のツール呼び出しで定義を検索し、別のツール呼び出しで本文を読んで確認してください（合計10回以上、並列化せず順に実行）。最終回答は関数名をキー、リポジトリ相対パス:定義行番号を値にしたJSONオブジェクトだけにしてください。説明文や完了マーカーは不要です。"
+	req := map[string]any{
+		"prompt": ask,
+		"tools": []any{
+			map[string]any{"name": "read", "description": "Read a file"},
+			map[string]any{"name": "grep", "description": "Search files"},
+			map[string]any{"name": "exec", "description": "Run a command"},
+			map[string]any{"name": "edit", "description": "Edit a file"},
+			map[string]any{"name": "run_subagent", "description": "Launch a subagent"},
+			map[string]any{"name": "web_search", "description": "Search the web"},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := RewriteWith(t.Context(), raw, host.Devin, nil, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ToolBefore != 6 || (stats.ToolAfter != 2 && stats.ToolAfter != 1) {
+		t.Fatalf("want 6→2 locate pair, got %+v", stats)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, t := range asSlice(got["tools"]) {
+		m, _ := t.(map[string]any)
+		names[toolNameOf(m)] = true
+	}
+	if !names["grep"] || !names["read"] {
+		t.Fatalf("kept must include grep and read: %v stats=%+v", names, stats)
+	}
+	if names["run_subagent"] || names["exec"] || names["edit"] || names["web_search"] {
+		t.Fatalf("kept exec/edit/run_subagent/web_search: %v", names)
+	}
+}
+
 func TestCursorControlJSONWithoutToolsStaysNotChat(t *testing.T) {
 	req := map[string]any{"requestedModel": map[string]any{"model": "auto"}}
 	raw, _ := json.Marshal(req)
@@ -1105,6 +1143,145 @@ func TestCursorControlJSONWithoutToolsStaysNotChat(t *testing.T) {
 	}
 	if stats.Reason != reasonNotChat {
 		t.Fatalf("control frame reason=%s %+v", stats.Reason, stats)
+	}
+}
+
+func TestCursorActionMcpToolsWritebackStaysNested(t *testing.T) {
+	tools := []any{
+		map[string]any{"name": "Read", "description": "Read a file"},
+		map[string]any{"name": "Grep", "description": "Search file contents"},
+		map[string]any{"name": "Shell", "description": "Run a command"},
+		map[string]any{"name": "Write", "description": "Write a file"},
+	}
+	cases := []struct {
+		name string
+		mcp  any
+	}{
+		{name: "array", mcp: tools},
+		{name: "wrapper", mcp: map[string]any{"mcpTools": tools}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := map[string]any{
+				"conversationId": "conv-1",
+				"action": map[string]any{
+					"userMessage": map[string]any{"text": "The auth middleware test is failing. Find it, fix the assertion, and re-run the tests."},
+					"mcpTools":    tc.mcp,
+				},
+			}
+			raw, _ := json.Marshal(req)
+			out, stats, err := Rewrite(raw, host.Cursor, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !stats.Changed || stats.ToolAfter != 1 || stats.Chosen != "Grep" {
+				t.Fatalf("want Grep filter, got %+v", stats)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := got["mcpTools"]; ok {
+				t.Fatalf("invented top-level mcpTools: %v", got["mcpTools"])
+			}
+			defs := cursorToolDefs(got)
+			if len(defs) != 1 {
+				t.Fatalf("nested mcpTools after=%d", len(defs))
+			}
+			if toolNameOf(defs[0].(map[string]any)) != "Grep" {
+				t.Fatalf("kept %v", defs[0])
+			}
+			action, _ := got["action"].(map[string]any)
+			if action["mcpTools"] == nil {
+				t.Fatal("nested catalog missing")
+			}
+		})
+	}
+}
+
+func TestCursorAgentRunRequestJSONFiltersAndCompacts(t *testing.T) {
+	mustJSON := func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	hist := []any{
+		mustJSON(map[string]any{"role": "user", "content": "FIND_THIS_PROMPT locate the failing auth test"}),
+		mustJSON(map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "a", "name": "Read", "input": map[string]any{"path": "SECRET_ARG"}}}}),
+		mustJSON(map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "a", "content": strings.Repeat("SECRET_RESULT\n", 300)}}}),
+		mustJSON(map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "b", "name": "Read", "input": map[string]any{"path": "SECRET_ARG"}}}}),
+		mustJSON(map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "b", "content": strings.Repeat("SECRET_RESULT\n", 300)}}}),
+		mustJSON(map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "c", "name": "Edit", "input": map[string]any{"path": "SECRET_ARG"}}}}),
+		mustJSON(map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "c", "content": strings.Repeat("SECRET_RESULT\n", 300)}}}),
+		mustJSON(map[string]any{"role": "user", "content": "The auth middleware test is failing. Find it, fix the assertion, and re-run the tests."}),
+	}
+	req := map[string]any{
+		"conversationId": "conv-agent-1",
+		"agentSessionId": "sess-keep",
+		"harness":        map[string]any{"kind": "cursor"},
+		"conversationState": map[string]any{
+			"rootPromptMessagesJson": hist,
+		},
+		"mcpTools": map[string]any{
+			"mcpTools": []any{
+				map[string]any{"name": "Read", "description": "Read a file"},
+				map[string]any{"name": "Grep", "description": "Search file contents"},
+				map[string]any{"name": "Shell", "description": "Run a command"},
+				map[string]any{"name": "Write", "description": "Write a file"},
+			},
+		},
+		"action": map[string]any{
+			"userMessageAction": map[string]any{
+				"userMessage": map[string]any{"text": "The auth middleware test is failing. Find it, fix the assertion, and re-run the tests."},
+			},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := RewriteWith(t.Context(), raw, host.Cursor, nil, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Apply != applyFilter || !stats.Changed || stats.Chosen != "Grep" || stats.ToolAfter >= stats.ToolBefore {
+		t.Fatalf("want Grep filter, got %+v", stats)
+	}
+	if !stats.CompactApplied {
+		t.Fatalf("want compaction, got %+v", stats)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	wrap, ok := got["mcpTools"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcpTools moved off wrapper: %T", got["mcpTools"])
+	}
+	defs := asSlice(wrap["mcpTools"])
+	if len(defs) == 0 || len(defs) >= 4 {
+		t.Fatalf("wrapper tools after=%d", len(defs))
+	}
+	if action, _ := got["action"].(map[string]any); action["mcpTools"] != nil {
+		t.Fatal("catalog copied onto action")
+	}
+	state, _ := got["conversationState"].(map[string]any)
+	histOut := asSlice(state["rootPromptMessagesJson"])
+	if len(histOut) == 0 {
+		t.Fatal("history left rootPromptMessagesJson")
+	}
+	for _, el := range histOut {
+		if _, ok := el.(string); !ok {
+			t.Fatalf("history element not JSON string: %T", el)
+		}
+	}
+	if got["harness"] == nil || got["agentSessionId"] != "sess-keep" {
+		t.Fatalf("extra fields dropped: harness=%v session=%v", got["harness"], got["agentSessionId"])
+	}
+	encoded, _ := json.Marshal(stats)
+	for _, leak := range []string{"FIND_THIS_PROMPT", "SECRET_ARG", "SECRET_RESULT"} {
+		if strings.Contains(string(encoded), leak) {
+			t.Fatalf("stats leaked %s: %s", leak, encoded)
+		}
 	}
 }
 

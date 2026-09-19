@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -141,6 +142,22 @@ var toDevin = map[string]string{
 	"ExitPlanMode":    "exit_plan_mode",
 }
 
+func Advertise(h ID, listen string) string {
+	if h != Cursor {
+		return listen
+	}
+	// Why: Cursor treats only "localhost" as local; 127.0.0.1 is replaced by agentnUrl.
+	hostpart, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+	switch hostpart {
+	case "127.0.0.1", "::1":
+		return net.JoinHostPort("localhost", port)
+	}
+	return listen
+}
+
 func ChildEnv(h ID, listen string) []string {
 	env := os.Environ()
 	drop := map[string]bool{}
@@ -160,14 +177,16 @@ func ChildEnv(h ID, listen string) []string {
 	case Cursor:
 		// Why: Instead of OPENAI_BASE_URL, adopted CURSOR_API_ENDPOINT plus CURSOR_API_BASE_URL.
 		// Reason: cursor-agent --help documents CURSOR_API_ENDPOINT; index.js also reads CURSOR_API_BASE_URL.
-		u := "http://" + listen
+		u := "http://" + Advertise(h, listen)
 		add["CURSOR_API_ENDPOINT"] = u
 		add["CURSOR_API_BASE_URL"] = u
 		add["JEV_ROUTING_HOST"] = "cursor"
 	case Devin:
-		// Why: Instead of OPENAI_BASE_URL, adopted DEVIN_API_URL.
-		// Reason: Devin CLI documents it as the API base override for the logged-in account.
+		// Why: Instead of OPENAI_BASE_URL, adopted DEVIN_API_URL plus WINDSURF_API_SERVER_URL.
+		// Reason: Devin CLI documents DEVIN_API_URL as the API base override; live auth status
+		// sends SeatManagement to WINDSURF_API_SERVER_URL, not DEVIN_API_URL alone.
 		add["DEVIN_API_URL"] = "http://" + listen
+		add["WINDSURF_API_SERVER_URL"] = "http://" + listen
 		add["JEV_ROUTING_HOST"] = "devin"
 	}
 	out := make([]string, 0, len(env)+4)
@@ -190,7 +209,7 @@ func ChildEnv(h ID, listen string) []string {
 func ChildArgs(h ID, listen string) []string {
 	if h == Cursor {
 		// Why: Instead of env-only, adopted --endpoint flag. Reason: help documents it as the public override; env can be missed by subprocesses.
-		return []string{"--endpoint", "http://" + listen}
+		return []string{"--endpoint", "http://" + Advertise(h, listen)}
 	}
 	if h != Codex {
 		return nil

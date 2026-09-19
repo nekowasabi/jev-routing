@@ -44,6 +44,89 @@ func TestCatalogShapeHistoryTypesWithoutContent(t *testing.T) {
 	}
 }
 
+func TestCatalogShapeCursorNestedHistoryTypes(t *testing.T) {
+	msg, _ := json.Marshal(map[string]any{"role": "user", "content": "PRIVATE_PROMPT"})
+	body, _ := json.Marshal(map[string]any{
+		"conversationState": map[string]any{
+			"rootPromptMessagesJson": []any{string(msg)},
+		},
+		"mcpTools": map[string]any{"mcpTools": []any{map[string]any{"name": "Grep"}}},
+	})
+	shape := catalogShape(body)
+	if shape == nil || shape.HistoryTypes["conversationState.rootPromptMessagesJson.object"] != 1 {
+		t.Fatalf("history=%v", shape.HistoryTypes)
+	}
+	if shape.ContentTypes["string"] != 1 {
+		t.Fatalf("content=%v", shape.ContentTypes)
+	}
+	encoded, err := json.Marshal(shape)
+	if err != nil || bytes.Contains(encoded, []byte("PRIVATE_")) {
+		t.Fatalf("content leaked into shape: %s err=%v", encoded, err)
+	}
+}
+
+func TestCatalogShapeOpaquePromptStrings(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{
+		"conversationState": map[string]any{
+			"rootPromptMessagesJson": []any{
+				"",
+				`[{"role":"user","content":"PRIVATE_ARRAY"}]`,
+				`{"broken":`,
+				string([]byte{'x', 0x01, 'y'}),
+				"not-a-json-object",
+			},
+		},
+		"action":         map[string]any{"x": 1},
+		"conversationId": "c1",
+	})
+	shape := catalogShape(body)
+	want := map[string]int{
+		"opaque_empty":  1,
+		"opaque_array":  1,
+		"opaque_brace":  1,
+		"opaque_binary": 1,
+		"opaque_text":   1,
+	}
+	if shape == nil || !reflect.DeepEqual(shape.HistoryTypes, want) {
+		t.Fatalf("history=%v want %v", shape.HistoryTypes, want)
+	}
+	encoded, err := json.Marshal(shape)
+	if err != nil || bytes.Contains(encoded, []byte("PRIVATE_")) || bytes.Contains(encoded, []byte("not-a-json")) || bytes.Contains(encoded, []byte("broken")) {
+		t.Fatalf("content leaked into shape: %s err=%v", encoded, err)
+	}
+}
+
+func TestCatalogShapeOpaqueProtoFieldKeys(t *testing.T) {
+	opaque := append([]byte{0x08, 0x01}, protoString(10, "note")...)
+	body, _ := json.Marshal(map[string]any{
+		"conversationState": map[string]any{
+			"rootPromptMessagesJson": []any{string(opaque)},
+		},
+		"action":         map[string]any{"x": 1},
+		"conversationId": "c1",
+	})
+	shape := catalogShape(body)
+	if shape == nil || shape.HistoryTypes["opaque_binary"] != 1 {
+		t.Fatalf("history=%v", shape.HistoryTypes)
+	}
+	hasP1, hasP10 := false, false
+	for _, k := range shape.Keys {
+		if k == "opaque_p1" {
+			hasP1 = true
+		}
+		if k == "opaque_p10" {
+			hasP10 = true
+		}
+	}
+	if !hasP1 || !hasP10 {
+		t.Fatalf("keys=%v", shape.Keys)
+	}
+	encoded, _ := json.Marshal(shape)
+	if bytes.Contains(encoded, []byte("note")) {
+		t.Fatalf("opaque body leaked into keys: %s", encoded)
+	}
+}
+
 func TestRunStatsApplicationCountersAndPrivacy(t *testing.T) {
 	for _, h := range []host.ID{host.Claude, host.Codex} {
 		t.Run(string(h), func(t *testing.T) {
@@ -82,17 +165,28 @@ func TestRunStatsApplicationCountersAndPrivacy(t *testing.T) {
 			handler := s.Handler()
 			handler.ServeHTTP(httptest.NewRecorder(), req)
 			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/unrecognized-rpc", nil))
+			ctrl := httptest.NewRequest(http.MethodPost, "/unrecognized-rpc", bytes.NewReader([]byte("PRIVATE_BODY")))
+			ctrl.Header.Set("Content-Type", "application/json")
+			ctrl.Header.Set("Authorization", "Bearer PRIVATE_AUTH")
+			ctrl.Header.Set("Cookie", "session=PRIVATE_COOKIE")
+			handler.ServeHTTP(httptest.NewRecorder(), ctrl)
 			stats := s.RunStats()
-			if stats["totalRequests"] != 2 || stats["requests"] != 1 || stats["selectionApplied"] != 1 || stats["compactionApplied"] != 1 {
+			if stats["totalRequests"] != 3 || stats["requests"] != 1 || stats["selectionApplied"] != 1 || stats["compactionApplied"] != 1 {
 				t.Fatalf("wrong counters: %+v", stats)
 			}
 			routes := stats["requestRoutes"].(map[string]int)
-			if routes["POST "+path] != 1 || routes["GET /unrecognized-rpc"] != 1 || len(routes) != 2 {
+			if routes["POST "+path] != 1 || routes["GET /unrecognized-rpc"] != 1 || routes["POST /unrecognized-rpc"] != 1 || len(routes) != 3 {
 				t.Fatalf("missing transport evidence: %+v", routes)
 			}
 			events := stats["events"].([]Event)
-			if len(events) != 1 || events[0].UpstreamStatus == nil || *events[0].UpstreamStatus != 400 || !events[0].CompactApplied || events[0].RequestPath != path {
+			if len(events) != 2 || events[0].UpstreamStatus == nil || *events[0].UpstreamStatus != 400 || !events[0].CompactApplied || events[0].RequestPath != path {
 				t.Fatalf("missing request evidence: %+v", events)
+			}
+			if events[0].Method != http.MethodPost || events[0].JsonValid == nil || !*events[0].JsonValid {
+				t.Fatalf("llm observation %+v", events[0])
+			}
+			if events[1].Reason != reasonNotLLMPath || events[1].ContentType != "application/json" || events[1].Method != http.MethodPost || events[1].JsonValid != nil {
+				t.Fatalf("non-llm observation %+v", events[1])
 			}
 			if stats["selectionSources"].(map[string]int)[events[0].Source] != 1 || stats["applicationModes"].(map[string]int)[events[0].Apply] != 1 {
 				t.Fatalf("source/mode counters differ from event: %+v", stats)

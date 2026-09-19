@@ -26,6 +26,107 @@ func TestDecideSpecsDoesNotPickSendFeedbackOnPreamble(t *testing.T) {
 	}
 }
 
+func TestDecideSpecsReadPromptDoesNotPickRunSubagent(t *testing.T) {
+	specs := []Spec{
+		{Name: "read", Desc: "Read a file from the workspace."},
+		{Name: "grep", Desc: "Search file contents."},
+		{Name: "run_subagent", Desc: "Launch a subagent that can read files, search the codebase, and handle complex multi-step tasks autonomously. Use this to explore thoroughly or delegate."},
+	}
+	d := DecideSpecs("Read README, then read go.mod. Reply with only the first line of each file.", nil, specs, host.Devin)
+	if d.Tool == "run_subagent" && !d.Passthrough {
+		t.Fatalf("run_subagent won a file-read prompt: %+v", d)
+	}
+	if d.Tool != "read" && !d.Passthrough {
+		t.Fatalf("want read, got %+v", d)
+	}
+}
+
+const xcellLocatePrompt = "ファイルを変更せず、RewriteWith、extractTools、applyCompactToMessages、DefaultOptions、DefaultUpstream の定義を調べてください。各関数について個別のツール呼び出しで定義を検索し、別のツール呼び出しで本文を読んで確認してください（合計10回以上、並列化せず順に実行）。最終回答は関数名をキー、リポジトリ相対パス:定義行番号を値にしたJSONオブジェクトだけにしてください。説明文や完了マーカーは不要です。"
+
+func xcellDevinSpecs() []Spec {
+	return []Spec{
+		{Name: "read", Desc: "Read a file from the workspace."},
+		{Name: "grep", Desc: "Search file contents."},
+		{Name: "run_subagent", Desc: "Launch a subagent that can read files, search the codebase, and handle complex multi-step tasks autonomously. Use this to explore thoroughly or delegate."},
+		{Name: "exec", Desc: "Run a shell command."},
+		{Name: "web_search", Desc: "Search the web."},
+	}
+}
+
+func TestDecideSpecsXCellJapaneseDoesNotPickRunSubagent(t *testing.T) {
+	d := DecideSpecs(xcellLocatePrompt, nil, xcellDevinSpecs(), host.Devin)
+	if d.Tool == "run_subagent" || d.Passthrough {
+		t.Fatalf("run_subagent won x-cell prompt: %+v", d)
+	}
+	if d.Tool != "grep" && d.Tool != "read" {
+		t.Fatalf("want grep or read, got %+v", d)
+	}
+}
+
+func TestDecideSpecsXCellAfterGrepPicksRead(t *testing.T) {
+	d := DecideSpecs(xcellLocatePrompt, []Action{{Tool: "grep"}}, xcellDevinSpecs(), host.Devin)
+	if d.Tool != "read" {
+		t.Fatalf("after grep want read, got %+v", d)
+	}
+}
+
+func TestDecideSpecsXCellJapaneseWithPreambleDoesNotPickRunSubagent(t *testing.T) {
+	preamble := strings.Repeat("You are Devin. Search the codebase thoroughly, explore relevant files, and delegate multi-step work with run_subagent. ", 20)
+	d := DecideSpecs(preamble+"\n"+xcellLocatePrompt, nil, xcellDevinSpecs(), host.Devin)
+	if d.Tool == "run_subagent" || d.Passthrough {
+		t.Fatalf("run_subagent won polluted x-cell prompt: %+v", d)
+	}
+	if d.Tool != "grep" && d.Tool != "read" {
+		t.Fatalf("DecideSpecs on polluted x-cell = %+v, want grep or read", d)
+	}
+}
+
+func TestTaskTextIsolatesXCellAskFromPreamble(t *testing.T) {
+	preamble := strings.Repeat("You are Devin. Search the codebase thoroughly, explore, and delegate with run_subagent. ", 20)
+	got := taskText(preamble + "\n" + xcellLocatePrompt)
+	if strings.Contains(strings.ToLower(got), "codebase thoroughly") {
+		t.Fatalf("scored preamble: %q", got)
+	}
+	if !strings.Contains(got, "定義を検索") {
+		t.Fatalf("lost ask: %q", got)
+	}
+	d := DecideSpecs(WorkRequest(preamble+"\n"+xcellLocatePrompt), nil, xcellDevinSpecs(), host.Devin)
+	if d.Tool == "run_subagent" || d.Passthrough {
+		t.Fatalf("WorkRequest polluted x-cell picked run_subagent: %+v", d)
+	}
+	if d.Tool != "grep" && d.Tool != "read" {
+		t.Fatalf("DecideSpecs on WorkRequest polluted x-cell = %+v, want grep or read", d)
+	}
+}
+
+func TestPreferTaskTextKeepsSequentialLocate(t *testing.T) {
+	checkout := "checkout the workspace and continue"
+	if got := PreferTaskText(xcellLocatePrompt, checkout); got != xcellLocatePrompt {
+		t.Fatalf("later checkout replaced locate ask: %q", got)
+	}
+	if got := PreferTaskText(xcellLocatePrompt, ""); got != xcellLocatePrompt {
+		t.Fatalf("empty next dropped locate ask: %q", got)
+	}
+	if got := PreferTaskText("", checkout); got != checkout {
+		t.Fatalf("empty prev should take next: %q", got)
+	}
+	if sequentialLocate(PreferTaskText("", checkout)) {
+		t.Fatal("checkout-only blob claimed as sequentialLocate")
+	}
+}
+
+func TestRemainingSequentialLocateOmitsExec(t *testing.T) {
+	g := Remaining(xcellLocatePrompt+" checkout the workspace and continue", nil, host.Devin)
+	for _, names := range g {
+		for _, n := range names {
+			switch n {
+			case "exec", "edit", "write", "playwright_navigate", "playwright_snapshot":
+				t.Fatalf("sequentialLocate remaining added %s: %v", n, g)
+			}
+		}
+	}
+}
+
 func TestWorkRequestUsesUserQueryNotPreamble(t *testing.T) {
 	preamble := strings.Repeat("user message session tool output draft feedback review. ", 200)
 	want := "grep for the failing test and fix it"

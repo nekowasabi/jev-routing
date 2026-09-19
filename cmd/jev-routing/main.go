@@ -25,6 +25,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
+
 	"github.com/nekowasabi/jev-routing/internal/compact"
 	"github.com/nekowasabi/jev-routing/internal/host"
 	"github.com/nekowasabi/jev-routing/internal/jev"
@@ -109,7 +112,7 @@ func serve(h host.ID, listen string) int {
 	}
 	fmt.Fprintf(os.Stderr, "jev-routing proxy for %s on http://%s (upstream %s, engine %s)\n",
 		h.Label(), listen, proxy.DefaultUpstream(h), engineName(client))
-	httpSrv := &http.Server{Handler: srv.Handler()}
+	httpSrv := newHTTPServer(srv.Handler())
 	go func() {
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
@@ -121,6 +124,10 @@ func serve(h host.ID, listen string) int {
 		return 1
 	}
 	return 0
+}
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{Handler: h2c.NewHandler(handler, &http2.Server{})}
 }
 
 func cmdRun(args []string) int {
@@ -163,7 +170,7 @@ func cmdRun(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	httpSrv := &http.Server{Handler: srv.Handler()}
+	httpSrv := newHTTPServer(srv.Handler())
 	go func() { _ = httpSrv.Serve(ln) }()
 	defer httpSrv.Close()
 	if logPath != "" {

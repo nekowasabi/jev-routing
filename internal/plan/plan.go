@@ -48,11 +48,11 @@ func Extract(text string) Signals {
 		Typo:        has("typo") || has("recieve") || has("誤字"),
 		Health:      has("/api/health") || has("health route") || has("health ルート"),
 		PRReview:    has("pr 842") || has("pull request") || has("review github") || has("pr をレビュー"),
-		E2E:         has("playwright") || has("flaky") || has("e2e") || has("checkout"),
+		E2E:         has("playwright") || has("flaky") || has("e2e"),
 		Sentry:      has("sentry") || has("auth-219") || has("production error"),
 		RunTests:    has("re-run") || has("run the tests") || has("run typecheck") || has("再実行"),
-		Explore: !nestedAgent(t) && (has("explore") || has("subagent") || has("sub-agent") ||
-			has("parallel") || has("look through") || has("codebase") || has("thoroughly") ||
+		Explore: !nestedAgent(t) && !sequentialLocate(t) && (has("explore") || has("subagent") || has("sub-agent") ||
+			has("parallel") || has("look through") || has("thoroughly") ||
 			has("調査") || has("探索")),
 	}
 }
@@ -61,6 +61,92 @@ func nestedAgent(t string) bool {
 	return strings.Contains(t, "you are a subagent") ||
 		strings.Contains(t, "you are an agent") ||
 		strings.Contains(t, "you are a claude code")
+}
+
+func sequentialLocate(t string) bool {
+	t = strings.ToLower(t)
+	if strings.Contains(t, "検索") && strings.Contains(t, "読") {
+		return true
+	}
+	if strings.Contains(t, "定義を調べ") || strings.Contains(t, "定義を検索") {
+		return true
+	}
+	if strings.Contains(t, "並列化せず") || strings.Contains(t, "順に") || strings.Contains(t, "個別のツール") {
+		return true
+	}
+	if strings.Contains(t, "do not parallel") || strings.Contains(t, "don't parallel") {
+		return true
+	}
+	return strings.Contains(t, "sequential") && strings.Contains(t, "search") && strings.Contains(t, "read")
+}
+
+func SequentialLocate(t string) bool { return sequentialLocate(t) }
+
+func PreferTaskText(prev, next string) string {
+	next = strings.TrimSpace(next)
+	if next == "" {
+		return prev
+	}
+	if sequentialLocate(prev) && !sequentialLocate(next) {
+		return prev
+	}
+	return next
+}
+
+func taskText(s string) string {
+	s = WorkRequest(s)
+	if i := sequentialAskStart(s); i > 0 {
+		return strings.TrimSpace(s[i:])
+	}
+	return s
+}
+
+func sequentialAskStart(s string) int {
+	low := strings.ToLower(s)
+	markers := []string{
+		"定義を調べ", "定義を検索", "ファイルを変更せず",
+		"並列化せず", "個別のツール",
+		"do not parallel", "don't parallel",
+	}
+	best := -1
+	for _, m := range markers {
+		if i := strings.Index(low, strings.ToLower(m)); i >= 0 && (best < 0 || i < best) {
+			best = i
+		}
+	}
+	if i := strings.Index(s, "検索"); i >= 0 && strings.Contains(s, "読") && (best < 0 || i < best) {
+		best = i
+	}
+	if strings.Contains(low, "sequential") && strings.Contains(low, "search") && strings.Contains(low, "read") {
+		if i := strings.Index(low, "sequential"); i >= 0 && (best < 0 || i < best) {
+			best = i
+		}
+	}
+	if best <= 0 {
+		return -1
+	}
+	return best
+}
+
+func preferLocateTool(specs []Spec) string {
+	var grep, read string
+	for _, s := range specs {
+		n := strings.ToLower(s.Name)
+		switch {
+		case n == "grep" || n == "grep_files":
+			if grep == "" {
+				grep = s.Name
+			}
+		case isRead(s.Name):
+			if read == "" {
+				read = s.Name
+			}
+		}
+	}
+	if grep != "" {
+		return grep
+	}
+	return read
 }
 
 func Native(h host.ID, claude string) string { return host.Native(h, claude) }
@@ -99,6 +185,7 @@ func HostMeta(name string) bool {
 }
 
 func Remaining(request string, actions []Action, h host.ID) [][]string {
+	request = taskText(request)
 	s := Extract(request)
 	done := map[string]bool{}
 	for _, a := range actions {
@@ -117,7 +204,11 @@ func Remaining(request string, actions []Action, h host.ID) [][]string {
 		}
 		goals = append(goals, names)
 	}
-	if s.Explore {
+	locate := sequentialLocate(request)
+	if locate {
+		add("Grep")
+		add("Read")
+	} else if s.Explore {
 		add("Agent")
 	}
 	if s.Sentry {
@@ -126,7 +217,7 @@ func Remaining(request string, actions []Action, h host.ID) [][]string {
 	if s.PRReview {
 		add("github_get_pr")
 	}
-	if s.E2E {
+	if s.E2E && !locate {
 		add("playwright_navigate", "playwright_snapshot")
 	}
 	if s.Typo || s.FailingTest || s.Sentry || s.Health {
@@ -134,19 +225,21 @@ func Remaining(request string, actions []Action, h host.ID) [][]string {
 	}
 	if s.PRReview {
 		add("Read", "github_get_file")
-	} else if s.Typo || s.FailingTest || s.Sentry || s.Health || s.E2E {
+	} else if s.Typo || s.FailingTest || s.Sentry || s.Health || (s.E2E && !locate) {
 		add("Read")
 	}
-	if s.Health {
-		add("Write")
-		add("Edit")
-	} else if s.Typo || s.FailingTest || s.Sentry || s.E2E {
-		add("Edit")
+	if !locate {
+		if s.Health {
+			add("Write")
+			add("Edit")
+		} else if s.Typo || s.FailingTest || s.Sentry || s.E2E {
+			add("Edit")
+		}
 	}
 	if s.PRReview {
 		add("github_pr_review", "github_comment")
 	}
-	if s.RunTests || s.FailingTest || s.Health || s.E2E || s.Sentry {
+	if !locate && (s.RunTests || s.FailingTest || s.Health || s.E2E || s.Sentry) {
 		add("Bash")
 	}
 	return goals
@@ -199,6 +292,7 @@ func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Deci
 	if agentStreak(actions) >= 2 {
 		return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.9}
 	}
+	request = taskText(request)
 	available := make([]string, 0, len(specs))
 	set := map[string]bool{}
 	for _, s := range specs {
@@ -220,15 +314,30 @@ func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Deci
 	for _, g := range goals {
 		for _, n := range g {
 			if set[n] {
+				if sequentialLocate(request) && isAgent(n) {
+					if alt := preferLocateTool(specs); alt != "" {
+						return Decision{Tool: alt, Confidence: 0.86, Done: 0.08, Top: ranks(g)}
+					}
+				}
 				return Decision{Tool: n, Confidence: 0.86, Done: 0.08, Top: ranks(g)}
 			}
 			if alias := aliasIn(set, n); alias != "" {
+				if sequentialLocate(request) && isAgent(alias) {
+					if alt := preferLocateTool(specs); alt != "" {
+						return Decision{Tool: alt, Confidence: 0.8, Done: 0.08, Top: ranks(g)}
+					}
+				}
 				return Decision{Tool: alias, Confidence: 0.8, Done: 0.08, Top: ranks(g)}
 			}
 		}
 	}
 
 	best, score := scoreCatalog(request, actions, specs)
+	if sequentialLocate(request) && (isAgent(best) || best == "" || score < 0.25) {
+		if alt := preferLocateTool(specs); alt != "" {
+			return Decision{Tool: alt, Confidence: 0.86, Done: 0.08}
+		}
+	}
 	if best != "" && score >= 0.25 {
 		return Decision{Tool: best, Confidence: clamp01(score / 8), Done: 0.08}
 	}
@@ -268,6 +377,7 @@ func aliasIn(set map[string]bool, want string) string {
 }
 
 func scoreCatalog(request string, actions []Action, specs []Spec) (string, float64) {
+	request = taskText(request)
 	requestText := strings.ToLower(request)
 	requestWords := words(requestText)
 	usageCount := map[string]int{}
@@ -282,7 +392,12 @@ func scoreCatalog(request string, actions []Action, specs []Spec) (string, float
 			continue
 		}
 		score := 0.0
-		searchText := strings.ToLower(name + " " + spec.Desc)
+		searchText := strings.ToLower(name)
+		// Why: Orchestrator descriptions mention read/file/codebase and steal
+		// simple file tasks (Devin run_subagent 25→1 on a README read).
+		if !isAgent(name) {
+			searchText = strings.ToLower(name + " " + spec.Desc)
+		}
 		for _, w := range requestWords {
 			if len(w) < 4 {
 				continue
@@ -295,6 +410,8 @@ func scoreCatalog(request string, actions []Action, specs []Spec) (string, float
 		case isAgent(name):
 			if nestedAgent(requestText) {
 				score -= 8
+			} else if sequentialLocate(requestText) {
+				score -= 1.5
 			} else if hasAny(requestText, "explore", "subagent", "sub-agent", "parallel", "look through",
 				"codebase", "thoroughly", "delegate", "spawn", "調査", "探索") {
 				score += 5
@@ -302,11 +419,11 @@ func scoreCatalog(request string, actions []Action, specs []Spec) (string, float
 				score -= 1.5
 			}
 		case isGrep(name):
-			if hasAny(requestText, "find", "search", "grep", "where", "探") {
+			if hasAny(requestText, "find", "search", "grep", "where", "探", "検索") {
 				score += 3
 			}
 		case isRead(name):
-			if hasAny(requestText, "read", "open", "show", "見て") {
+			if hasAny(requestText, "read", "open", "show", "見て", "読") {
 				score += 2
 			}
 		case isEdit(name):
