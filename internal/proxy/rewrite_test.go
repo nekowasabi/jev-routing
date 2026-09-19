@@ -505,3 +505,183 @@ func TestGrokPreambleDoesNotPinSendFeedbackAndFitsJevBudget(t *testing.T) {
 		}
 	}
 }
+
+func fakeNextToolClient(t *testing.T, choice string, done float64, calls *int64) *jev.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls != nil {
+			atomic.AddInt64(calls, 1)
+		}
+		answers := map[string]any{
+			"next_tool": map[string]any{
+				"type": "choice", "choice": choice, "confidence": 0.8,
+				"probabilities": map[string]float64{choice: 0.8},
+			},
+			"done": map[string]any{"type": "noul", "noul": done, "confidence": 0.9},
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "fake", "answers": answers})
+	}))
+	t.Cleanup(srv.Close)
+	return &jev.Client{APIKey: "test", BaseURL: srv.URL, Model: "fake", HTTP: srv.Client()}
+}
+
+func grokWorkCatalog() []any {
+	return []any{
+		grokFn("read_file", "Read a file"),
+		grokFn("grep", "Search files"),
+		grokFn("spawn_subagent", "Start a subagent"),
+		grokFn("send_feedback", "Save feedback"),
+	}
+}
+
+func grokRewrite(t *testing.T, user string, tools []any, client *jev.Client) (map[string]any, RewriteStats) {
+	t.Helper()
+	req := map[string]any{
+		"model": "grok-4.6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": user},
+		},
+		"tools": tools,
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Grok, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	return got, stats
+}
+
+func toolNames(got map[string]any) []string {
+	var names []string
+	for _, raw := range asSlice(got["tools"]) {
+		m, _ := raw.(map[string]any)
+		n, _ := m["name"].(string)
+		if n == "" {
+			if fn, ok := m["function"].(map[string]any); ok {
+				n, _ = fn["name"].(string)
+			}
+		}
+		if n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+func hasRequiredToolChoice(got map[string]any) bool {
+	tc, ok := got["tool_choice"]
+	if !ok || tc == nil {
+		return false
+	}
+	if s, ok := tc.(string); ok {
+		return s != "auto" && s != "none" && s != ""
+	}
+	m, ok := tc.(map[string]any)
+	if !ok {
+		return false
+	}
+	typ, _ := m["type"].(string)
+	if typ == "auto" || typ == "none" {
+		return false
+	}
+	if _, ok := m["name"].(string); ok && typ != "" {
+		return true
+	}
+	if fn, ok := m["function"].(map[string]any); ok {
+		if n, _ := fn["name"].(string); n != "" {
+			return true
+		}
+	}
+	return typ == "tool" || typ == "function" || typ == "any" || typ == "required"
+}
+
+func TestRewriteKeepsOneSchemaWithoutRequiredChoice(t *testing.T) {
+	client := fakeNextToolClient(t, "grep", 0.05, nil)
+	tools := grokWorkCatalog()
+	got, stats := grokRewrite(t, "find the failing assertion in the test file", tools, client)
+	names := toolNames(got)
+	if len(names) != 1 || names[0] != "grep" {
+		t.Fatalf("tools=%v stats=%+v", names, stats)
+	}
+	if hasRequiredToolChoice(got) {
+		t.Fatalf("required tool_choice=%v", got["tool_choice"])
+	}
+}
+
+func TestRewriteRespondAndDoneKeepFullCatalog(t *testing.T) {
+	tools := grokWorkCatalog()
+	want := len(tools)
+
+	got, stats := grokRewrite(t, "thanks, that's all", tools, fakeNextToolClient(t, planRespond, 0.1, nil))
+	if n := len(toolNames(got)); n != want {
+		t.Fatalf("respond tools %d want %d stats=%+v", n, want, stats)
+	}
+	if hasRequiredToolChoice(got) {
+		t.Fatalf("respond forced choice %v", got["tool_choice"])
+	}
+
+	got, stats = grokRewrite(t, "thanks, that's all", tools, fakeNextToolClient(t, "grep", 0.9, nil))
+	if n := len(toolNames(got)); n != want {
+		t.Fatalf("done tools %d want %d stats=%+v", n, want, stats)
+	}
+}
+
+const planRespond = "respond_to_user"
+
+func TestRewriteNeverShrinksToSendFeedback(t *testing.T) {
+	tools := grokCatalog()
+	query := "デッドコードを調査し、不要なコードを削除してください。"
+	preamble := strings.Repeat("Keep every explicit requirement of the request in view. user message session tool output draft feedback review comments. ", 90)
+	if len(preamble) < 10_000 {
+		t.Fatalf("preamble too short: %d", len(preamble))
+	}
+
+	assertNotOnlySendFeedback := func(t *testing.T, got map[string]any, stats RewriteStats) {
+		t.Helper()
+		names := toolNames(got)
+		if len(names) == 1 && names[0] == "send_feedback" {
+			t.Fatalf("catalog is send_feedback only; stats=%+v", stats)
+		}
+		if len(names) == 0 {
+			t.Fatalf("empty catalog stats=%+v", stats)
+		}
+	}
+
+	t.Run("jev-returns-send_feedback", func(t *testing.T) {
+		got, stats := grokRewrite(t, "<user_query>\n"+query+"\n</user_query>", tools, fakeNextToolClient(t, "send_feedback", 0.05, nil))
+		assertNotOnlySendFeedback(t, got, stats)
+		if len(toolNames(got)) != len(tools) {
+			t.Fatalf("want full catalog after meta pick, got %v", toolNames(got))
+		}
+	})
+	t.Run("untagged-preamble-local", func(t *testing.T) {
+		got, stats := grokRewrite(t, preamble+"\n"+query, tools, nil)
+		assertNotOnlySendFeedback(t, got, stats)
+	})
+	t.Run("tagged-preamble-local", func(t *testing.T) {
+		got, stats := grokRewrite(t, preamble+"\n<user_query>\n"+query+"\n</user_query>\n", tools, nil)
+		assertNotOnlySendFeedback(t, got, stats)
+	})
+}
+
+func TestRewriteAllowsConsecutiveSpawnSchema(t *testing.T) {
+	client := fakeNextToolClient(t, "spawn_subagent", 0.04, nil)
+	tools := grokWorkCatalog()
+	prompt := "Explore the auth package thoroughly and report how sessions are stored."
+	got1, st1 := grokRewrite(t, prompt, tools, client)
+	got2, st2 := grokRewrite(t, prompt, tools, client)
+	n1, n2 := toolNames(got1), toolNames(got2)
+	if len(n1) != 1 || n1[0] != "spawn_subagent" {
+		t.Fatalf("first %v stats=%+v", n1, st1)
+	}
+	if len(n2) != 1 || n2[0] != "spawn_subagent" {
+		t.Fatalf("second %v stats=%+v", n2, st2)
+	}
+	if hasRequiredToolChoice(got1) || hasRequiredToolChoice(got2) {
+		t.Fatal("spawn schema was required, not merely visible")
+	}
+}

@@ -7,6 +7,25 @@ import (
 	"github.com/nekowasabi/jev-routing/internal/host"
 )
 
+func TestDecideSpecsDoesNotPickSendFeedbackOnPreamble(t *testing.T) {
+	preamble := strings.Repeat("user message session tool output draft feedback review comments. ", 80)
+	query := "デッドコードを調査し、不要なコードを削除してください。"
+	specs := []Spec{
+		{Name: "read_file", Desc: "Read a file"},
+		{Name: "grep", Desc: "Search files"},
+		{Name: "spawn_subagent", Desc: "Start a subagent"},
+		{Name: "send_feedback", Desc: strings.Repeat("Save or update user feedback for later review. Drafts, messages, session, tool output, user request. ", 40)},
+	}
+	d := DecideSpecs(preamble+"\n"+query, nil, specs, host.Grok)
+	if d.Tool == "send_feedback" && !d.Passthrough {
+		t.Fatalf("send_feedback pinned %+v", d)
+	}
+	d2 := DecideSpecs(WorkRequest(preamble+"\n<user_query>\n"+query+"\n</user_query>"), nil, specs, host.Grok)
+	if d2.Tool == "send_feedback" && !d2.Passthrough {
+		t.Fatalf("tagged query pinned send_feedback %+v", d2)
+	}
+}
+
 func TestWorkRequestUsesUserQueryNotPreamble(t *testing.T) {
 	preamble := strings.Repeat("user message session tool output draft feedback review. ", 200)
 	want := "grep for the failing test and fix it"

@@ -77,6 +77,9 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 			decision = live
 		}
 	}
+	if plan.HostMeta(decision.Tool) {
+		decision.Passthrough = true
+	}
 
 	stats := RewriteStats{
 		Host:           h,
@@ -93,18 +96,12 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 		stats.Engine = "live"
 	}
 
-	if decision.Passthrough {
+	// Why: Empty tools[] stops the host loop (unlike jev-routing-off).
+	// Respond, high done, and low-confidence passthrough leave the full catalog
+	// so the model can wrap up or continue in text.
+	if decision.Passthrough || decision.Tool == plan.Respond || (decision.Done >= 0.5 && !decision.Gated) {
 		stats.Chosen = "passthrough"
 		stats.ToolAfter = stats.ToolBefore
-		out, err := json.Marshal(root)
-		return out, stats, err
-	}
-
-	if decision.Tool == plan.Respond || (decision.Done >= 0.5 && !decision.Gated) {
-		setTools(root, toolsKey, []any{})
-		delete(root, "tool_choice")
-		disableThinking(root, h)
-		stats.ToolAfter = 0
 		out, err := json.Marshal(root)
 		return out, stats, err
 	}
@@ -117,7 +114,9 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 		return out, stats, err
 	}
 	setTools(root, toolsKey, kept)
-	root["tool_choice"] = toolChoice(h, decision.Tool, root)
+	// Why: A required tool_choice makes the one remaining schema an execution
+	// command. Vanilla only hides unused schemas; the model may still answer in text.
+	delete(root, "tool_choice")
 	disableThinking(root, h)
 	stats.ToolAfter = 1
 	out, err := json.Marshal(root)
@@ -150,6 +149,9 @@ func setTools(root map[string]any, key string, tools []any) {
 func askNextTool(c *jev.Client, user string, actions []plan.Action, specs []plan.Spec) (plan.Decision, error) {
 	criteria := map[string]string{}
 	for _, s := range specs {
+		if plan.HostMeta(s.Name) {
+			continue
+		}
 		desc := s.Desc
 		if desc == "" {
 			desc = s.Name
@@ -171,8 +173,8 @@ func askNextTool(c *jev.Client, user string, actions []plan.Action, specs []plan
 	}
 	tool := jev.ChoiceOf(res, "next_tool")
 	done := jev.NoulOf(res, "done")
-	if tool == plan.Respond || tool == "" {
-		return plan.Decision{Tool: plan.Respond, Done: 0, Passthrough: true, Confidence: 0.3}, nil
+	if tool == plan.Respond || tool == "" || done >= 0.5 || plan.HostMeta(tool) {
+		return plan.Decision{Tool: plan.Respond, Done: done, Passthrough: true, Confidence: 0.3}, nil
 	}
 	return plan.Decision{Tool: tool, Done: done, Confidence: 0.8}, nil
 }
@@ -198,19 +200,6 @@ func filterTools(tools []any, name string) []any {
 		return tools[:0]
 	}
 	return kept
-}
-
-func toolChoice(h host.ID, name string, root map[string]any) any {
-	// Anthropic Messages
-	if _, ok := root["system"]; ok || h == host.Claude {
-		return map[string]any{"type": "tool", "name": name}
-	}
-	// Codex Responses
-	if _, ok := root["input"]; ok || h == host.Codex {
-		return map[string]any{"type": "function", "name": name}
-	}
-	// Grok / OpenAI chat completions
-	return map[string]any{"type": "function", "function": map[string]any{"name": name}}
 }
 
 func disableThinking(root map[string]any, h host.ID) {

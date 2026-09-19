@@ -81,6 +81,17 @@ func WorkRequest(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// HostMeta is a host UX tool, not a work schema. Shrinking the catalog to
+// only this name (send_feedback) is what Grok sessions get stuck on.
+func HostMeta(name string) bool {
+	switch strings.ToLower(name) {
+	case "send_feedback", "session_title":
+		return true
+	default:
+		return false
+	}
+}
+
 func Remaining(request string, actions []Action, h host.ID) [][]string {
 	s := Extract(request)
 	done := map[string]bool{}
@@ -235,8 +246,11 @@ func scoreCatalog(request string, actions []Action, specs []Spec) (string, float
 	best := ""
 	bestScore := 0.0
 	for _, spec := range specs {
-		score := 0.0
 		name := spec.Name
+		if HostMeta(name) {
+			continue
+		}
+		score := 0.0
 		searchText := strings.ToLower(name + " " + spec.Desc)
 		for _, w := range requestWords {
 			if len(w) < 4 {
