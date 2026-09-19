@@ -2,10 +2,12 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -683,5 +685,151 @@ func TestRewriteAllowsConsecutiveSpawnSchema(t *testing.T) {
 	}
 	if hasRequiredToolChoice(got1) || hasRequiredToolChoice(got2) {
 		t.Fatal("spawn schema was required, not merely visible")
+	}
+}
+
+func TestReasoningOffCursorDevin(t *testing.T) {
+	if reasoningOff(host.Cursor) != "none" {
+		t.Fatalf("cursor: %s", reasoningOff(host.Cursor))
+	}
+	if reasoningOff(host.Devin) != "none" {
+		t.Fatalf("devin: %s", reasoningOff(host.Devin))
+	}
+	if reasoningOff(host.Grok) != "low" {
+		t.Fatalf("grok: %s", reasoningOff(host.Grok))
+	}
+}
+
+func TestRewriteUsesLastUserQueryNotFirstExplore(t *testing.T) {
+	tools := []any{
+		grokFn("spawn_subagent", "Start a subagent that works on a task independently."),
+		grokFn("read_file", "Read a file from the workspace."),
+		grokFn("search_replace", "Replace an exact string in a file."),
+		grokFn("run_terminal_command", "Run a bash command and return its output."),
+	}
+	first := "investigate the repo with subagents"
+	second := "fix the typo in foo.go"
+	req := map[string]any{
+		"model": "grok-4.6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "<user_query>\n" + first + "\n</user_query>"},
+			map[string]any{"role": "user", "content": "<user_query>\n" + second + "\n</user_query>"},
+		},
+		"tools": tools,
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	names := toolNames(got)
+	if len(names) == 1 && names[0] == "spawn_subagent" {
+		t.Fatalf("tools shrunk to spawn_subagent only; stats=%+v names=%v", stats, names)
+	}
+	if stats.Chosen == "spawn_subagent" || stats.Chosen == "task" {
+		t.Fatalf("chose agent tool for typo fix; stats=%+v names=%v", stats, names)
+	}
+	if stats.Chosen == "passthrough" {
+		// full catalog is also fine: must still not be spawn-only (already checked)
+		return
+	}
+}
+func TestRewriteSecondUserQueryDoesNotShrinkToSpawnSubagent(t *testing.T) {
+	tools := []any{
+		grokFn("spawn_subagent", "Start a subagent that works on a task independently."),
+		grokFn("read_file", "Read a file from the workspace."),
+		grokFn("search_replace", "Replace an exact string in a file."),
+		grokFn("run_terminal_command", "Run a bash command and return its output."),
+	}
+	first := "investigate the repo with subagents"
+	second := "fix the typo in foo.go"
+	req := map[string]any{
+		"model": "grok-4.6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "<user_query>\n" + first + "\n</user_query>"},
+			map[string]any{"role": "assistant", "content": "KB injected / send a task"},
+			map[string]any{"role": "user", "content": "<user_query>\n" + second + "\n</user_query>"},
+		},
+		"tools": tools,
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	names := toolNames(got)
+	if len(names) == 1 && names[0] == "spawn_subagent" {
+		t.Fatalf("remaining tools is spawn_subagent only; stats=%+v names=%v", stats, names)
+	}
+}
+
+func rewriteTwoSequentialTurns(t *testing.T) (RewriteStats, RewriteStats) {
+	t.Helper()
+	tools := grokCatalog()
+	first := "investigate the repo with subagents"
+	second := "fix the typo in foo.go"
+	turn1 := map[string]any{
+		"model": "grok-4.6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "<user_query>\n" + first + "\n</user_query>"},
+		},
+		"tools": tools,
+	}
+	raw1, _ := json.Marshal(turn1)
+	_, stats1, err := Rewrite(raw1, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn2 := map[string]any{
+		"model": "grok-4.6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "<user_query>\n" + first + "\n</user_query>"},
+			map[string]any{"role": "assistant", "content": "KB injected / send a task"},
+			map[string]any{"role": "user", "content": "<user_query>\n" + second + "\n</user_query>"},
+		},
+		"tools": tools,
+	}
+	raw2, _ := json.Marshal(turn2)
+	out2, stats2, err := Rewrite(raw2, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got2 map[string]any
+	if err := json.Unmarshal(out2, &got2); err != nil {
+		t.Fatal(err)
+	}
+	names := toolNames(got2)
+	if stats2.Chosen == "spawn_subagent" && stats2.ToolAfter == 1 {
+		t.Fatalf("turn2 locked spawn_subagent; stats1=%+v stats2=%+v names=%v", stats1, stats2, names)
+	}
+	if len(names) == 1 && names[0] == "spawn_subagent" {
+		t.Fatalf("turn2 remaining tools is spawn_subagent only; stats2=%+v", stats2)
+	}
+	return stats1, stats2
+}
+
+func TestRewriteTwoSequentialTurnsDoesNotLockSpawnSubagent(t *testing.T) {
+	rewriteTwoSequentialTurns(t)
+}
+
+func TestRewriteTwoSequentialTurnsDump(t *testing.T) {
+	path := os.Getenv("REWRITE_TWO_TURN_OUT")
+	if path == "" {
+		t.Skip("REWRITE_TWO_TURN_OUT unset")
+	}
+	stats1, stats2 := rewriteTwoSequentialTurns(t)
+	body := fmt.Sprintf("turn=1 chosen=%s toolBefore=%d toolAfter=%d\nturn=2 chosen=%s toolBefore=%d toolAfter=%d\n",
+		stats1.Chosen, stats1.ToolBefore, stats1.ToolAfter,
+		stats2.Chosen, stats2.ToolBefore, stats2.ToolAfter)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

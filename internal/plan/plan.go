@@ -70,7 +70,8 @@ func Native(h host.ID, claude string) string { return host.Native(h, claude) }
 // <user_query>; scoring that blob as the request pins send_feedback.
 func WorkRequest(s string) string {
 	const open, close = "<user_query>", "</user_query>"
-	i := strings.Index(s, open)
+	// Why: Instead of Index (first tag), adopted LastIndex of the open tag. Reason: later Grok turns wrap a new ask; scoring the original first query shrinks the catalog to Agent forever.
+	i := strings.LastIndex(s, open)
 	if i < 0 {
 		return s
 	}
@@ -167,8 +168,30 @@ func pendingAgent(actions []Action) bool {
 	return false
 }
 
+func agentStreak(actions []Action) int {
+	n := 0
+	for i := len(actions) - 1; i >= 0; i-- {
+		if !isAgentTool(actions[i].Tool) {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+func isAgentTool(name string) bool {
+	if name == "Agent" || name == "spawn_subagent" || name == "task" {
+		return true
+	}
+	return isAgent(name)
+}
+
 func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Decision {
 	if pendingAgent(actions) {
+		return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.9}
+	}
+	// Why: Instead of shrinking to Agent again after a spawn storm, adopted passthrough once consecutive Agent tools reach 2. Reason: stale first-goal scoring plus catalog shrink to spawn_subagent loops Grok on canned child replies.
+	if agentStreak(actions) >= 2 {
 		return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.9}
 	}
 	available := make([]string, 0, len(specs))

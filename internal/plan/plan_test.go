@@ -136,3 +136,46 @@ func TestSubagentBriefDoesNotRespond(t *testing.T) {
 		t.Fatalf("subagent brief was treated as done %+v", d)
 	}
 }
+
+func TestWorkRequestUsesLastUserQuery(t *testing.T) {
+	first := "investigate the repo with subagents"
+	second := "fix the typo in foo.go"
+	got := WorkRequest("<user_query>\n" + first + "\n</user_query>\npreamble\n<user_query>\n" + second + "\n</user_query>\n")
+	if got != second {
+		t.Fatalf("got %q want last query", got)
+	}
+}
+
+func TestDecideSpecsPassthroughAfterAgentStreak(t *testing.T) {
+	specs := []Spec{
+		{Name: "spawn_subagent", Desc: "Start a subagent"},
+		{Name: "task", Desc: "Launch a task"},
+		{Name: "read_file", Desc: "Read a file"},
+		{Name: "search_replace", Desc: "Edit a file"},
+	}
+	actions := []Action{
+		{Tool: "spawn_subagent"},
+		{Tool: "task"},
+		{Tool: "spawn_subagent"},
+	}
+	d := DecideSpecs("Explore the auth package thoroughly with subagents", actions, specs, host.Grok)
+	if isAgent(d.Tool) && !d.Passthrough {
+		t.Fatalf("chose Agent again after streak %+v", d)
+	}
+	if !d.Passthrough && d.Tool != Respond {
+		t.Fatalf("want passthrough or Respond, got %+v", d)
+	}
+}
+
+func TestDecideSpecsStopsAfterAgentStreak(t *testing.T) {
+	specs := []Spec{
+		{Name: "spawn_subagent", Desc: "Start a subagent"},
+		{Name: "task", Desc: "Launch a task"},
+		{Name: "read_file", Desc: "Read a file"},
+	}
+	actions := []Action{{Tool: "spawn_subagent"}, {Tool: "spawn_subagent"}}
+	d := DecideSpecs("Explore the auth package thoroughly with subagents", actions, specs, host.Grok)
+	if !d.Passthrough || d.Tool != Respond {
+		t.Fatalf("want passthrough Respond after agent streak, got %+v", d)
+	}
+}

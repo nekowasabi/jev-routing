@@ -273,7 +273,8 @@ func itemsFromMessages(msgs []any) ([]compact.Item, string) {
 		switch role {
 		case "user":
 			text := textOf(m)
-			if user == "" && text != "" {
+			// Why: Instead of keeping the first non-empty user text, adopted last user text. Reason: later Grok turns add a new user message; scoring the first explore query shrinks the catalog to spawn_subagent.
+			if text != "" {
 				user = text
 			}
 			items = append(items, compact.Item{ID: id(), Kind: compact.KindText, Chars: len(text), Preview: clip(text, 200), Body: text})
