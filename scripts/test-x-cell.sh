@@ -19,7 +19,7 @@ mkdir -p "$out_dir"
 binary="$root/bin/jev-routing"
 go build -o "$binary" ./cmd/jev-routing
 commit=$(git rev-parse HEAD)
-prompt='internal/host/host_test.go を読み、ChildArgs が Codex のときだけ設定を返し、それ以外では空であることを確認してください。ファイルは変更せず、最後に `CHECK: PASS` と一行だけ出力してください。'
+prompt='internal/proxy/rewrite.go に定義されている関数（func で始まる各定義）それぞれについて、リポジトリ全体から呼び出し箇所を検索し、関数名ごとにファイル:行番号の一覧を作成してください。ファイルは変更せず、最後に `CHECK: PASS` と一行だけ出力してください。'
 
 cleanup() {
   local dir
