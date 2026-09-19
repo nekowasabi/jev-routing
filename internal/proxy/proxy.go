@@ -38,6 +38,16 @@ func DefaultUpstream(h host.ID) string {
 			return u
 		}
 		return "https://chatgpt.com/backend-api/codex"
+	case host.Cursor:
+		if u := os.Getenv("CURSOR_UPSTREAM"); u != "" {
+			return u
+		}
+		return "https://api2.cursor.sh"
+	case host.Devin:
+		if u := os.Getenv("DEVIN_UPSTREAM"); u != "" {
+			return u
+		}
+		return "https://api.devin.ai"
 	default:
 		if u := os.Getenv("GROK_OAUTH_UPSTREAM"); u != "" {
 			return u
@@ -120,9 +130,12 @@ func (s *Server) Handler() http.Handler {
 
 func looksLikeLLM(path string) bool {
 	p := strings.ToLower(path)
+	// Why: Instead of only OpenAI/Anthropic paths, also match Cursor /aiserver.
+	// Reason: cursor-agent posts Connect RPCs under that prefix; JSON bodies still rewrite.
 	return strings.Contains(p, "/messages") ||
 		strings.Contains(p, "/chat/completions") ||
-		strings.Contains(p, "/responses")
+		strings.Contains(p, "/responses") ||
+		strings.Contains(p, "/aiserver")
 }
 
 func itoa(n int) string {

@@ -13,6 +13,8 @@ const (
 	Claude ID = "claude"
 	Codex  ID = "codex"
 	Grok   ID = "grok"
+	Cursor ID = "cursor"
+	Devin  ID = "devin"
 )
 
 func Parse(s string) (ID, error) {
@@ -23,8 +25,12 @@ func Parse(s string) (ID, error) {
 		return Codex, nil
 	case "grok", "grok-build", "xai":
 		return Grok, nil
+	case "cursor", "cursor-agent", "cursor-cli":
+		return Cursor, nil
+	case "devin", "devin-cli", "cognition":
+		return Devin, nil
 	default:
-		return "", fmt.Errorf("unknown host %q (claude|codex|grok)", s)
+		return "", fmt.Errorf("unknown host %q (claude|codex|grok|cursor|devin)", s)
 	}
 }
 
@@ -34,6 +40,10 @@ func (h ID) Binary() string {
 		return "claude"
 	case Codex:
 		return "codex"
+	case Cursor:
+		return "cursor-agent"
+	case Devin:
+		return "devin"
 	default:
 		return "grok"
 	}
@@ -45,6 +55,10 @@ func (h ID) Label() string {
 		return "Claude Code"
 	case Codex:
 		return "Codex"
+	case Cursor:
+		return "Cursor Agent CLI"
+	case Devin:
+		return "Devin CLI"
 	default:
 		return "Grok Build"
 	}
@@ -55,9 +69,18 @@ func Native(h ID, claudeName string) string {
 	if h == Claude {
 		return claudeName
 	}
-	m := toCodex
-	if h == Grok {
+	var m map[string]string
+	switch h {
+	case Codex:
+		m = toCodex
+	case Grok:
 		m = toGrok
+	case Cursor:
+		m = toCursor
+	case Devin:
+		m = toDevin
+	default:
+		return claudeName
 	}
 	if v, ok := m[claudeName]; ok {
 		return v
@@ -83,6 +106,39 @@ var toGrok = map[string]string{
 	"ExitPlanMode": "exit_plan_mode", "Monitor": "monitor",
 }
 
+// Cursor catalog IDs from docs.cursor.com plus cursor-agent 2026.08.31 index.js.
+var toCursor = map[string]string{
+	// Why: Instead of Bash identity, adopted Shell. Reason: docs describe the shell tool; JS maps Bash:"Shell".
+	"Bash": "Shell",
+	// Why: Instead of lowercase task, adopted Task. Reason: cursor-agent Claude-compat table maps Agent:"Task" (PascalCase).
+	"Agent": "Task",
+	"Task":  "Task", // identity: catalog id is already Task
+	// Why: Instead of leaving Edit identity, adopted Write. Reason: cursor-agent's own Claude-compat table maps Edit to Write; StrReplace is absent in this version.
+	"Edit":            "Write",
+	"TodoWrite":       "updateTodos", // Why: JS name is updateTodos, not TodoWrite.
+	"AskUserQuestion": "askQuestion", // Why: JS identifier is askQuestion, not request_user_input.
+	"EnterPlanMode":   "createPlan",  // Why: JS createPlanToolCall is the plan-spawn analog; ExitPlanMode not confirmed so omitted.
+}
+
+// Devin StableToolName values from the CLI binary plus docs.devin.ai/cli/subagents.md.
+var toDevin = map[string]string{
+	"Read":  "read",
+	"Edit":  "edit",
+	"Write": "write",
+	// Why: Instead of shell_command, adopted exec. Reason: StableToolName enum is exec; shell_command is an internal type, not the model-facing name.
+	"Bash": "exec",
+	"Glob": "glob",
+	"Grep": "grep",
+	// Why: Instead of spawn_agent, adopted run_subagent. Reason: official subagent docs; parent also has read_subagent but Native(Agent) is run_subagent only.
+	"Agent":           "run_subagent",
+	"WebSearch":       "web_search",
+	"WebFetch":        "webfetch", // Why: toolbox webfetch.rs / binary tool name webfetch, not WebFetch.
+	"TodoWrite":       "todo_write",
+	"AskUserQuestion": "ask_user_question",
+	"EnterPlanMode":   "write_plan",
+	"ExitPlanMode":    "exit_plan_mode",
+}
+
 func ChildEnv(h ID, listen string) []string {
 	env := os.Environ()
 	drop := map[string]bool{}
@@ -99,6 +155,18 @@ func ChildEnv(h ID, listen string) []string {
 	case Codex:
 		add["OPENAI_BASE_URL"] = "http://" + listen + "/v1"
 		add["JEV_ROUTING_HOST"] = "codex"
+	case Cursor:
+		// Why: Instead of OPENAI_BASE_URL, adopted CURSOR_API_ENDPOINT plus CURSOR_API_BASE_URL.
+		// Reason: cursor-agent --help documents CURSOR_API_ENDPOINT; index.js also reads CURSOR_API_BASE_URL.
+		u := "http://" + listen
+		add["CURSOR_API_ENDPOINT"] = u
+		add["CURSOR_API_BASE_URL"] = u
+		add["JEV_ROUTING_HOST"] = "cursor"
+	case Devin:
+		// Why: Instead of OPENAI_BASE_URL, adopted DEVIN_API_URL.
+		// Reason: Devin CLI documents it as the API base override for the logged-in account.
+		add["DEVIN_API_URL"] = "http://" + listen
+		add["JEV_ROUTING_HOST"] = "devin"
 	}
 	out := make([]string, 0, len(env)+4)
 	for _, kv := range env {
@@ -118,6 +186,10 @@ func ChildEnv(h ID, listen string) []string {
 }
 
 func ChildArgs(h ID, listen string) []string {
+	if h == Cursor {
+		// Why: Instead of env-only, adopted --endpoint flag. Reason: help documents it as the public override; env can be missed by subprocesses.
+		return []string{"--endpoint", "http://" + listen}
+	}
 	if h != Codex {
 		return nil
 	}

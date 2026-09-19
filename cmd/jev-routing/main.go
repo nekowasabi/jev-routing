@@ -1,4 +1,4 @@
-// jev-routing is a request-rewriting proxy for Claude Code, Codex, and Grok Build.
+// jev-routing is a request-rewriting proxy for Claude Code, Codex, Grok Build, Cursor, and Devin.
 //
 // It is not an MCP server. Do not `claude mcp add` / `codex mcp add` / `grok mcp add`.
 // Install the binary and wrap the host:
@@ -59,8 +59,8 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `jev-routing — Jev harness (Go). No npx. No MCP.
 
 Commands:
-  jev-routing run claude|codex|grok [-- host-args...]
-  jev-routing serve --host claude|codex|grok [--listen 127.0.0.1:8787]
+  jev-routing run claude|codex|grok|cursor|devin [-- host-args...]
+  jev-routing serve --host claude|codex|grok|cursor|devin [--listen 127.0.0.1:8787]
   jev-routing compact < transcript.json
   jev-routing bench --host grok
 
@@ -72,7 +72,7 @@ Environment:
 
 func cmdServe(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	hostName := fs.String("host", "claude", "claude | codex | grok")
+	hostName := fs.String("host", "claude", "claude | codex | grok | cursor | devin")
 	listen := fs.String("listen", envOr("JEV_LISTEN", "127.0.0.1:8787"), "bind address")
 	_ = fs.Parse(args)
 	h, err := host.Parse(*hostName)
@@ -113,7 +113,7 @@ func serve(h host.ID, listen string) int {
 
 func cmdRun(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: jev-routing run claude|codex|grok")
+		fmt.Fprintln(os.Stderr, "usage: jev-routing run claude|codex|grok|cursor|devin")
 		return 2
 	}
 	h, err := host.Parse(args[0])
@@ -230,7 +230,7 @@ func cmdCompact(args []string) int {
 
 func cmdBench(args []string) int {
 	fs := flag.NewFlagSet("bench", flag.ExitOnError)
-	hostName := fs.String("host", "claude", "claude | codex | grok")
+	hostName := fs.String("host", "claude", "claude | codex | grok | cursor | devin")
 	_ = fs.Parse(args)
 	h, err := host.Parse(*hostName)
 	if err != nil {
@@ -272,6 +272,10 @@ func printEnvHint(h host.ID, listen string) {
 		fmt.Fprintf(os.Stderr, "  unset XAI_API_KEY GROK_MODELS_BASE_URL\n  export GROK_CLI_CHAT_PROXY_BASE_URL=http://%s/v1\n  grok\n", listen)
 	case host.Codex:
 		fmt.Fprintf(os.Stderr, "  # ~/.codex/config.toml\n  openai_base_url = \"http://%s/v1\"\n", listen)
+	case host.Cursor:
+		fmt.Fprintf(os.Stderr, "  export CURSOR_API_ENDPOINT=http://%s\n  cursor-agent --endpoint http://%s\n", listen, listen)
+	case host.Devin:
+		fmt.Fprintf(os.Stderr, "  export DEVIN_API_URL=http://%s\n  devin\n", listen)
 	}
 }
 
