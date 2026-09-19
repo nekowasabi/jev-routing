@@ -105,6 +105,9 @@ out = {
     "routing_chars_after": int(chars_after) if mode == "jev" else None,
     "success_marker": "CHECK: PASS" in result and not data.get("is_error", False),
     "usage": {"input_tokens": n("input_tokens", "inputTokens"), "cached_input_tokens": n("cached_input_tokens", "cache_read_input_tokens", "cacheReadTokens"), "cache_creation_input_tokens": n("cache_creation_input_tokens", "cache_write_input_tokens", "cacheWriteTokens"), "output_tokens": n("output_tokens", "outputTokens"), "reasoning_tokens": n("reasoning_tokens", "reasoningTokens")},
+    "total_cost_usd": data.get("total_cost_usd", data.get("totalCostUsd")),
+    "duration_api_ms": data.get("duration_api_ms", data.get("durationApiMs")),
+    "num_turns": data.get("num_turns", data.get("numTurns")),
 }
 pathlib.Path(result_path).write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n")
 PY
@@ -116,15 +119,18 @@ summarize() {
   jq -n --slurpfile baseline "$baseline" --slurpfile jev "$jev" '
     def delta($field): ($baseline[0][$field] - $jev[0][$field]);
     def pct($field): if $baseline[0][$field] == 0 then null else (delta($field) / $baseline[0][$field] * 100) end;
+    def safe_delta($field): if ($baseline[0][$field] == null or $jev[0][$field] == null) then null else delta($field) end;
     ($jev[0].proxy_observed and $baseline[0].success_marker and $jev[0].success_marker) as $valid |
     {host: $baseline[0].host, baseline: $baseline[0], jev: $jev[0], valid: $valid,
      reduction: (if $valid then {wall_ms: delta("wall_ms"), wall_percent: pct("wall_ms"),
        output_tokens: (($baseline[0].usage.output_tokens // 0) - ($jev[0].usage.output_tokens // 0)),
-       routing_request_chars: (($jev[0].routing_chars_before // 0) - ($jev[0].routing_chars_after // 0))}
+       routing_request_chars: (($jev[0].routing_chars_before // 0) - ($jev[0].routing_chars_after // 0)),
+       cost_usd: safe_delta("total_cost_usd"),
+       duration_api_ms: safe_delta("duration_api_ms")}
        else null end),
      invalid_reason: (if $valid then null elif ($jev[0].proxy_requests // 0) == 0 then "jev-routing を経由したリクエストが観測されませんでした" else "両条件で同じ完了条件を満たしていません" end)}
   ' >"$out_dir/$host/comparison.json"
-  jq -r 'if .valid then "\(.host): 書換えリクエスト削減=\(.reduction.routing_request_chars)文字 出力トークン差分=\(.reduction.output_tokens) 実行時間差分=\(.reduction.wall_ms)ms" else "\(.host): 比較不能 — \(.invalid_reason)" end' "$out_dir/$host/comparison.json"
+  jq -r 'if .valid then "\(.host): コスト差分=\(.reduction.cost_usd // "N/A")USD API時間差分=\(.reduction.duration_api_ms // "N/A")ms 書換えリクエスト削減=\(.reduction.routing_request_chars)文字 出力トークン差分=\(.reduction.output_tokens) 実行時間差分=\(.reduction.wall_ms)ms (num_turns: baseline=\(.baseline.num_turns // "N/A") jev=\(.jev.num_turns // "N/A"))" else "\(.host): 比較不能 — \(.invalid_reason)" end' "$out_dir/$host/comparison.json"
 }
 
 for host in "${hosts[@]}"; do
