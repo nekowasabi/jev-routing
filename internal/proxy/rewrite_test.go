@@ -49,11 +49,43 @@ func TestCodexChatGPTBackendStripsV1Prefix(t *testing.T) {
 
 func TestCodexReasoningKeepsAllTurnsContext(t *testing.T) {
 	root := map[string]any{"reasoning": map[string]any{"effort": "high"}}
-	disableThinking(root, host.Codex)
+	disableThinking(root, host.Codex, "gpt-5.6-terra")
 
 	reasoning := root["reasoning"].(map[string]any)
 	if reasoning["effort"] != "none" || reasoning["context"] != "all_turns" {
 		t.Fatalf("reasoning=%v", reasoning)
+	}
+}
+
+func TestCodexAstraReasoningPassesThrough(t *testing.T) {
+	for _, effort := range []string{"none", "low", "medium", "high", "xhigh", "max"} {
+		t.Run(effort, func(t *testing.T) {
+			root := map[string]any{
+				"model":            "gpt-6-astra",
+				"input":            []any{map[string]any{"role": "user", "content": "hello"}},
+				"reasoning":        map[string]any{"effort": effort},
+				"reasoning_effort": effort,
+			}
+			raw, err := json.Marshal(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, _, err := Rewrite(raw, host.Codex, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatal(err)
+			}
+			reasoning := got["reasoning"].(map[string]any)
+			if reasoning["effort"] != effort || len(reasoning) != 1 {
+				t.Fatalf("reasoning=%v", reasoning)
+			}
+			if got["reasoning_effort"] != effort {
+				t.Fatalf("reasoning_effort=%v", got["reasoning_effort"])
+			}
+		})
 	}
 }
 
@@ -689,14 +721,14 @@ func TestRewriteAllowsConsecutiveSpawnSchema(t *testing.T) {
 }
 
 func TestReasoningOffCursorDevin(t *testing.T) {
-	if reasoningOff(host.Cursor) != "none" {
-		t.Fatalf("cursor: %s", reasoningOff(host.Cursor))
+	if reasoningOff(host.Cursor, "") != "none" {
+		t.Fatalf("cursor: %s", reasoningOff(host.Cursor, ""))
 	}
-	if reasoningOff(host.Devin) != "none" {
-		t.Fatalf("devin: %s", reasoningOff(host.Devin))
+	if reasoningOff(host.Devin, "") != "none" {
+		t.Fatalf("devin: %s", reasoningOff(host.Devin, ""))
 	}
-	if reasoningOff(host.Grok) != "low" {
-		t.Fatalf("grok: %s", reasoningOff(host.Grok))
+	if reasoningOff(host.Grok, "") != "low" {
+		t.Fatalf("grok: %s", reasoningOff(host.Grok, ""))
 	}
 }
 

@@ -49,7 +49,7 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	if len(names) == 0 {
 		// Grok Build often omits tools[] and lets cli-chat-proxy inject the catalog.
 		// Writing "tools": [] disables that injection.
-		disableThinking(root, h)
+		disableThinking(root, h, modelName(root))
 		out, err := json.Marshal(root)
 		return out, RewriteStats{Host: h, ToolBefore: 0, ToolAfter: 0, Chosen: "passthrough:no-catalog"}, err
 	}
@@ -117,7 +117,7 @@ func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, 
 	// Why: A required tool_choice makes the one remaining schema an execution
 	// command. Vanilla only hides unused schemas; the model may still answer in text.
 	delete(root, "tool_choice")
-	disableThinking(root, h)
+	disableThinking(root, h, modelName(root))
 	stats.ToolAfter = 1
 	out, err := json.Marshal(root)
 	return out, stats, err
@@ -202,32 +202,46 @@ func filterTools(tools []any, name string) []any {
 	return kept
 }
 
-func disableThinking(root map[string]any, h host.ID) {
+func disableThinking(root map[string]any, h host.ID, model string) {
+	if h == host.Codex && isAstra(model) {
+		// Why: Astra only accepts its supported reasoning efforts. Preserve the
+		// request unchanged instead of applying Jev's generic disable policy.
+		return
+	}
 	if _, ok := root["thinking"]; ok {
 		root["thinking"] = map[string]any{"type": "disabled"}
 	}
-	off := reasoningOff(h)
+	effort := reasoningOff(h, model)
 	if h == host.Codex {
 		// Why: Codex Responses Lite rejects requests without this context even
-		// when Jev disables reasoning effort to minimize the request.
-		root["reasoning"] = map[string]any{"effort": off, "context": "all_turns"}
+		// when Jev rewrites the request.
+		root["reasoning"] = map[string]any{"effort": effort, "context": "all_turns"}
 	} else if _, ok := root["reasoning"]; ok {
-		root["reasoning"] = map[string]any{"effort": off}
+		root["reasoning"] = map[string]any{"effort": effort}
 	}
 	if _, ok := root["reasoning_effort"]; ok {
-		root["reasoning_effort"] = off
+		root["reasoning_effort"] = effort
 	}
 	removeClearThinkingEdit(root)
 }
 
-// reasoningOff is the cheapest effort the host accepts when we want no extra thinking.
-func reasoningOff(h host.ID) string {
+func modelName(root map[string]any) string {
+	model, _ := root["model"].(string)
+	return model
+}
+
+// reasoningOff is the cheapest effort the upstream model accepts when we want no extra thinking.
+func reasoningOff(h host.ID, model string) string {
 	if h == host.Grok {
 		// Why: Instead of effort "none" (OpenAI/Codex disable), adopted "low".
-		// xAI grok-4.5/4.6 reject "none"; reasoning cannot be disabled.
+		// Grok rejects "none"; reasoning cannot be disabled.
 		return "low"
 	}
 	return "none"
+}
+
+func isAstra(model string) bool {
+	return strings.HasPrefix(strings.ToLower(model), "gpt-6-astra")
 }
 
 // removeClearThinkingEdit drops the clear_thinking_20251015 context-management
