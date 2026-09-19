@@ -205,3 +205,32 @@ func ChildArgs(h ID, listen string) []string {
 		"--config", `model_providers.jev.requires_openai_auth=true`,
 	}
 }
+
+// CommandArgs keeps Codex's global config array in one parser scope.
+func CommandArgs(h ID, listen string, args []string) []string {
+	if h != Codex {
+		return append(ChildArgs(h, listen), args...)
+	}
+	var configs, rest []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		switch {
+		case (arg == "-c" || arg == "--config") && i+1 < len(args) && args[i+1] != "--":
+			i++
+			configs = append(configs, "--config", args[i])
+		case strings.HasPrefix(arg, "--config="):
+			configs = append(configs, "--config", strings.TrimPrefix(arg, "--config="))
+		case strings.HasPrefix(arg, "-c") && len(arg) > 2:
+			configs = append(configs, "--config", strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "="))
+		default:
+			rest = append(rest, arg)
+		}
+	}
+	// Why: Clap replaces a global Append array when -c appears after exec.
+	// Merge every override before the subcommand; routing overrides stay last.
+	return append(append(configs, ChildArgs(h, listen)...), rest...)
+}

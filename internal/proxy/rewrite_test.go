@@ -972,6 +972,61 @@ func TestGrokMixedHostedToolsStillFiltersFunctions(t *testing.T) {
 	}
 }
 
+func TestGrokLiveMixedCatalogUnknownHostedStillFiltersFunctions(t *testing.T) {
+	// Observed Grok /v1/responses catalog: flat function defs plus type-only
+	// web_search and x_search. One nameless hosted type must not veto the rest.
+	fn := func(name string) any {
+		return map[string]any{
+			"type": "function", "name": name, "description": "tool",
+			"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+		}
+	}
+	req := map[string]any{
+		"model": "grok-4.6",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "The auth middleware test is failing. Find it, fix the assertion in place, and re-run the tests."},
+		},
+		"tools": []any{
+			fn("grep"), fn("read_file"), fn("search_replace"), fn("run_terminal_command"),
+			map[string]any{"type": "web_search"},
+			map[string]any{"type": "x_search"},
+		},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := Rewrite(raw, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Reason == reasonUnrecognizedFormat {
+		t.Fatalf("mixed unknown hosted vetoed catalog: %+v", stats)
+	}
+	if stats.Apply != applyFilter || !stats.Changed || stats.ToolAfter >= stats.ToolBefore {
+		t.Fatalf("want filter shrink, got %+v", stats)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	names := toolNames(got)
+	if len(names) != 1 || names[0] != "grep" {
+		t.Fatalf("function tools=%v stats=%+v", names, stats)
+	}
+	hosted := map[string]bool{}
+	for _, rawTool := range asSlice(got["tools"]) {
+		m := rawTool.(map[string]any)
+		typ, _ := m["type"].(string)
+		if typ != "function" {
+			hosted[typ] = true
+		}
+	}
+	if !hosted["web_search"] {
+		t.Fatal("confirmed provider web_search was stripped")
+	}
+	if !hosted["x_search"] {
+		t.Fatal("unknown hosted x_search was bulk-deleted")
+	}
+}
+
 func TestCursorMcpToolsCatalogIsFilterable(t *testing.T) {
 	req := map[string]any{
 		"conversationId": "conv-1",

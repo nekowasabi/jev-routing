@@ -36,13 +36,19 @@ type Server struct {
 	listenPort  string
 	saveErr     error
 
-	Reached      int
-	Rewritten    int
-	Passthrough  int
-	JevHTTP      int
-	JevOK        int
-	JevFail      int
-	JevCacheHits int
+	Reached           int
+	Rewritten         int
+	Passthrough       int
+	JevHTTP           int
+	JevOK             int
+	JevFail           int
+	JevCacheHits      int
+	TotalRequests     int
+	SelectionApplied  int
+	CompactionApplied int
+	SelectionSources  map[string]int
+	ApplicationModes  map[string]int
+	RequestRoutes     map[string]int
 }
 
 func (s *Server) RequestCount() int {
@@ -63,54 +69,77 @@ func (s *Server) StatsSnapshot() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return map[string]any{
-		"host":           s.Last.Host,
-		"toolBefore":     s.Last.ToolBefore,
-		"toolAfter":      s.Last.ToolAfter,
-		"chosen":         s.Last.Chosen,
-		"done":           s.Last.Done,
-		"gated":          s.Last.Gated,
-		"charsBefore":    s.CharsBefore,
-		"charsAfter":     s.CharsAfter,
-		"compactDropped": s.Last.CompactDropped,
-		"engine":         s.Last.Engine,
-		"requests":       s.Requests,
-		"instanceId":     s.events.InstanceID,
-		"startedAt":      s.events.StartedAt,
-		"mode":           s.Options.Mode,
-		"compaction":     s.Options.Compaction,
-		"reasoning":      s.Options.Reasoning,
-		"runId":          s.Options.RunID,
-		"reached":        s.Reached,
-		"rewritten":      s.Rewritten,
-		"passthrough":    s.Passthrough,
-		"jevHTTP":        s.JevHTTP,
-		"jevOK":          s.JevOK,
-		"jevFail":        s.JevFail,
-		"jevCacheHits":   s.JevCacheHits,
+		"host":              s.Last.Host,
+		"toolBefore":        s.Last.ToolBefore,
+		"toolAfter":         s.Last.ToolAfter,
+		"chosen":            s.Last.Chosen,
+		"done":              s.Last.Done,
+		"gated":             s.Last.Gated,
+		"charsBefore":       s.CharsBefore,
+		"charsAfter":        s.CharsAfter,
+		"compactDropped":    s.Last.CompactDropped,
+		"engine":            s.Last.Engine,
+		"requests":          s.Requests,
+		"instanceId":        s.events.InstanceID,
+		"startedAt":         s.events.StartedAt,
+		"mode":              s.Options.Mode,
+		"compaction":        s.Options.Compaction,
+		"reasoning":         s.Options.Reasoning,
+		"runId":             s.Options.RunID,
+		"reached":           s.Reached,
+		"rewritten":         s.Rewritten,
+		"passthrough":       s.Passthrough,
+		"jevHTTP":           s.JevHTTP,
+		"jevOK":             s.JevOK,
+		"jevFail":           s.JevFail,
+		"jevCacheHits":      s.JevCacheHits,
+		"totalRequests":     s.TotalRequests,
+		"selectionApplied":  s.SelectionApplied,
+		"compactionApplied": s.CompactionApplied,
+		"selectionSources":  copyCounts(s.SelectionSources),
+		"applicationModes":  copyCounts(s.ApplicationModes),
+		"requestRoutes":     copyCounts(s.RequestRoutes),
 	}
 }
 
 func (s *Server) RunStats() map[string]any {
 	snap := s.StatsSnapshot()
+	events, _, _, truncated := s.events.Snapshot(0)
 	// Compatible keys first.
 	return map[string]any{
-		"requests":     snap["requests"],
-		"charsBefore":  snap["charsBefore"],
-		"charsAfter":   snap["charsAfter"],
-		"instanceId":   snap["instanceId"],
-		"mode":         snap["mode"],
-		"compaction":   snap["compaction"],
-		"reasoning":    snap["reasoning"],
-		"runId":        snap["runId"],
-		"reached":      snap["reached"],
-		"rewritten":    snap["rewritten"],
-		"passthrough":  snap["passthrough"],
-		"jevHTTP":      snap["jevHTTP"],
-		"jevOK":        snap["jevOK"],
-		"jevFail":      snap["jevFail"],
-		"jevCacheHits": snap["jevCacheHits"],
-		"scope":        "single-process",
+		"requests":          snap["requests"],
+		"charsBefore":       snap["charsBefore"],
+		"charsAfter":        snap["charsAfter"],
+		"instanceId":        snap["instanceId"],
+		"mode":              snap["mode"],
+		"compaction":        snap["compaction"],
+		"reasoning":         snap["reasoning"],
+		"runId":             snap["runId"],
+		"reached":           snap["reached"],
+		"rewritten":         snap["rewritten"],
+		"passthrough":       snap["passthrough"],
+		"jevHTTP":           snap["jevHTTP"],
+		"jevOK":             snap["jevOK"],
+		"jevFail":           snap["jevFail"],
+		"jevCacheHits":      snap["jevCacheHits"],
+		"scope":             "single-process",
+		"totalRequests":     snap["totalRequests"],
+		"selectionApplied":  snap["selectionApplied"],
+		"compactionApplied": snap["compactionApplied"],
+		"selectionSources":  snap["selectionSources"],
+		"applicationModes":  snap["applicationModes"],
+		"requestRoutes":     snap["requestRoutes"],
+		"events":            events,
+		"eventsTruncated":   truncated || snap["requests"].(int) > len(events),
 	}
+}
+
+func copyCounts(src map[string]int) map[string]int {
+	out := make(map[string]int, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 func DefaultUpstream(h host.ID) string {
@@ -239,6 +268,13 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusBadGateway)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.TotalRequests++
+		if s.RequestRoutes == nil {
+			s.RequestRoutes = map[string]int{}
+		}
+		s.RequestRoutes[r.Method+" "+r.URL.Path]++
+		s.mu.Unlock()
 		if r.Method == http.MethodPost && looksLikeLLM(r.URL.Path) {
 			s.mu.Lock()
 			s.Requests++
@@ -246,6 +282,7 @@ func (s *Server) Handler() http.Handler {
 			s.mu.Unlock()
 			raw, err := io.ReadAll(r.Body)
 			_ = r.Body.Close()
+			shape := catalogShape(raw)
 			var attemptsMu sync.Mutex
 			var attempts []JevAttempt
 			var jevHTTP, jevOK, jevFail, jevCache int
@@ -285,6 +322,20 @@ func (s *Server) Handler() http.Handler {
 					s.JevOK += jevOK
 					s.JevFail += jevFail
 					s.JevCacheHits += jevCache
+					if stats.Apply != "" && stats.Apply != applyNone {
+						s.SelectionApplied++
+						if s.SelectionSources == nil {
+							s.SelectionSources = map[string]int{}
+						}
+						if s.ApplicationModes == nil {
+							s.ApplicationModes = map[string]int{}
+						}
+						s.SelectionSources[stats.Source]++
+						s.ApplicationModes[stats.Apply]++
+					}
+					if stats.CompactApplied {
+						s.CompactionApplied++
+					}
 					s.mu.Unlock()
 					s.Log.Print(FormatStats(stats))
 					raw = rewritten
@@ -315,6 +366,9 @@ func (s *Server) Handler() http.Handler {
 				ToolBefore:     stats.ToolBefore,
 				ToolAfter:      stats.ToolAfter,
 				CompactDropped: stats.CompactDropped,
+				CompactApplied: stats.CompactApplied,
+				RequestPath:    r.URL.Path,
+				Catalog:        shape,
 				JevAttempts:    attempts,
 				JevCalls:       jevHTTP,
 				JevCached:      jevCache,

@@ -181,7 +181,7 @@ func cmdRun(args []string) int {
 		printEnvHint(h, listen)
 		<-make(chan struct{})
 	}
-	cmd := exec.Command(path, append(host.ChildArgs(h, listen), rest...)...)
+	cmd := exec.Command(path, host.CommandArgs(h, listen, rest)...)
 	cmd.Env = host.ChildEnv(h, listen)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {

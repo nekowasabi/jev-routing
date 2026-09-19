@@ -238,7 +238,10 @@ func ParseNoul(r *Response, id string) (Noul, bool) {
 	if json.Unmarshal(raw, &n) != nil || n.Type != "noul" {
 		return Noul{}, false
 	}
-	if !finite01(n.Noul) || !finite01(n.Conf) {
+	var value struct {
+		Noul *float64 `json:"noul"`
+	}
+	if json.Unmarshal(raw, &value) != nil || value.Noul == nil || !finite01(n.Noul) || !finite01(n.Conf) {
 		return Noul{}, false
 	}
 	return n, true
@@ -257,7 +260,10 @@ func ParseChoice(r *Response, id string) (Choice, bool) {
 	if json.Unmarshal(raw, &c) != nil || (c.Type != "" && c.Type != "choice") {
 		return Choice{}, false
 	}
-	if c.Choice == "" || !finite01(c.Conf) {
+	var value struct {
+		Confidence *float64 `json:"confidence"`
+	}
+	if json.Unmarshal(raw, &value) != nil || value.Confidence == nil || c.Choice == "" || !finite01(c.Conf) {
 		return Choice{}, false
 	}
 	return c, true

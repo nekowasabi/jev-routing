@@ -134,7 +134,7 @@ func TestAskFitsOversizedState(t *testing.T) {
 	c := &Client{APIKey: "test", BaseURL: srv.URL, Model: "fake", HTTP: srv.Client()}
 	huge := strings.Repeat("。", 40_000)
 	state := map[string]any{
-		"user_request": "find the test",
+		"user_request":  "find the test",
 		"actions_taken": []any{map[string]any{"Tool": "grep", "Result": huge, "Input": `{"q":"x"}`}},
 	}
 	qs := map[string]Question{

@@ -128,13 +128,6 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 
 	toolSpecs := plan.SpecsFrom(asMaps(filterable))
-	if len(names) == 0 {
-		stats.Chosen = "passthrough:" + reasonNoCatalog
-		stats.Reason = reasonNoCatalog
-		stats.ToolAfter = 0
-		return body, stats, nil
-	}
-
 	msgs := asSlice(root["messages"])
 	if msgs == nil {
 		msgs = asSlice(root["input"])
@@ -165,6 +158,57 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		compactOK = true
 	}
 
+	// Why: Apply safe history compaction independently of tool selection;
+	// an uncertain or unnecessary next tool does not invalidate stale history.
+	work := cloneMap(root)
+	if compactOK {
+		workMsgs := asSlice(work["messages"])
+		key := "messages"
+		if workMsgs == nil {
+			workMsgs = asSlice(work["input"])
+			key = "input"
+		}
+		before, _ := json.Marshal(workMsgs)
+		beforeItems, _ := itemsFromMessages(workMsgs)
+		workMsgs = applyCompactToMessages(workMsgs, compaction)
+		if workMsgs != nil {
+			work[key] = workMsgs
+		}
+		after, _ := json.Marshal(workMsgs)
+		stats.CharsBefore = len(before)
+		stats.CharsAfter = len(after)
+		stats.CompactApplied = string(before) != string(after)
+		afterItems, _ := itemsFromMessages(workMsgs)
+		remaining := map[string]string{}
+		for _, item := range afterItems {
+			remaining[item.ID] = item.Body
+		}
+		for _, item := range beforeItems {
+			if item.Kind != compact.KindCall && item.Kind != compact.KindResult {
+				continue
+			}
+			if body, ok := remaining[item.ID]; !ok || body != item.Body {
+				stats.CompactDropped++
+			}
+		}
+	}
+	withoutSelection := func() ([]byte, RewriteStats, error) {
+		if !stats.CompactApplied {
+			return body, stats, nil
+		}
+		out, err := json.Marshal(work)
+		if err != nil {
+			return body, stats, err
+		}
+		stats.Changed = true
+		return out, stats, nil
+	}
+	if len(names) == 0 {
+		stats.Chosen = "passthrough:" + reasonNoCatalog
+		stats.Reason = reasonNoCatalog
+		return withoutSelection()
+	}
+
 	decision := plan.DecideSpecs(user, actions, toolSpecs, h)
 	stats.Source = sourceLocal
 	stats.Confidence = decision.Confidence
@@ -180,12 +224,15 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		if err != nil {
 			stats.Reason = reasonJevError
 			stats.Chosen = "passthrough:" + reasonJevError
-			return body, stats, nil
+			return withoutSelection()
 		}
+		stats.Source = sourceJev
+		stats.Confidence = live.Confidence
+		stats.NeedsTool = live.Done
 		if verr != "" {
 			stats.Reason = verr
 			stats.Chosen = "passthrough:" + verr
-			return body, stats, nil
+			return withoutSelection()
 		}
 		decision = live
 		usedJev = true
@@ -206,39 +253,22 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.ToolAfter = stats.ToolBefore
 		stats.Done = decision.Done
 		stats.Gated = decision.Gated
-		return body, stats, nil
+		return withoutSelection()
 	}
 
 	if usedJev && decision.Done < needsToolYes {
 		stats.Reason = reasonUncertainJev
 		stats.Chosen = "passthrough:" + reasonUncertainJev
 		stats.ToolAfter = stats.ToolBefore
-		return body, stats, nil
+		return withoutSelection()
 	}
 
-	kept := filterTools(tools, decision.Tool)
+	kept := filterTools(tools, decision.Tool, toolReferences(msgs))
 	if len(kept) == 0 {
 		stats.Chosen = "passthrough:" + decision.Tool
 		stats.Reason = "missing_tool"
 		stats.ToolAfter = stats.ToolBefore
-		return body, stats, nil
-	}
-
-	// Decision is confirmed: apply compaction and catalog changes to a copy.
-	work := cloneMap(root)
-	if compactOK {
-		workMsgs := asSlice(work["messages"])
-		key := "messages"
-		if workMsgs == nil {
-			workMsgs = asSlice(work["input"])
-			key = "input"
-		}
-		workMsgs = applyCompactToMessages(workMsgs, compaction)
-		work[key] = workMsgs
-		stats.CharsBefore = compaction.Stats.CharsBefore
-		stats.CharsAfter = compaction.Stats.CharsAfter
-		stats.CompactDropped = compaction.Stats.Dropped + compaction.Stats.Truncated
-		stats.CompactApplied = true
+		return withoutSelection()
 	}
 
 	apply := applyFilter
@@ -259,7 +289,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 
 	setTools(work, toolsKey, reconstructCatalog(rawTools, kept))
-	if _, ok := work["additional_tools"]; ok {
+	if _, ok := work["additional_tools"]; ok && toolsKey != "responses_lite" {
 		delete(work, "additional_tools")
 	}
 	if apply != applyForced {
@@ -291,7 +321,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	stats.Chosen = decision.Tool
 	stats.Done = decision.Done
 	stats.Gated = decision.Gated
-	stats.ToolAfter = 1
+	stats.ToolAfter = len(filterableTools(kept))
 	stats.Changed = true
 	if stats.Reason == "" {
 		if usedJev {
@@ -495,13 +525,22 @@ func isProviderExecuted(m map[string]any) bool {
 	typ, _ := m["type"].(string)
 	switch typ {
 	case "web_search", "file_search", "code_interpreter", "computer", "computer_use",
-		"hosted", "server_tool", "mcp", "tool_search", "local_shell", "image_generation":
+		"hosted", "server_tool", "mcp", "tool_search", "local_shell", "image_generation",
+		"tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119":
 		return true
 	}
 	if _, ok := m["server_label"]; ok {
 		return true
 	}
 	return false
+}
+
+func unknownHostedType(m map[string]any) bool {
+	if toolNameOf(m) != "" {
+		return false
+	}
+	typ, _ := m["type"].(string)
+	return typ != "" && typ != "function" && typ != "custom"
 }
 
 const defaultFunctionNamespace = "functions"
@@ -550,7 +589,19 @@ func isMCPNamespace(m map[string]any) bool {
 }
 
 func isSticky(m map[string]any) bool {
+	// Why: Discovery tools and deferred schemas keep later tools reachable;
+	// removing even a deferred placeholder can disable dynamic tool loading.
+	if deferred, _ := m["defer_loading"].(bool); deferred || toolNameOf(m) == "ToolSearch" {
+		return true
+	}
 	if isProviderExecuted(m) || isExternalNamespace(m) {
+		return true
+	}
+	// Why: Instead of whole-catalog skip on one nameless hosted type
+	// (observed Grok x_search with keys [type] only), keep unknown-owner
+	// items so named local functions stay filterable. Do not add the type
+	// to isProviderExecuted — that would bulk-allow every unknown type.
+	if unknownHostedType(m) {
 		return true
 	}
 	if ns := namespaceString(m); ns != "" && !localNamespace(ns) {
@@ -620,7 +671,7 @@ func contentReason(v any) string {
 			}
 			typ, _ := p["type"].(string)
 			switch typ {
-			case "text", "output_text", "input_text", "tool_use", "tool_result", "":
+			case "text", "output_text", "input_text", "tool_use", "tool_result", "thinking", "redacted_thinking", "tool_reference", "":
 			case "image", "image_url", "input_image", "image_file":
 				return reasonImages
 			default:
@@ -660,6 +711,14 @@ func applyForcedChoice(root map[string]any, protocol, name string) error {
 }
 
 func extractRawTools(root map[string]any) []any {
+	if extra := inputToolCatalogs(root); len(extra) > 0 {
+		out := append([]any{}, asSlice(root["tools"])...)
+		out = append(out, asSlice(root["additional_tools"])...)
+		for _, item := range extra {
+			out = append(out, asSlice(item["tools"])...)
+		}
+		return out
+	}
 	if t := asSlice(root["tools"]); t != nil {
 		if extra := asSlice(root["additional_tools"]); extra != nil {
 			out := make([]any, 0, len(t)+len(extra))
@@ -674,6 +733,9 @@ func extractRawTools(root map[string]any) []any {
 }
 
 func extractTools(root map[string]any) ([]any, string) {
+	if len(inputToolCatalogs(root)) > 0 {
+		return flattenCatalog(extractRawTools(root)), "responses_lite"
+	}
 	if t := asSlice(root["tools"]); t != nil {
 		if extra := asSlice(root["additional_tools"]); extra != nil {
 			t = append(append([]any{}, t...), extra...)
@@ -745,7 +807,7 @@ func reconstructCatalog(original, kept []any) []any {
 				if !ok {
 					continue
 				}
-				if keep[toolNameOf(cm)] {
+				if keep[toolNameOf(cm)] || isSticky(cm) {
 					inner = append(inner, c)
 				}
 			}
@@ -769,6 +831,20 @@ func reconstructCatalog(original, kept []any) []any {
 }
 
 func setTools(root map[string]any, key string, tools []any) {
+	if key == "responses_lite" {
+		tools = flattenCatalog(tools)
+		// Why: Lite carries client tools in input, while hosted tools may remain
+		// at the top level. Filter each original location without moving schemas.
+		for _, item := range inputToolCatalogs(root) {
+			item["tools"] = reconstructCatalog(asSlice(item["tools"]), tools)
+		}
+		for _, field := range []string{"tools", "additional_tools"} {
+			if original := asSlice(root[field]); original != nil {
+				root[field] = reconstructCatalog(original, tools)
+			}
+		}
+		return
+	}
 	if key == "mcpTools" {
 		setCursorTools(root, tools)
 		return
@@ -777,6 +853,16 @@ func setTools(root map[string]any, key string, tools []any) {
 		key = "tools"
 	}
 	root[key] = tools
+}
+
+func inputToolCatalogs(root map[string]any) []map[string]any {
+	var catalogs []map[string]any
+	for _, raw := range asSlice(root["input"]) {
+		if item, ok := raw.(map[string]any); ok && item["type"] == "additional_tools" {
+			catalogs = append(catalogs, item)
+		}
+	}
+	return catalogs
 }
 
 func cursorToolDefs(root map[string]any) []any {
@@ -894,14 +980,13 @@ func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan
 		if desc == "" {
 			desc = s.Name
 		}
-		if len(desc) > 240 {
-			desc = desc[:240]
-		}
+		// Why: Preserve the supplied capability description; a byte prefix can
+		// omit the operations exposed by a code-execution tool or split UTF-8.
 		criteria[s.Name] = desc
 	}
-	criteria[plan.Respond] = "stop calling tools and answer the user. Do not pick this if any requested work remains, including launching a subagent (Agent/Task)."
+	criteria[plan.Respond] = "stop calling tools and answer the user. Pick this only when no available tool is needed to make progress on the remaining request."
 	qs := map[string]jev.Question{
-		"next_tool":  {Type: "choice", Instructions: "Which single tool should run next? Agent or Task launches a Claude Code subagent — pick it for broad exploration or parallel work. Pick respond_to_user only when no tool is needed now.", Criteria: criteria},
+		"next_tool":  {Type: "choice", Instructions: "Which single available tool should run next to make progress on the user request, given the actions already taken? Use each candidate's supplied description to determine its capabilities, including any operations it exposes through other tools. Do not assume capabilities from a host or tool name. Pick respond_to_user only when no tool is needed now.", Criteria: criteria},
 		"needs_tool": {Type: "noul", Instructions: "A tool call is needed now to make progress. This is not a judgment that the overall user task is complete."},
 	}
 	state := map[string]any{"user_request": user, "actions_taken": actions}
@@ -914,14 +999,16 @@ func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan
 	if !choiceOK || !needOK {
 		return plan.Decision{}, reasonInvalidJev, nil
 	}
-	if !finite01(choice.Conf) || !finite01(need.Conf) || !finite01(need.Noul) {
+	if !finite01(choice.Conf) || !finite01(need.Noul) {
 		return plan.Decision{}, reasonInvalidJev, nil
 	}
 	if _, ok := criteria[choice.Choice]; !ok {
 		return plan.Decision{}, reasonInvalidJev, nil
 	}
-	if choice.Conf < adoptConfidence || need.Conf < adoptConfidence {
-		return plan.Decision{}, reasonUncertainJev, nil
+	// Why: Noul returns a probability, not a separate confidence field.
+	// Apply its probability thresholds below; only Choice has confidence.
+	if choice.Conf < adoptConfidence {
+		return plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf}, reasonUncertainJev, nil
 	}
 	if plan.HostMeta(choice.Choice) {
 		return plan.Decision{Tool: plan.Respond, Done: need.Noul, Passthrough: true, Confidence: choice.Conf}, "", nil
@@ -930,7 +1017,7 @@ func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan
 		return plan.Decision{Tool: plan.Respond, Done: need.Noul, Passthrough: true, Confidence: choice.Conf}, "", nil
 	}
 	if need.Noul < needsToolYes {
-		return plan.Decision{}, reasonUncertainJev, nil
+		return plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf}, reasonUncertainJev, nil
 	}
 	return plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf}, "", nil
 }
@@ -939,7 +1026,7 @@ func finite01(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 1
 }
 
-func filterTools(tools []any, name string) []any {
+func filterTools(tools []any, name string, referenced map[string]bool) []any {
 	var kept, sticky []any
 	for _, t := range tools {
 		m, ok := t.(map[string]any)
@@ -952,6 +1039,9 @@ func filterTools(tools []any, name string) []any {
 		}
 		if toolNameOf(m) == name {
 			kept = append(kept, t)
+		} else if referenced[toolNameOf(m)] {
+			// A surviving tool_reference must still resolve to its definition.
+			sticky = append(sticky, t)
 		}
 	}
 	if len(kept) == 0 {
@@ -1053,9 +1143,13 @@ func itemsFromMessages(msgs []any) ([]compact.Item, string) {
 				cid = id()
 			}
 			name, _ := m["name"].(string)
-			args, _ := m["arguments"].(string)
-			if args == "" {
-				if rawArgs, err := json.Marshal(m["arguments"]); err == nil && string(rawArgs) != "null" {
+			argsValue := m["arguments"]
+			if typ == "custom_tool_call" {
+				argsValue = m["input"]
+			}
+			args, isString := argsValue.(string)
+			if !isString && argsValue != nil {
+				if rawArgs, err := json.Marshal(argsValue); err == nil {
 					args = string(rawArgs)
 				}
 			}
@@ -1075,8 +1169,8 @@ func itemsFromMessages(msgs []any) ([]compact.Item, string) {
 			})
 		case role == "user":
 			text := textOf(m)
-			if text != "" {
-				user = text
+			if request := plan.WorkRequest(text); strings.TrimSpace(request) != "" {
+				user = request
 			}
 			items = append(items, compact.Item{ID: id(), Kind: compact.KindText, Chars: len(text), Preview: clip(text, 200), Body: text})
 			for _, tr := range toolResults(m) {
@@ -1182,12 +1276,36 @@ func toolResults(m map[string]any) []compact.Item {
 		out = append(out, compact.Item{
 			ID: id + "_r", Kind: compact.KindResult, PairID: id, Chars: len(text),
 			Preview: clip(text, 200), Body: text, Tool: str(b["name"]),
+			Pinned: hasToolReference(b["content"]),
 		})
 	}
 	return out
 }
 
+func hasToolReference(content any) bool {
+	return len(toolReferences(content)) > 0
+}
+
+func toolReferences(content any) map[string]bool {
+	names := map[string]bool{}
+	var visit func(any)
+	visit = func(content any) {
+		for _, raw := range asSlice(content) {
+			block, _ := raw.(map[string]any)
+			if block["type"] == "tool_reference" {
+				names[str(block["tool_name"])] = true
+			}
+			visit(block["content"])
+		}
+	}
+	visit(content)
+	return names
+}
+
 func applyCompactToMessages(msgs []any, res compact.Result) []any {
+	if len(msgs) == 0 {
+		return msgs
+	}
 	action := map[string]compact.Action{}
 	body := map[string]string{}
 	for i := range res.Items {
@@ -1195,7 +1313,76 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 	}
 	for _, d := range res.Decisions {
 		action[d.ID] = d.Action
-		action[d.ID+"_r"] = d.Action
+	}
+	for _, d := range res.Decisions {
+		if _, explicit := action[d.ID+"_r"]; !explicit {
+			action[d.ID+"_r"] = d.Action
+		}
+	}
+	// Why: Keep boundary predecessors instead of deleting empty messages there;
+	// removing them can make an existing system message illegal for the host.
+	for i := 1; i < len(msgs); i++ {
+		m, _ := msgs[i].(map[string]any)
+		if m["role"] != "system" {
+			continue
+		}
+		items, _ := itemsFromMessages(msgs[i-1 : i])
+		for _, item := range items {
+			if item.Kind == compact.KindCall || item.Kind == compact.KindResult {
+				if action[item.ID] == compact.ActionDrop {
+					action[item.ID] = compact.ActionKeep
+				}
+			}
+		}
+	}
+	// Why: Keep a non-thinking block rather than leaving an assistant message
+	// containing only signed thinking after dropping all of its tool calls.
+	for _, raw := range msgs {
+		m, _ := raw.(map[string]any)
+		if m["role"] != "assistant" {
+			continue
+		}
+		hasThinking, hasRemaining := false, false
+		for _, rawBlock := range asSlice(m["content"]) {
+			block, _ := rawBlock.(map[string]any)
+			switch block["type"] {
+			case "thinking", "redacted_thinking":
+				hasThinking = true
+			case "tool_use":
+				if action[str(block["id"])] != compact.ActionDrop {
+					hasRemaining = true
+				}
+			default:
+				hasRemaining = true
+			}
+		}
+		if hasThinking && !hasRemaining {
+			for _, call := range toolCalls(m) {
+				action[call.ID] = compact.ActionKeep
+			}
+		}
+	}
+	items, _ := itemsFromMessages(msgs)
+	results := map[string]bool{}
+	for _, item := range items {
+		// Tool-search references define tools used later; neither drop nor
+		// text truncation may remove them, even if a stale decision asks to.
+		if item.Pinned {
+			action[item.ID] = compact.ActionKeep
+			action[item.PairID] = compact.ActionKeep
+		}
+		if item.Kind == compact.KindResult {
+			results[item.PairID] = true
+		}
+	}
+	for _, item := range items {
+		if item.Kind != compact.KindCall {
+			continue
+		}
+		if !results[item.PairID] || (action[item.ID] == compact.ActionDrop) != (action[item.PairID+"_r"] == compact.ActionDrop) {
+			action[item.ID] = compact.ActionKeep
+			action[item.PairID+"_r"] = compact.ActionKeep
+		}
 	}
 	out := make([]any, 0, len(msgs))
 	for _, raw := range msgs {
@@ -1204,6 +1391,7 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 			out = append(out, raw)
 			continue
 		}
+		m = cloneMap(m)
 		typ, _ := m["type"].(string)
 		if typ == "function_call" || typ == "custom_tool_call" {
 			cid := firstString(m, "call_id", "id")
@@ -1229,7 +1417,7 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 		}
 		role, _ := m["role"].(string)
 		if role == "tool" {
-			tid, _ := m["tool_call_id"].(string)
+			tid := firstString(m, "tool_call_id", "call_id")
 			act := action[tid+"_r"]
 			if act == compact.ActionDrop {
 				continue
@@ -1286,7 +1474,7 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 				kept = append(kept, c)
 			}
 			if len(kept) == 0 && len(tcs) > 0 {
-				if s, _ := m["content"].(string); s == "" {
+				if textOf(m) == "" && len(asSlice(m["content"])) == 0 {
 					continue
 				}
 				delete(m, "tool_calls")
@@ -1295,6 +1483,42 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 			}
 		}
 		out = append(out, m)
+	}
+	// Why: Check the actual successor instead of pinning every adjacent call;
+	// deleting a whole exchange is safe when another assistant turn follows.
+	original := 0
+	var restore []compact.Decision
+	for i, raw := range out {
+		m, _ := raw.(map[string]any)
+		if m["role"] != "system" {
+			continue
+		}
+		for original < len(msgs) {
+			m, _ := msgs[original].(map[string]any)
+			original++
+			if m["role"] == "system" {
+				break
+			}
+		}
+		if i+1 == len(out) || original == len(msgs) {
+			continue
+		}
+		next, _ := out[i+1].(map[string]any)
+		successor, _ := msgs[original].(map[string]any)
+		if next["role"] == "assistant" || successor["role"] != "assistant" {
+			continue
+		}
+		calls := toolCalls(successor)
+		if len(calls) == 0 {
+			continue
+		}
+		for _, call := range calls {
+			restore = append(restore, compact.Decision{ID: call.ID, Action: compact.ActionKeep}, compact.Decision{ID: call.ID + "_r", Action: compact.ActionKeep})
+		}
+	}
+	if len(restore) > 0 {
+		res.Decisions = append(append([]compact.Decision(nil), res.Decisions...), restore...)
+		return applyCompactToMessages(msgs, res)
 	}
 	return out
 }
@@ -1347,7 +1571,11 @@ func actionsFromItems(items []compact.Item) []plan.Action {
 }
 
 func textOf(m map[string]any) string {
-	switch c := m["content"].(type) {
+	content := m["content"]
+	if content == nil {
+		content = m["output"]
+	}
+	switch c := content.(type) {
 	case string:
 		return c
 	case []any:

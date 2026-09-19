@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/host"
@@ -73,5 +75,33 @@ func TestGatewayArgsModel(t *testing.T) {
 	o, err := proxy.OptionsFromEnv()
 	if err != nil || o.ArgsModel != "x" || !o.ArgsTools["grep"] {
 		t.Fatalf("%+v %v", o, err)
+	}
+}
+
+func TestRunCombinesCodexConfigBeforeExec(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "argv")
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >\"$TEST_CODEX_ARGV\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TEST_CODEX_ARGV", argsPath)
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("JEV_LISTEN", "127.0.0.1:0")
+	t.Setenv("JEV_RUN_STATS", "")
+	t.Setenv("JEV_ROUTING_MODE", "filter")
+	if code := cmdRun([]string{"codex", "--", "exec", "--model", "gpt-5.6-terra", "-c", `model_reasoning_effort="low"`, "--", "prompt"}); code != 0 {
+		t.Fatalf("run exit=%d", code)
+	}
+	raw, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	execIndex := slices.Index(args, "exec")
+	providerIndex := slices.Index(args, `model_provider="jev"`)
+	effortIndex := slices.Index(args, `model_reasoning_effort="low"`)
+	if execIndex < 0 || providerIndex < 0 || effortIndex < 0 || providerIndex > execIndex || effortIndex > execIndex {
+		t.Fatalf("configuration still spans subcommand scopes: %#v", args)
 	}
 }

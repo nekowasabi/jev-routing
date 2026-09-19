@@ -65,10 +65,15 @@ func nestedAgent(t string) bool {
 
 func Native(h host.ID, claude string) string { return host.Native(h, claude) }
 
+var systemReminder = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
+
 // WorkRequest is the text local scoring and Jev next-tool should see.
 // Grok prepends a large injected preamble and wraps the real ask in
 // <user_query>; scoring that blob as the request pins send_feedback.
 func WorkRequest(s string) string {
+	// Why: Strip host reminders before finding the user query; skill catalogs
+	// contain task keywords and may themselves mention user_query wrappers.
+	s = systemReminder.ReplaceAllString(s, "")
 	const open, close = "<user_query>", "</user_query>"
 	// Why: Instead of Index (first tag), adopted LastIndex of the open tag. Reason: later Grok turns wrap a new ask; scoring the original first query shrinks the catalog to Agent forever.
 	i := strings.LastIndex(s, open)

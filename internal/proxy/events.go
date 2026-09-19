@@ -28,6 +28,9 @@ type Event struct {
 	ToolBefore     int              `json:"toolBefore"`
 	ToolAfter      int              `json:"toolAfter"`
 	CompactDropped int              `json:"compactDropped"`
+	CompactApplied bool             `json:"compactApplied"`
+	RequestPath    string           `json:"requestPath,omitempty"`
+	Catalog        *CatalogShape    `json:"catalog,omitempty"`
 	JevAttempts    []JevAttempt     `json:"jevAttempts,omitempty"`
 	JevCalls       int              `json:"jevCalls"`
 	JevCached      int              `json:"jevCached"`

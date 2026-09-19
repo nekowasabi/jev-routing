@@ -28,6 +28,23 @@ func TestChildArgs(t *testing.T) {
 	}
 }
 
+func TestCommandArgsCollectsCodexConfigWithoutChangingPrompt(t *testing.T) {
+	listen := "127.0.0.1:45678"
+	args := []string{"--config", `model_provider="other"`, "exec", "resume", "--last",
+		"-c", `model_reasoning_effort="low"`, "--config=features.foo=true", "-cmodel_verbosity=low",
+		"-c=model_context_window=32000", "--", "-c", "prompt content", "--config=literal"}
+	want := []string{"--config", `model_provider="other"`, "--config", `model_reasoning_effort="low"`,
+		"--config", "features.foo=true", "--config", "model_verbosity=low", "--config", "model_context_window=32000"}
+	want = append(want, ChildArgs(Codex, listen)...)
+	want = append(want, "exec", "resume", "--last", "--", "-c", "prompt content", "--config=literal")
+	if got := CommandArgs(Codex, listen, args); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v want %#v", got, want)
+	}
+	if got := CommandArgs(Claude, listen, args); !reflect.DeepEqual(got, args) {
+		t.Fatal("non-Codex arguments changed")
+	}
+}
+
 func TestParse(t *testing.T) {
 	cases := map[string]ID{
 		"claude": Claude, "anthropic": Claude,
