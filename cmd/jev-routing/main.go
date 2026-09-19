@@ -67,6 +67,13 @@ Commands:
 Environment:
   TYPESAFE_API_KEY / JEV_API_KEY   Jev key (optional; local classifier otherwise)
   JEV_LISTEN                       preferred bind address (run falls back to an available port)
+  JEV_ROUTING_MODE                 baseline | filter | forced (default filter)
+  JEV_COMPACTION                   off | on (default on)
+  JEV_REASONING                    preserve | legacy (default legacy)
+  JEV_ARGS_MODEL / JEV_ARGS_TOOLS  optional forced-only arg model split
+  JEV_DIRECT_TOOLS                 optional forced-only constant-arg Chat tools
+  JEV_RUN_ID                       optional comparison id
+  JEV_RUN_STATS                    path for process-end JSON stats
 `)
 }
 
@@ -84,8 +91,13 @@ func cmdServe(args []string) int {
 }
 
 func serve(h host.ID, listen string) int {
+	opt, err := proxy.OptionsFromEnv()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	client := jev.FromEnv()
-	srv, err := proxy.New(listen, h, client, nil)
+	srv, err := proxy.NewWithOptions(listen, h, client, nil, opt)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -125,6 +137,11 @@ func cmdRun(args []string) int {
 	if len(rest) > 0 && rest[0] == "--" {
 		rest = rest[1:]
 	}
+	opt, err := proxy.OptionsFromEnv()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	client := jev.FromEnv()
 	// Why: the child owns the terminal in raw mode; async proxy logs on the
 	// shared stderr fd would corrupt its TUI. Best effort — never fail the run.
@@ -140,7 +157,7 @@ func cmdRun(args []string) int {
 		return 1
 	}
 	listen := ln.Addr().String()
-	srv, err := proxy.New(listen, h, client, logW)
+	srv, err := proxy.NewWithOptions(listen, h, client, logW, opt)
 	if err != nil {
 		_ = ln.Close()
 		fmt.Fprintln(os.Stderr, err)
@@ -184,8 +201,14 @@ func writeRunStats(srv *proxy.Server) {
 	if path == "" {
 		return
 	}
-	before, after := srv.RoutingChars()
-	_ = os.WriteFile(path, []byte(fmt.Sprintf("{\"requests\":%d,\"charsBefore\":%d,\"charsAfter\":%d}\n", srv.RequestCount(), before, after)), 0o644)
+	raw, err := json.Marshal(srv.RunStats())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "jev-routing: failed to encode run stats: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(path, append(raw, '\n'), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "jev-routing: failed to write run stats: %v\n", err)
+	}
 }
 
 func listenForRun() (net.Listener, error) {

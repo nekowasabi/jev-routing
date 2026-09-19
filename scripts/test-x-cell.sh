@@ -3,6 +3,17 @@ set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
+
+if [[ "${1:-}" == --summarize ]]; then
+  dir=${2:-}
+  if [[ -z "$dir" ]]; then
+    echo "usage: $0 --summarize <fixture-dir>" >&2
+    exit 2
+  fi
+  python3 "$root/scripts/summarize_x_cell.py" "$dir"
+  exit 0
+fi
+
 hosts=("$@")
 if ((${#hosts[@]} == 0)); then
   hosts=(claude codex grok cursor devin)

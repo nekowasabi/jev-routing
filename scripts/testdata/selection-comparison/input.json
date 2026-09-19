@@ -1,0 +1,88 @@
+{
+  "required_baseline_revision": "f6b9dcfd2d0164e525b6ff981e17e6df26932e29",
+  "groups": [
+    {
+      "id": "baseline",
+      "role": "baseline",
+      "revision": "f6b9dcfd2d0164e525b6ff981e17e6df26932e29",
+      "settings": {"compaction": "on", "reasoning": "legacy", "task_id": "read-search", "history": "same"},
+      "task_kind": "read",
+      "local_ratio": 0.8,
+      "jev_calls": 2,
+      "forced_accepted": 0,
+      "direct_rate": 0,
+      "usage": {"input_tokens": 200, "output_tokens": 40},
+      "cost": {"amount": 1.2, "unit": "usd", "source": "invoice"},
+      "quality": {"external_pass": true, "drop": false},
+      "wall_ms": 1000,
+      "failures": [],
+      "retries": [{"after": "fail", "repaired": true}]
+    },
+    {
+      "id": "forced",
+      "role": "forced",
+      "settings": {"compaction": "on", "reasoning": "legacy", "task_id": "read-search", "history": "same"},
+      "task_kind": "read",
+      "local_ratio": 0.5,
+      "jev_calls": 4,
+      "forced_accepted": 3,
+      "direct_rate": 0,
+      "usage": {"input_tokens": 180, "output_tokens": 35},
+      "cost": {"amount": 1.0, "unit": "usd", "source": "invoice"},
+      "quality": {"external_pass": true, "drop": false},
+      "wall_ms": 900,
+      "failures": [{"kind": "upstream_reject"}],
+      "retries": []
+    },
+    {
+      "id": "args",
+      "role": "args",
+      "settings": {"compaction": "on", "reasoning": "legacy", "task_id": "read-search", "history": "same"},
+      "task_kind": "read",
+      "jev_calls": 4,
+      "usage": {"input_tokens": 160, "output_tokens": 30},
+      "cost": {"amount": 0.8, "unit": "usd", "source": "invoice"},
+      "quality": {"external_pass": true, "drop": false},
+      "wall_ms": 850
+    },
+    {
+      "id": "direct",
+      "role": "direct",
+      "settings": {"compaction": "on", "reasoning": "legacy", "task_id": "read-search", "history": "same"},
+      "task_kind": "read",
+      "direct_rate": 1,
+      "usage": {"input_tokens": 0, "output_tokens": 0},
+      "cost": {"amount": 0.2, "unit": "usd", "source": "invoice"},
+      "quality": {"external_pass": true, "drop": false},
+      "wall_ms": 200
+    },
+    {
+      "id": "quality-drop",
+      "role": "forced",
+      "settings": {"compaction": "on", "reasoning": "legacy", "task_id": "read-search", "history": "same"},
+      "cost": {"amount": 0.1, "unit": "usd", "source": "invoice"},
+      "quality": {"external_pass": false, "drop": true}
+    },
+    {
+      "id": "cost-missing",
+      "role": "forced",
+      "settings": {"compaction": "on", "reasoning": "legacy", "task_id": "read-search", "history": "same"},
+      "quality": {"external_pass": true, "drop": false}
+    },
+    {
+      "id": "mismatch",
+      "role": "forced",
+      "settings": {"compaction": "off", "reasoning": "preserve", "task_id": "other", "history": "different"},
+      "cost": {"amount": 0.1, "unit": "usd", "source": "invoice"},
+      "quality": {"external_pass": true, "drop": false}
+    }
+  ],
+  "comparisons": [
+    {"id": "base-forced", "left": "baseline", "right": "forced", "needs_baseline": true},
+    {"id": "base-args", "left": "baseline", "right": "args", "needs_baseline": true},
+    {"id": "base-direct", "left": "baseline", "right": "direct", "needs_baseline": true},
+    {"id": "quality", "left": "baseline", "right": "quality-drop", "needs_baseline": true},
+    {"id": "cost", "left": "baseline", "right": "cost-missing", "needs_baseline": true},
+    {"id": "mismatch", "left": "baseline", "right": "mismatch", "needs_baseline": true}
+  ]
+}

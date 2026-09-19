@@ -99,8 +99,10 @@ var toCodex = map[string]string{
 
 var toGrok = map[string]string{
 	"Read": "read_file", "Edit": "search_replace", "Write": "search_replace",
-	"Bash": "run_terminal_cmd", "Glob": "list_dir", "Grep": "grep",
-	"Agent": "task", "Skill": "workflow", "WebFetch": "web_fetch",
+	// Why: Confirmed Grok catalog uses run_terminal_command / spawn_subagent.
+	// Legacy run_terminal_cmd / task stay aliases in plan.aliasIn only.
+	"Bash": "run_terminal_command", "Glob": "list_dir", "Grep": "grep",
+	"Agent": "spawn_subagent", "Skill": "workflow", "WebFetch": "web_fetch",
 	"WebSearch": "web_search", "TodoWrite": "todo_write", "LSP": "lsp",
 	"AskUserQuestion": "ask_user_question", "EnterPlanMode": "enter_plan_mode",
 	"ExitPlanMode": "exit_plan_mode", "Monitor": "monitor",

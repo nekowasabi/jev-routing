@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>jev-routing dashboard</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 1rem; }
+    h1 { font-size: 1.2rem; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+    th, td { border-bottom: 1px solid #8884; text-align: left; padding: 0.25rem 0.4rem; }
+    th { position: sticky; top: 0; }
+    .missing { opacity: 0.7; font-style: italic; }
+    .err { color: #b00020; }
+    label { display: block; margin: 0.5rem 0; }
+    textarea { width: 100%; min-height: 8rem; }
+    #status { margin: 0.5rem 0; }
+  </style>
+</head>
+<body>
+  <h1>jev-routing</h1>
+  <p id="status" role="status">Loading…</p>
+  <section aria-labelledby="counts-h">
+    <h2 id="counts-h">Counts</h2>
+    <dl id="counts"></dl>
+  </section>
+  <section aria-labelledby="events-h">
+    <h2 id="events-h">Recent requests</h2>
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">seq</th>
+          <th scope="col">source</th>
+          <th scope="col">apply</th>
+          <th scope="col">chosen</th>
+          <th scope="col">reason</th>
+          <th scope="col">changed</th>
+          <th scope="col">jev</th>
+          <th scope="col">usage</th>
+          <th scope="col">time</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+  <section aria-labelledby="cmp-h">
+    <h2 id="cmp-h">Comparison JSON</h2>
+    <p>Local file only. Nothing is uploaded.</p>
+    <label>Paste comparison JSON
+      <textarea id="cmp" aria-label="Comparison JSON"></textarea>
+    </label>
+    <pre id="cmp-out"></pre>
+  </section>
+  <script src="/dashboard/assets/dashboard.js"></script>
+</body>
+</html>

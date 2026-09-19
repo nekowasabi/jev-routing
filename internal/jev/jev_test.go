@@ -111,12 +111,13 @@ func TestAskCompactFallsBackLocallyOnError(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &Client{APIKey: "test", BaseURL: srv.URL, HTTP: srv.Client()}
-	res, err := AskCompact(c, transcript(4), compact.Options{PreserveRecent: 2})
+	items := transcript(4)
+	res, err := AskCompact(c, items, compact.Options{PreserveRecent: 2})
 	if err == nil || !strings.Contains(err.Error(), "jev") {
 		t.Fatalf("want jev error, got %v", err)
 	}
-	if res.Stats.StateStage != "local" {
-		t.Fatalf("want local fallback, got %+v", res.Stats)
+	if res.Stats.Dropped != 0 {
+		t.Fatalf("uncertain compact must keep history, dropped=%d stats=%+v", res.Stats.Dropped, res.Stats)
 	}
 }
 
@@ -126,21 +127,24 @@ func TestAskFitsOversizedState(t *testing.T) {
 		posted, _ = io.ReadAll(r.Body)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"model":   "fake",
-			"answers": map[string]any{"next_tool": map[string]any{"type": "choice", "choice": "grep"}},
+			"answers": map[string]any{"next_tool": map[string]any{"type": "choice", "choice": "grep", "confidence": 0.9}},
 		})
 	}))
 	defer srv.Close()
 	c := &Client{APIKey: "test", BaseURL: srv.URL, Model: "fake", HTTP: srv.Client()}
 	huge := strings.Repeat("。", 40_000)
-	raw := JointTokens(map[string]any{"user_request": huge}, map[string]Question{
+	state := map[string]any{
+		"user_request": "find the test",
+		"actions_taken": []any{map[string]any{"Tool": "grep", "Result": huge, "Input": `{"q":"x"}`}},
+	}
+	qs := map[string]Question{
 		"next_tool": {Type: "choice", Instructions: "pick", Criteria: map[string]string{"grep": "search"}},
-	})
+	}
+	raw := JointTokens(state, qs)
 	if raw <= InputBudget {
 		t.Fatalf("fixture too small: %d", raw)
 	}
-	if _, err := c.Ask(map[string]any{"user_request": huge}, map[string]Question{
-		"next_tool": {Type: "choice", Instructions: "pick", Criteria: map[string]string{"grep": "search"}},
-	}); err != nil {
+	if _, err := c.Ask(state, qs); err != nil {
 		t.Fatal(err)
 	}
 	if len(posted) == 0 {

@@ -119,18 +119,41 @@ jev-routing compact < transcript.json
 | 読む | Read | read_file | read_file | Read | read |
 | 直す | Edit | apply_patch | search_replace | Write | edit |
 | 書く | Write | add_file | search_replace | Write | write |
-| シェル | Bash | exec_command | run_terminal_cmd | Shell | exec |
+| シェル | Bash | exec_command | run_terminal_command | Shell | exec |
 | 検索 | Grep | grep_files | grep | Grep | grep |
 | 一覧 | Glob | list_dir | list_dir | Glob | glob |
-| サブエージェント | Agent | spawn_agent | task | Task | run_subagent |
+| サブエージェント | Agent | spawn_agent | spawn_subagent | Task | run_subagent |
 
-MCP プラグイン名（`github_get_pr` など）は共通です。
+MCP プラグイン名（`github_get_pr` など）は共通です。Grok の旧名 `run_terminal_cmd` / `task` は別名として残し、実カタログに無い名前は作りません。
+
+ループバックで待受しているときだけ、読み取り専用の `http://127.0.0.1:<port>/dashboard` を開けます。公開待受では 404 です。画面から設定は変えられません。料金は表示しません。
+
+## 比較実験（既定では無効）
+
+起動時に一度だけ読みます。不正値は起動失敗です。
+
+| 変数 | 値 | 既定 |
+|---|---|---|
+| `JEV_ROUTING_MODE` | `baseline` / `filter` / `forced` | `filter` |
+| `JEV_COMPACTION` | `off` / `on` | `on` |
+| `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
+| `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | モデル識別子とカンマ区切りの完全一致名 | 空（無効） |
+| `JEV_DIRECT_TOOLS` | 無引数/定数引数 Chat function の許可名 | 空（無効） |
+| `JEV_RUN_ID` | 比較用 ID | 自動生成 |
+
+`forced` は、検証済みの実 Jev 回答がある要求だけ `tool_choice` を固定します。ローカル採点だけでは強制しません。`JEV_ARGS_MODEL` は `forced` 専用で、許可ツールの送信モデルだけを透過的に差し替えます。価格や互換性は推測しません。`JEV_DIRECT_TOOLS` は `forced` と同時だけ有効で、ARGS_MODEL とは併用できません。対象外・不正スキーマは上流へ戻します。実ツール実行と承認はホストに残します。上流拒否の自動再送はありません。
+
+模擬試験は実ホストの承認互換や実サービスの高速化・費用改善の証拠ではありません。読取/検索と自由記述のコマンド・差分は別課題で評価してください。
 
 ## 検証
 
 ```bash
-go test ./...
-jev-routing bench --host grok
+env -u TYPESAFE_API_KEY -u JEV_API_KEY go test -race -count=1 ./...
+go vet ./...
+node --test internal/proxy/assets/dashboard.test.mjs
+python3 -m unittest discover -s scripts -p 'test_summarize_x_cell.py'
+python3 -m unittest discover -s scripts -p 'test_summarize_selection_comparison.py'
+bash scripts/test-x-cell.sh --summarize scripts/testdata/x-cell
 ```
 
 ## 実測比較
@@ -144,4 +167,13 @@ make test-x-cell claude    # 1 製品だけ
 
 結果は `artifacts/x-cell/<日時>/<host>/comparison.json` に出ます。`valid: true` の結果だけを比較に使ってください。`jev` 側でプロキシの書換えリクエストが 1 件も観測されなければ `valid: false` となり、削減値は出力しません。請求トークンは独立セッション間のキャッシュ状態で大きく変わるため、単発結果では比較しません。代わりに `routing_request_chars`（実際にプロキシが受け取り上流へ送った JSON 本文の削減バイト数）と、出力トークン・実行時間の差分を記録します。特に ChatGPT ログインで WebSocket を使う Codex は HTTP プロキシを通らない場合があり、その計測値は無効です。
 
-1 回の差分はモデルの揺れ、プロンプトキャッシュ、サービス混雑の影響を受けます。効果を主張する用途では複数回実行し、各条件の中央値を比較してください。
+保存済み観測の再集計（外部 CLI / ネットワークなし）:
+
+```bash
+bash scripts/test-x-cell.sh --summarize scripts/testdata/x-cell
+python3 scripts/summarize_selection_comparison.py scripts/testdata/selection-comparison
+```
+
+`CHECK: PASS` の自己申告だけでは成功にしません。費用は単価と出典が揃うときだけ出し、欠測は 0 や削減率に変換しません。比較条件（圧縮・推論・課題）が揃わない群は比較不能です。基準リビジョンが無い選択比較は改善率を出しません。
+
+1 回の差分はモデルの揺れ、プロンプトキャッシュ、サービス混雑の影響を受けます。効果を主張する用途では複数回実行し、各条件の中央値を比較してください。模擬フィクスチャの合格を実測の効率改善とは呼びません。

@@ -146,10 +146,10 @@ func TestGrokRewriteDoesNotSendReasoningNone(t *testing.T) {
 		t.Fatalf("xAI rejects effort none: %s", out)
 	}
 	r, ok := got["reasoning"].(map[string]any)
-	if !ok || r["effort"] != "low" {
-		t.Fatalf("reasoning=%v", got["reasoning"])
+	if !ok || r["effort"] != "high" {
+		t.Fatalf("no-catalog requests must keep original reasoning, got %v", got["reasoning"])
 	}
-	if got["reasoning_effort"] != "low" {
+	if got["reasoning_effort"] != "high" {
 		t.Fatalf("reasoning_effort=%v", got["reasoning_effort"])
 	}
 }
@@ -461,9 +461,12 @@ func TestGrokPreambleDoesNotPinSendFeedbackAndFitsJevBudget(t *testing.T) {
 		answers := map[string]any{}
 		if _, ok := in.Questions["next_tool"]; ok {
 			answers["next_tool"] = map[string]any{
-				"type": "choice", "choice": "search_tool", "confidence": 0.7,
-				"probabilities": map[string]float64{"search_tool": 0.7},
+				"type": "choice", "choice": "search_tool", "confidence": 0.9,
+				"probabilities": map[string]float64{"search_tool": 0.9},
 			}
+		}
+		if _, ok := in.Questions["needs_tool"]; ok {
+			answers["needs_tool"] = map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9}
 		}
 		if _, ok := in.Questions["done"]; ok {
 			answers["done"] = map[string]any{"type": "noul", "noul": 0.05, "confidence": 0.9}
@@ -551,7 +554,8 @@ func fakeNextToolClient(t *testing.T, choice string, done float64, calls *int64)
 				"type": "choice", "choice": choice, "confidence": 0.8,
 				"probabilities": map[string]float64{choice: 0.8},
 			},
-			"done": map[string]any{"type": "noul", "noul": done, "confidence": 0.9},
+			"needs_tool": map[string]any{"type": "noul", "noul": done, "confidence": 0.9},
+			"done":       map[string]any{"type": "noul", "noul": done, "confidence": 0.9},
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"model": "fake", "answers": answers})
 	}))
@@ -634,7 +638,7 @@ func hasRequiredToolChoice(got map[string]any) bool {
 }
 
 func TestRewriteKeepsOneSchemaWithoutRequiredChoice(t *testing.T) {
-	client := fakeNextToolClient(t, "grep", 0.05, nil)
+	client := fakeNextToolClient(t, "grep", 0.9, nil)
 	tools := grokWorkCatalog()
 	got, stats := grokRewrite(t, "find the failing assertion in the test file", tools, client)
 	names := toolNames(got)
@@ -658,7 +662,7 @@ func TestRewriteRespondAndDoneKeepFullCatalog(t *testing.T) {
 		t.Fatalf("respond forced choice %v", got["tool_choice"])
 	}
 
-	got, stats = grokRewrite(t, "thanks, that's all", tools, fakeNextToolClient(t, "grep", 0.9, nil))
+	got, stats = grokRewrite(t, "thanks, that's all", tools, fakeNextToolClient(t, "grep", 0.1, nil))
 	if n := len(toolNames(got)); n != want {
 		t.Fatalf("done tools %d want %d stats=%+v", n, want, stats)
 	}
@@ -686,7 +690,7 @@ func TestRewriteNeverShrinksToSendFeedback(t *testing.T) {
 	}
 
 	t.Run("jev-returns-send_feedback", func(t *testing.T) {
-		got, stats := grokRewrite(t, "<user_query>\n"+query+"\n</user_query>", tools, fakeNextToolClient(t, "send_feedback", 0.05, nil))
+		got, stats := grokRewrite(t, "<user_query>\nsummarize this repo's architecture for me\n</user_query>", tools, fakeNextToolClient(t, "send_feedback", 0.05, nil))
 		assertNotOnlySendFeedback(t, got, stats)
 		if len(toolNames(got)) != len(tools) {
 			t.Fatalf("want full catalog after meta pick, got %v", toolNames(got))
@@ -703,7 +707,7 @@ func TestRewriteNeverShrinksToSendFeedback(t *testing.T) {
 }
 
 func TestRewriteAllowsConsecutiveSpawnSchema(t *testing.T) {
-	client := fakeNextToolClient(t, "spawn_subagent", 0.04, nil)
+	client := fakeNextToolClient(t, "spawn_subagent", 0.9, nil)
 	tools := grokWorkCatalog()
 	prompt := "Explore the auth package thoroughly and report how sessions are stored."
 	got1, st1 := grokRewrite(t, prompt, tools, client)

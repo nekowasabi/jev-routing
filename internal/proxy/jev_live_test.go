@@ -51,7 +51,7 @@ func TestLiveJevCatalogAccuracy(t *testing.T) {
 			Instructions: "Which single tool should run next? Agent or Task launches a Claude Code subagent — pick it for broad exploration or parallel work. Pick respond_to_user only when the user request is fully satisfied.",
 			Criteria:     criteria,
 		},
-		"done": {Type: "noul", Instructions: "The user request is fully satisfied; no further tool call is needed, including no subagent."},
+		"needs_tool": {Type: "noul", Instructions: "A tool call is needed now to make progress. This is not a judgment that the overall user task is complete."},
 	}
 
 	for _, tc := range cases {
@@ -64,7 +64,7 @@ func TestLiveJevCatalogAccuracy(t *testing.T) {
 				t.Fatal(err)
 			}
 			choice := jev.ChoiceOf(res, "next_tool")
-			t.Logf("host=%s choice=%s done=%.2f", host.Grok, choice, jev.NoulOf(res, "done"))
+			t.Logf("host=%s choice=%s needs_tool=%.2f", host.Grok, choice, jev.NoulOf(res, "needs_tool"))
 			if choice == "" {
 				t.Fatal("empty next_tool choice")
 			}

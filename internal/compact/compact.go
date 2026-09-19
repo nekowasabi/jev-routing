@@ -147,11 +147,12 @@ func QuestionsFor(c Candidate) map[string]NoulQuestion {
 	return q
 }
 
-func noulOf(answers map[string]float64, id string) float64 {
+func noulOf(answers map[string]float64, id string) (float64, bool) {
 	if answers == nil {
-		return 0
+		return 0, false
 	}
-	return answers[id]
+	v, ok := answers[id]
+	return v, ok
 }
 
 func DecideCall(c Candidate, answers map[string]float64, keepThreshold float64) []Decision {
@@ -171,8 +172,17 @@ func DecideCall(c Candidate, answers map[string]float64, keepThreshold float64) 
 				result = item
 			}
 		}
-		keepResult := noulOf(answers, "result_"+result.ID) >= keepThreshold
-		keepCall := noulOf(answers, "call_"+call.ID) >= keepThreshold
+		resultScore, resultOK := noulOf(answers, "result_"+result.ID)
+		callScore, callOK := noulOf(answers, "call_"+call.ID)
+		// Missing or invalid scores are not low scores: keep both so history is not dropped.
+		if !resultOK || !callOK {
+			return []Decision{
+				{ID: call.ID, Action: ActionKeep, Tool: call.Tool},
+				{ID: result.ID, Action: ActionKeep, Tool: result.Tool},
+			}
+		}
+		keepResult := resultScore >= keepThreshold
+		keepCall := callScore >= keepThreshold
 		if keepResult {
 			return []Decision{
 				{ID: call.ID, Action: ActionKeep, Tool: call.Tool},
@@ -195,13 +205,32 @@ func DecideCall(c Candidate, answers map[string]float64, keepThreshold float64) 
 	if item.Kind == KindSum {
 		key = "summary_" + item.ID
 	}
-	if noulOf(answers, key) >= keepThreshold {
+	score, ok := noulOf(answers, key)
+	if !ok {
+		return []Decision{{ID: item.ID, Action: ActionKeep, Tool: item.Tool}}
+	}
+	if score >= keepThreshold {
 		return []Decision{{ID: item.ID, Action: ActionKeep, Tool: item.Tool}}
 	}
 	if item.Kind == KindSum {
 		return []Decision{{ID: item.ID, Action: ActionDrop, Tool: item.Tool}}
 	}
 	return []Decision{{ID: item.ID, Action: ActionTruncate, Tool: item.Tool}}
+}
+
+// KeepAll returns a result that retains every item. Used when external
+// judgments are missing, invalid, or failed.
+func KeepAll(items []Item, o Options) Result {
+	o = Resolve(o)
+	var decisions []Decision
+	for _, item := range items {
+		if item.Kind == KindText {
+			continue
+		}
+		decisions = append(decisions, Decision{ID: item.ID, Action: ActionKeep, Tool: item.Tool})
+	}
+	applied := Apply(items, decisions, o.TruncateHeadChars)
+	return Result{Decisions: decisions, Items: applied, Stats: Reduction(items, decisions, o.TruncateHeadChars)}
 }
 
 func charsAfter(item Item, action Action, head int) int {

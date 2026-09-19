@@ -1,0 +1,117 @@
+{
+  "cases": [
+    {
+      "id": "filter-search",
+      "host": "grok",
+      "mode": "filter",
+      "task_id": "find-rewrite",
+      "settings": {"compaction": "on", "reasoning": "legacy", "model": "grok-4", "task_id": "find-rewrite"},
+      "source_fingerprint": "src-a",
+      "exit_code": 0,
+      "success_marker": false,
+      "wall_ms": 1200,
+      "optimization_applied": true,
+      "events": [
+        {"id": "e1", "usage": {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 10, "reasoning_tokens": 5}},
+        {"id": "e1", "usage": {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 10, "reasoning_tokens": 5}},
+        {"id": "e2", "usage": {"input_tokens": 40, "output_tokens": 8}}
+      ],
+      "expected_answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+      "external_checks": {
+        "worktree_clean": true,
+        "answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+        "sources": ["rewrite.go:28"]
+      }
+    },
+    {
+      "id": "forced-search",
+      "host": "grok",
+      "mode": "forced",
+      "settings": {"compaction": "on", "reasoning": "legacy", "model": "grok-4", "task_id": "find-rewrite"},
+      "source_fingerprint": "src-a",
+      "exit_code": 0,
+      "success_marker": true,
+      "wall_ms": 900,
+      "optimization_applied": true,
+      "events": [
+        {"id": "f1", "usage": {"input_tokens": 80, "output_tokens": 15, "cached_input_tokens": 8, "reasoning_tokens": 3}}
+      ],
+      "expected_answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+      "external_checks": {
+        "worktree_clean": true,
+        "answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+        "sources": ["rewrite.go:28"]
+      }
+    },
+    {
+      "id": "misaligned",
+      "host": "grok",
+      "mode": "forced",
+      "settings": {"compaction": "off", "reasoning": "preserve", "model": "other", "task_id": "find-rewrite"},
+      "source_fingerprint": "src-a",
+      "exit_code": 0,
+      "wall_ms": 100,
+      "events": [],
+      "expected_answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+      "external_checks": {
+        "worktree_clean": true,
+        "answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+        "sources": ["rewrite.go:28"]
+      }
+    },
+    {
+      "id": "fake-pass",
+      "host": "grok",
+      "mode": "filter",
+      "settings": {"compaction": "on", "reasoning": "legacy", "model": "grok-4", "task_id": "find-rewrite"},
+      "source_fingerprint": "src-a",
+      "exit_code": 1,
+      "success_marker": true,
+      "wall_ms": 50,
+      "usage": {"input_tokens": 10, "output_tokens": 2},
+      "expected_answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+      "external_checks": {
+        "worktree_clean": false,
+        "answers": {"func": "Wrong", "file": "nope.go"},
+        "sources": []
+      }
+    },
+    {
+      "id": "correct-no-marker",
+      "host": "grok",
+      "mode": "filter",
+      "settings": {"compaction": "on", "reasoning": "legacy", "model": "grok-4", "task_id": "find-rewrite"},
+      "source_fingerprint": "src-a",
+      "exit_code": 0,
+      "success_marker": false,
+      "wall_ms": 70,
+      "events": [{"id": "c1", "usage": {"input_tokens": 5, "output_tokens": 1}}],
+      "expected_answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+      "external_checks": {
+        "worktree_clean": true,
+        "answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+        "sources": ["rewrite.go:28"]
+      }
+    },
+    {
+      "id": "usage-missing",
+      "host": "grok",
+      "mode": "filter",
+      "settings": {"compaction": "on", "reasoning": "legacy", "model": "grok-4", "task_id": "find-rewrite"},
+      "source_fingerprint": "src-a",
+      "exit_code": 0,
+      "events": [{}],
+      "expected_answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+      "external_checks": {
+        "worktree_clean": true,
+        "answers": {"func": "Rewrite", "file": "internal/proxy/rewrite.go"},
+        "sources": ["x"]
+      }
+    }
+  ],
+  "comparisons": [
+    {"id": "filter-vs-forced", "left": "filter-search", "right": "forced-search"},
+    {"id": "misaligned-cmp", "left": "filter-search", "right": "misaligned"},
+    {"id": "missing-usage-cmp", "left": "filter-search", "right": "usage-missing"}
+  ]
+}
