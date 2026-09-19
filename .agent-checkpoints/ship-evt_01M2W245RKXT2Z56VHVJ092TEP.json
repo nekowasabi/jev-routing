@@ -1,0 +1,9 @@
+{
+  "status": "all_done",
+  "task": "ship",
+  "agents": {
+    "git_info": "done",
+    "change_intent": "done",
+    "history": "done"
+  }
+}

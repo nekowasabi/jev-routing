@@ -1,0 +1,2 @@
+ok  	github.com/nekowasabi/jev-routing/internal/plan	0.222s
+ok  	github.com/nekowasabi/jev-routing/internal/proxy	0.319s
