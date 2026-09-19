@@ -4,7 +4,7 @@ ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test test-jev-live clean
+.PHONY: build install test test-jev-live test-x-cell clean
 
 build:
 	go build -o bin/$(BINARY) ./cmd/jev-routing
@@ -19,6 +19,13 @@ test:
 # Requires TYPESAFE_API_KEY or JEV_API_KEY. Two POSTs per run.
 test-jev-live:
 	go test -tags jev_live ./internal/proxy -run TestLiveJevCatalogAccuracy -count=1 -v
+
+# 実課金のある比較計測。例: make test-x-cell claude
+test-x-cell:
+	./scripts/test-x-cell.sh $(filter claude codex grok cursor devin,$(MAKECMDGOALS))
+
+claude codex grok cursor devin:
+	@:
 
 clean:
 	rm -rf bin

@@ -132,3 +132,16 @@ MCP プラグイン名（`github_get_pr` など）は共通です。
 go test ./...
 jev-routing bench --host grok
 ```
+
+## 実測比較
+
+通常テストには含めません。各対象を同じコミットから作る別 worktree で 1 回ずつ実行し、素の CLI と `jev-routing` 経由のトークン使用量・経過時間を JSON で保存します。
+
+```bash
+make test-x-cell           # Claude Code → Codex → Grok Build → Cursor → Devin
+make test-x-cell claude    # 1 製品だけ
+```
+
+結果は `artifacts/x-cell/<日時>/<host>/comparison.json` に出ます。`valid: true` の結果だけを比較に使ってください。`jev` 側でプロキシの書換えリクエストが 1 件も観測されなければ `valid: false` となり、削減値は出力しません。請求トークンは独立セッション間のキャッシュ状態で大きく変わるため、単発結果では比較しません。代わりに `routing_request_chars`（実際にプロキシが受け取り上流へ送った JSON 本文の削減バイト数）と、出力トークン・実行時間の差分を記録します。特に ChatGPT ログインで WebSocket を使う Codex は HTTP プロキシを通らない場合があり、その計測値は無効です。
+
+1 回の差分はモデルの揺れ、プロンプトキャッシュ、サービス混雑の影響を受けます。効果を主張する用途では複数回実行し、各条件の中央値を比較してください。

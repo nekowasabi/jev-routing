@@ -168,13 +168,24 @@ func cmdRun(args []string) int {
 	cmd.Env = host.ChildEnv(h, listen)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
+		writeRunStats(srv)
 		if ee, ok := err.(*exec.ExitError); ok {
 			return ee.ExitCode()
 		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	writeRunStats(srv)
 	return 0
+}
+
+func writeRunStats(srv *proxy.Server) {
+	path := os.Getenv("JEV_RUN_STATS")
+	if path == "" {
+		return
+	}
+	before, after := srv.RoutingChars()
+	_ = os.WriteFile(path, []byte(fmt.Sprintf("{\"requests\":%d,\"charsBefore\":%d,\"charsAfter\":%d}\n", srv.RequestCount(), before, after)), 0o644)
 }
 
 func listenForRun() (net.Listener, error) {

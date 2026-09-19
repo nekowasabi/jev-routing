@@ -17,13 +17,28 @@ import (
 )
 
 type Server struct {
-	Listen   string
-	Host     host.ID
-	Upstream *url.URL
-	Client   *jev.Client
-	Log      *log.Logger
-	mu       sync.Mutex
-	Last     RewriteStats
+	Listen      string
+	Host        host.ID
+	Upstream    *url.URL
+	Client      *jev.Client
+	Log         *log.Logger
+	mu          sync.Mutex
+	Last        RewriteStats
+	Requests    int
+	CharsBefore int
+	CharsAfter  int
+}
+
+func (s *Server) RequestCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Requests
+}
+
+func (s *Server) RoutingChars() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.CharsBefore, s.CharsAfter
 }
 
 func DefaultUpstream(h host.ID) string {
@@ -86,7 +101,12 @@ func (s *Server) Handler() http.Handler {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(s.Last)
+		_ = json.NewEncoder(w).Encode(struct {
+			RewriteStats
+			Requests    int `json:"requests"`
+			CharsBefore int `json:"charsBefore"`
+			CharsAfter  int `json:"charsAfter"`
+		}{s.Last, s.Requests, s.CharsBefore, s.CharsAfter})
 	})
 	proxy := httputil.NewSingleHostReverseProxy(s.Upstream)
 	orig := proxy.Director
@@ -112,9 +132,13 @@ func (s *Server) Handler() http.Handler {
 				if rerr == nil {
 					s.mu.Lock()
 					s.Last = stats
+					s.CharsBefore += len(raw)
 					s.mu.Unlock()
 					s.Log.Print(FormatStats(stats))
 					raw = rewritten
+					s.mu.Lock()
+					s.CharsAfter += len(raw)
+					s.mu.Unlock()
 				} else {
 					s.Log.Printf("rewrite skipped: %v", rerr)
 				}
