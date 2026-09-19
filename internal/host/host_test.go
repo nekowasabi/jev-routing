@@ -47,6 +47,15 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestNativeGrokCatalogNames(t *testing.T) {
+	if Native(Grok, "Bash") != "run_terminal_command" {
+		t.Fatalf("grok Bash: %s", Native(Grok, "Bash"))
+	}
+	if Native(Grok, "Agent") != "spawn_subagent" {
+		t.Fatalf("grok Agent: %s", Native(Grok, "Agent"))
+	}
+}
+
 func TestNativeCursorDevin(t *testing.T) {
 	if Native(Cursor, "Bash") != "Shell" {
 		t.Fatalf("cursor Bash: %s", Native(Cursor, "Bash"))

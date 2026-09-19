@@ -238,12 +238,15 @@ func aliasIn(set map[string]bool, want string) string {
 		return want
 	}
 	alts := map[string][]string{
-		"Agent": {"Task", "task", "spawn_agent"},
-		"Task":  {"Agent", "spawn_agent"},
-		"Grep":  {"grep", "grep_files"},
-		"Read":  {"read_file"},
-		"Edit":  {"search_replace", "apply_patch"},
-		"Bash":  {"run_terminal_cmd", "exec_command"},
+		"Agent":                {"Task", "task", "spawn_agent", "spawn_subagent"},
+		"Task":                 {"Agent", "spawn_agent", "spawn_subagent", "task"},
+		"spawn_subagent":       {"Agent", "Task", "task", "spawn_agent"},
+		"Grep":                 {"grep", "grep_files"},
+		"Read":                 {"read_file"},
+		"Edit":                 {"search_replace", "apply_patch"},
+		"Bash":                 {"run_terminal_command", "run_terminal_cmd", "exec_command", "shell", "shell_command", "exec"},
+		"run_terminal_command": {"run_terminal_cmd", "exec_command", "shell", "shell_command", "Bash"},
+		"exec_command":         {"shell", "shell_command", "run_terminal_command", "Bash"},
 	}
 	for _, a := range alts[want] {
 		if set[a] {
@@ -318,7 +321,7 @@ func scoreCatalog(request string, actions []Action, specs []Spec) (string, float
 
 func isAgent(n string) bool {
 	n = strings.ToLower(n)
-	return n == "agent" || n == "task" || n == "spawn_agent" || strings.Contains(n, "subagent")
+	return n == "agent" || n == "task" || n == "spawn_agent" || n == "spawn_subagent" || strings.Contains(n, "subagent")
 }
 
 func isGrep(n string) bool {

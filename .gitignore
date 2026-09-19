@@ -7,3 +7,5 @@
 .tgrep/
 bin/
 artifacts/
+__pycache__/
+*.pyc

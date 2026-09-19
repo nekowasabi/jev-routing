@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -37,7 +38,11 @@ func TestDefaultUpstream(t *testing.T) {
 }
 
 func TestLooksLikeLLM(t *testing.T) {
-	yes := []string{"/v1/messages", "/v1/chat/completions", "/v1/responses", "/aiserver.v1.AgentService/Run"}
+	yes := []string{
+		"/v1/messages", "/v1/chat/completions", "/v1/responses",
+		"/aiserver.v1.AgentService/Run", "/agent.v1.AgentService/Run",
+		"/v3/organizations/org/sessions", "/v1/inference",
+	}
 	no := []string{"/healthz", "/stats"}
 	for _, p := range yes {
 		if !looksLikeLLM(p) {
@@ -105,5 +110,36 @@ func TestHandlerNonCancelProxyErrorLogsOnProxyLogger(t *testing.T) {
 	}
 	if !strings.Contains(proxyLog.String(), "proxy error") {
 		t.Fatalf("proxy log missing error: %q", proxyLog.String())
+	}
+}
+
+func TestHandlerNonJSONLLMCountsCharsAndPassthrough(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("CURSOR_UPSTREAM", upstream.URL)
+
+	srv, err := New("127.0.0.1:0", host.Cursor, nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte{0x00, 0x00, 0x00, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04}
+	req := httptest.NewRequest(http.MethodPost, "/aiserver.v1.AgentService/Run", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	snap := srv.RunStats()
+	if snap["requests"] != 1 {
+		t.Fatalf("requests=%v", snap["requests"])
+	}
+	if snap["rewritten"] != 0 {
+		t.Fatalf("rewritten=%v (protobuf cannot be filtered)", snap["rewritten"])
+	}
+	if snap["passthrough"] != 1 {
+		t.Fatalf("passthrough=%v", snap["passthrough"])
+	}
+	if snap["charsBefore"] != len(body) || snap["charsAfter"] != len(body) {
+		t.Fatalf("chars %v→%v want %d", snap["charsBefore"], snap["charsAfter"], len(body))
 	}
 }

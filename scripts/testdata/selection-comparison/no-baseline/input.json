@@ -1,0 +1,15 @@
+{
+  "required_baseline_revision": "f6b9dcfd2d0164e525b6ff981e17e6df26932e29",
+  "groups": [
+    {
+      "id": "forced",
+      "role": "forced",
+      "settings": {"compaction": "on", "reasoning": "legacy", "task_id": "read-search", "history": "same"},
+      "cost": {"amount": 1.0, "unit": "usd", "source": "invoice"},
+      "quality": {"external_pass": true, "drop": false}
+    }
+  ],
+  "comparisons": [
+    {"id": "needs-base", "left": "forced", "right": "forced", "needs_baseline": true}
+  ]
+}

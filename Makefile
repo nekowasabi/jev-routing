@@ -21,6 +21,7 @@ test-jev-live:
 	go test -tags jev_live ./internal/proxy -run TestLiveJevCatalogAccuracy -count=1 -v
 
 # 実課金のある比較計測。例: make test-x-cell claude
+# Codex は CODEX_MODEL（既定 gpt-5.6-terra）。短名 terra は ChatGPT ログインで 400。
 test-x-cell:
 	./scripts/test-x-cell.sh $(filter claude codex grok cursor devin,$(MAKECMDGOALS))
 
