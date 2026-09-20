@@ -43,6 +43,14 @@ jev-routing run devin             # DEVIN_API_URL をプロキシへ
 
 `run` はまず `127.0.0.1:8787` を使い、使用中なら空きポートを自動割当します。`JEV_LISTEN` を指定すると、そのアドレスを優先します。
 
+### tmux で起動する
+
+```bash
+jev-routing run --tmux codex
+```
+
+すでに tmux 内なら、現在の pane でホストを起動するため、tmux をネストせず pane border は一重のままです。tmux 外からは、実行ごとに独立した tmux セッションを作成します。
+
 既存の `grok login` / `claude login` / `codex login` / `cursor-agent login` / `devin auth` はそのままです。
 
 手で環境を書く場合:

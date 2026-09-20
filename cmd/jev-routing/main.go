@@ -135,6 +135,7 @@ func cmdRun(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dashboard := fs.Bool("dashboard", false, "open the local dashboard after startup")
+	tmux := fs.Bool("tmux", false, "run the host in tmux")
 	if err := fs.Parse(args); err != nil || len(fs.Args()) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: jev-routing run claude|codex|grok|cursor|devin")
 		return 2
@@ -198,7 +199,13 @@ func cmdRun(args []string) int {
 		printEnvHint(h, listen)
 		<-make(chan struct{})
 	}
-	cmd := exec.Command(path, host.CommandArgs(h, listen, rest)...)
+	commandArgs := host.CommandArgs(h, listen, rest)
+	if *tmux && os.Getenv("TMUX") == "" {
+		// Why: a live parent pane already satisfies ateam; a nested client draws a second border.
+		commandArgs = append([]string{"new-session", "-s", fmt.Sprintf("jev-routing-%d", os.Getpid()), path}, commandArgs...)
+		path = "tmux"
+	}
+	cmd := exec.Command(path, commandArgs...)
 	cmd.Env = host.ChildEnv(h, listen)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {

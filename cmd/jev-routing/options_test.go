@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -134,5 +135,61 @@ func TestRunDashboardOpensAfterStartup(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "http://127.0.0.1:") || !strings.HasSuffix(got, "/dashboard") {
 		t.Fatalf("dashboard URL = %q", got)
+	}
+}
+
+func TestRunTmuxCreatesIndependentSession(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "argv")
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >\"$TEST_TMUX_ARGV\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TEST_TMUX_ARGV", argsPath)
+	t.Setenv("TMUX", "")
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("JEV_LISTEN", "127.0.0.1:0")
+	t.Setenv("JEV_RUN_STATS", "")
+	if code := cmdRun([]string{"--tmux", "codex"}); code != 0 {
+		t.Fatalf("run exit=%d", code)
+	}
+	raw, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(got) < 4 || got[0] != "new-session" || got[1] != "-s" || got[2] != fmt.Sprintf("jev-routing-%d", os.Getpid()) || filepath.Base(got[3]) != "codex" {
+		t.Fatalf("tmux argv = %#v, want an independent session and codex command", got)
+	}
+}
+
+func TestRunTmuxInsideTmuxUsesCurrentPane(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "tmux-argv")
+	codexPath := filepath.Join(dir, "codex-ran")
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >\"$TEST_TMUX_ARGV\"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\n: >\"$TEST_CODEX_RAN\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TEST_TMUX_ARGV", argsPath)
+	t.Setenv("TEST_CODEX_RAN", codexPath)
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("JEV_LISTEN", "127.0.0.1:0")
+	t.Setenv("JEV_RUN_STATS", "")
+	if code := cmdRun([]string{"--tmux", "codex"}); code != 0 {
+		t.Fatalf("run exit=%d", code)
+	}
+	if _, err := os.Stat(codexPath); err != nil {
+		t.Fatalf("codex was not run in the current pane: %v", err)
+	}
+	if _, err := os.Stat(argsPath); !os.IsNotExist(err) {
+		t.Fatalf("tmux was invoked inside tmux: %v", err)
 	}
 }
