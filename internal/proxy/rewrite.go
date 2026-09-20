@@ -46,7 +46,7 @@ const (
 	applyForced = "forced"
 	applyDirect = "direct"
 
-	adoptConfidence = 0.8
+	adoptConfidence = 0.85
 	needsToolYes    = 0.8
 	needsToolNo     = 0.2
 )

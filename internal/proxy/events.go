@@ -43,6 +43,8 @@ type Event struct {
 	Catalog            *CatalogShape    `json:"catalog,omitempty"`
 	JevAttempts        []JevAttempt     `json:"jevAttempts,omitempty"`
 	JevCalls           int              `json:"jevCalls"`
+	SelectionJevCalls  int              `json:"selectionJevCalls,omitempty"`
+	OtherJevCalls      int              `json:"otherJevCalls,omitempty"`
 	JevCached          int              `json:"jevCached"`
 	JevFailed          int              `json:"jevFailed"`
 	UpstreamStatus     *int             `json:"upstreamStatus"`
@@ -65,6 +67,16 @@ type JevAttempt struct {
 	ErrKind   string  `json:"errKind,omitempty"`
 	Status    int     `json:"status,omitempty"`
 	Questions int     `json:"questions,omitempty"`
+}
+
+func selectionJevCalls(attempts []JevAttempt) int {
+	n := 0
+	for _, a := range attempts {
+		if a.Purpose == "selection" {
+			n++
+		}
+	}
+	return n
 }
 
 type EventLog struct {

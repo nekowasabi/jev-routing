@@ -64,8 +64,9 @@
   }
 
   function jevSkipReason(e) {
-    if ((e.jevCalls || 0) > 0) return "Jev 実行";
-    if (e.source === "local") return "ローカル判定";
+    if ((e.selectionJevCalls || 0) > 0) return "ツール選定でJev実行";
+    if (e.source === "local") return "ローカル分類で採用";
+    if ((e.otherJevCalls || 0) > 0) return "選定外でJev実行";
     return e.reason ? "安全側: " + e.reason : "未記録";
   }
 

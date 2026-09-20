@@ -41,6 +41,20 @@ func TestDecideSpecsReadPromptDoesNotPickRunSubagent(t *testing.T) {
 	}
 }
 
+func TestDecideSpecsSearchAndReadDoNotPickExec(t *testing.T) {
+	specs := []Spec{
+		{Name: "read", Desc: "Read a file from the workspace."},
+		{Name: "grep", Desc: "Search file contents."},
+		{Name: "exec", Desc: "Run a shell command."},
+	}
+	if got := DecideSpecs("Search the source for the failing assertion.", nil, specs, host.Devin); got.Tool != "grep" {
+		t.Fatalf("search selected %s", got.Tool)
+	}
+	if got := DecideSpecs("Read the known implementation file.", nil, specs, host.Devin); got.Tool != "read" {
+		t.Fatalf("read selected %s", got.Tool)
+	}
+}
+
 const xcellLocatePrompt = "ファイルを変更せず、RewriteWith、extractTools、applyCompactToMessages、DefaultOptions、DefaultUpstream の定義を調べてください。各関数について個別のツール呼び出しで定義を検索し、別のツール呼び出しで本文を読んで確認してください（合計10回以上、並列化せず順に実行）。最終回答は関数名をキー、リポジトリ相対パス:定義行番号を値にしたJSONオブジェクトだけにしてください。説明文や完了マーカーは不要です。"
 
 func xcellDevinSpecs() []Spec {

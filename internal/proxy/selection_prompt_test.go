@@ -56,10 +56,10 @@ func TestSelectionAcceptsOfficialNoulWithoutConfidence(t *testing.T) {
 		wantTool    string
 		wantReason  string
 	}{
-		{"yes-boundary", 0.8, 0.8, "exec", ""},
+		{"yes-boundary", 0.8, 0.85, "exec", ""},
 		{"no-boundary", 0.2, 0.9, plan.Respond, ""},
 		{"uncertain", 0.5, 0.9, "exec", reasonUncertainJev},
-		{"choice-still-uncertain", 0.99, 0.799, "exec", reasonUncertainJev},
+		{"choice-still-uncertain", 0.99, 0.849, "exec", reasonUncertainJev},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := jevAnswers(t, "exec", tc.confidence, tc.probability, 0, func(w http.ResponseWriter, r *http.Request) {

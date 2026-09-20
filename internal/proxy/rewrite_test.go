@@ -592,8 +592,8 @@ func fakeNextToolClient(t *testing.T, choice string, done float64, calls *int64)
 		}
 		answers := map[string]any{
 			"next_tool": map[string]any{
-				"type": "choice", "choice": choice, "confidence": 0.8,
-				"probabilities": map[string]float64{choice: 0.8},
+				"type": "choice", "choice": choice, "confidence": 0.85,
+				"probabilities": map[string]float64{choice: 0.85},
 			},
 			"needs_tool": map[string]any{"type": "noul", "noul": done, "confidence": 0.9},
 			"done":       map[string]any{"type": "noul", "noul": done, "confidence": 0.9},
