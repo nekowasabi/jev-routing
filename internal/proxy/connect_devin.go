@@ -36,6 +36,7 @@ func (l *lazyConnectDevin) Read(p []byte) (int, error) {
 	return emitConnectFrame(p, &l.buf, &l.err, l.src, func(frame []byte) []byte {
 		out, stats, catalog, processed := rewriteConnectDevinFrame(l.ctx, frame, l.s.Host, l.s.Client, l.s.Options)
 		observeConnectFrame(l.s.events, l.seq, catalog)
+		l.s.observeHostFrames(frame)
 		if processed {
 			l.record(frame, out, stats, catalog)
 		}
@@ -119,7 +120,13 @@ func rewriteConnectDevinFrame(ctx context.Context, frame []byte, h host.ID, clie
 	}
 	shape := catalogShape(lifted)
 	rewritten, stats, err := RewriteWith(ctx, lifted, h, client, opt)
-	if err != nil || !stats.Changed {
+	if err != nil {
+		return frame, stats, shape, true
+	}
+	if opt.AfterRewrite != nil {
+		rewritten = opt.AfterRewrite(rewritten)
+	}
+	if !stats.Changed && string(rewritten) == original {
 		return frame, stats, shape, true
 	}
 	newRaw, ok := rewriteProtoStrings(raw, func(s string) (string, bool) {
@@ -435,7 +442,13 @@ func rewriteConnectDevinNativeProto(ctx context.Context, frame []byte, flags byt
 	}
 	shape := mergeDevinCatalog(catalogShape(catalogBody), protoFieldCatalog(raw))
 	rewritten, stats, err := RewriteWith(ctx, lifted, h, client, opt)
-	if err != nil || !stats.Changed {
+	if err != nil {
+		return frame, stats, shape, true
+	}
+	if opt.AfterRewrite != nil {
+		rewritten = opt.AfterRewrite(rewritten)
+	}
+	if !stats.Changed && bytes.Equal(rewritten, lifted) {
 		return frame, stats, shape, true
 	}
 	var next map[string]any

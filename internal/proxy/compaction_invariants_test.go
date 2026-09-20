@@ -451,7 +451,7 @@ func TestCompactionStatsMeasureAppliedHistory(t *testing.T) {
 				}
 				req := map[string]any{key: msgs, "tools": []any{tool}}
 				raw, _ := json.Marshal(req)
-				out, stats, err := Rewrite(raw, h, nil)
+				out, stats, err := RewriteWith(nil, raw, h, nil, localOpt())
 				if err != nil || !stats.Changed || stats.CompactApplied != stale {
 					t.Fatalf("unexpected application: stats=%+v err=%v", stats, err)
 				}

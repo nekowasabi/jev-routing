@@ -65,9 +65,11 @@ func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
 		since = n
 	}
 	events, recorded, oldest, truncated := s.events.Snapshot(since)
+	all, _, _, _ := s.events.Snapshot(0)
 	s.mu.Lock()
 	counts := s.events.Counts()
 	s.mu.Unlock()
+	metrics := MergeMetrics(MetricsFromEvents(all), MetricsFromApps(s.Apps.Snapshot()))
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -82,6 +84,8 @@ func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
 			"runId":      s.Options.RunID,
 		},
 		"events":           events,
+		"metrics":          metrics,
+		"applications":     publicApplications(s.Apps.Snapshot()),
 		"historyTruncated": truncated,
 	})
 }

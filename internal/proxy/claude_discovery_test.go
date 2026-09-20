@@ -18,7 +18,7 @@ func TestClaudeDiscoverySurvivesFiltering(t *testing.T) {
 		"tools":    []any{read, search, deferred, map[string]any{"name": "Write", "input_schema": map[string]any{"type": "object"}}},
 	}
 	body, _ := json.Marshal(root)
-	opt := DefaultOptions()
+	opt := localOpt()
 	opt.Compaction, opt.Reasoning = CompactionOff, ReasoningPreserve
 	out, stats, err := RewriteWith(nil, body, host.Claude, nil, opt)
 	if err != nil || stats.Apply != applyFilter || stats.Chosen != "Read" {

@@ -77,4 +77,17 @@ func TestItemsFromMessagesKeepsXCellAskOverCheckout(t *testing.T) {
 	if strings.Contains(only, "定義を調べ") || strings.Contains(only, "ファイルを変更せず") {
 		t.Fatalf("checkout-only claimed x-cell ask: %q", only)
 	}
+
+	echo := "Run this exact shell command now: echo jev-live-cli-ok. Use a shell or exec tool."
+	_, user = itemsFromMessages([]any{
+		map[string]any{"role": "user", "content": ask},
+		map[string]any{"role": "user", "content": echo},
+	})
+	if !strings.Contains(user, "echo jev-live-cli-ok") {
+		t.Fatalf("explicit shell ask lost to locate history: %q", user)
+	}
+	d = plan.DecideSpecs(user, nil, specs, host.Grok)
+	if d.Tool != "exec" {
+		t.Fatalf("shell ask on locate history = %+v, want exec", d)
+	}
 }

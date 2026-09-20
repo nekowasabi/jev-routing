@@ -38,7 +38,7 @@ func TestRewriteConnectDevinGetChatMessageFiltersPromptTools(t *testing.T) {
 		t.Fatalf("fixture must exceed protoLikelyString cap, got %d", len(raw))
 	}
 	frame := connectFrame(0, protoString(1, string(raw)))
-	out, stats, catalog, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, DefaultOptions())
+	out, stats, catalog, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, localOpt())
 	if !processed {
 		t.Fatal("frame not processed")
 	}
@@ -71,7 +71,7 @@ func TestHandlerConnectDevinGetChatMessageRewritesFirstFrame(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Devin, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Devin, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestRewriteConnectDevinProtoHistogramWhenNoJSON(t *testing.T) {
 	raw = append(raw, protoString(7, "c")...)
 	raw = append(raw, protoString(4, `{`)...)
 	frame := connectFrame(0, raw)
-	_, _, catalog, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, DefaultOptions())
+	_, _, catalog, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, localOpt())
 	if !processed {
 		t.Fatal("frame not processed")
 	}
@@ -140,7 +140,7 @@ func TestHandlerConnectDevinGetChatMessageProtoCatalog(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Devin, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Devin, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func devinNativeGetChatMessage() []byte {
 func TestRewriteConnectDevinNativeProtoCatalogFilters(t *testing.T) {
 	raw := devinNativeGetChatMessage()
 	frame := connectFrame(0, raw)
-	out, stats, catalog, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, DefaultOptions())
+	out, stats, catalog, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, localOpt())
 	if !processed {
 		t.Fatal("frame not processed")
 	}
@@ -270,7 +270,7 @@ func TestHandlerConnectDevinGetChatMessageNativeProtoRewrites(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Devin, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Devin, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func devinNativeGetChatMessageWithHistory() []byte {
 func TestRewriteConnectDevinNativeProtoCompactsHistory(t *testing.T) {
 	raw := devinNativeGetChatMessageWithHistory()
 	frame := connectFrame(0, raw)
-	out, stats, catalog, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, DefaultOptions())
+	out, stats, catalog, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, localOpt())
 	if !processed {
 		t.Fatal("frame not processed")
 	}
@@ -721,7 +721,7 @@ func TestHandlerConnectDevinEndStreamErrorMarksFinish(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Devin, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Devin, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +800,7 @@ func TestHandlerConnectDevinGetChatMessageStreamIsNotBuffered(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Devin, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Devin, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -855,5 +855,168 @@ func TestMergeDevinCatalogKeepsMaxP1Bytes(t *testing.T) {
 	got := mergeDevinCatalog(earlier, later)
 	if got.HistoryTypes["p1_bytes"] != 4096 {
 		t.Fatalf("p1_bytes=%d want 4096", got.HistoryTypes["p1_bytes"])
+	}
+}
+
+func TestHandlerConnectDevinObservesNativeExecCallFrame(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Devin, nil, io.Discard, localOpt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := connectFrame(0, append(append(
+		protoString(1, "exec"),
+		protoString(2, `{"command": "echo jev-live-cli-ok"}`)...,
+	), protoString(12, "ae6ad5f5-082e-4179-ba17-a8a51269e9ae")...))
+	req := httptest.NewRequest(http.MethodPost, "/exa.api_server_pb.ApiServerService/GetChatMessage", bytes.NewReader(call))
+	req.Header.Set("Content-Type", "application/connect+proto")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	started := srv.Apps.Get("ae6ad5f5-082e-4179-ba17-a8a51269e9ae")
+	if started == nil || started.State != AppStarted {
+		t.Fatalf("native exec call was not started: %+v", srv.Apps.Snapshot())
+	}
+	result := connectFrame(0, protoString(1, "Output from command in shell 14e7f1:\njev-live-cli-ok\n\n\nExit code: 0"))
+	req = httptest.NewRequest(http.MethodPost, "/exa.api_server_pb.ApiServerService/GetChatMessage", bytes.NewReader(result))
+	req.Header.Set("Content-Type", "application/connect+proto")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	got := srv.Apps.Get("ae6ad5f5-082e-4179-ba17-a8a51269e9ae")
+	if got == nil || got.State != AppVerified || !strings.Contains(got.Result, "jev-live-cli-ok") {
+		t.Fatalf("native exec result was not correlated: %+v", got)
+	}
+}
+
+func TestHandlerConnectDevinObservesExecHistory(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Devin, nil, io.Discard, localOpt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hist := func(parts ...string) []byte {
+		var b []byte
+		for i, p := range parts {
+			b = append(b, protoString(i+1, p)...)
+		}
+		return b
+	}
+	var raw []byte
+	raw = append(raw, protoRepeated(3, [][]byte{
+		hist("user", "run this exact exec tool: echo jev-live-cli-ok"),
+		hist("assistant", "exec", `{"command":"echo jev-live-cli-ok"}`),
+		hist("tool", "exec", "jev-live-cli-ok\n"),
+	})...)
+	raw = append(raw, protoRepeated(10, [][]byte{
+		devinNativeProtoTool("read", "Read a file"),
+		devinNativeProtoTool("edit", "Edit a file"),
+		devinNativeProtoTool("exec", "Run a command"),
+		devinNativeProtoTool("get_output", "Read command output"),
+	})...)
+	frame := connectFrame(0, raw)
+	req := httptest.NewRequest(http.MethodPost, "/exa.api_server_pb.ApiServerService/GetChatMessage", bytes.NewReader(frame))
+	req.Header.Set("Content-Type", "application/connect+proto")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	var got *Application
+	for _, app := range srv.Apps.Snapshot() {
+		if app.State == AppVerified && strings.Contains(app.Result, "jev-live-cli-ok") {
+			got = app
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("devin exec history was not correlated: %+v", srv.Apps.Snapshot())
+	}
+}
+
+func TestHandlerConnectDevinAutoAppliesSkill(t *testing.T) {
+	var got []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
+	opt := localOpt()
+	opt.AutoApply = true
+	opt.ApplicationPolicy = PolicyRequired
+	opt.KindModes = map[string]string{"skill": KindApply}
+	srv, err := NewWithOptions("127.0.0.1:0", host.Devin, nil, io.Discard, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"prompt": "use the skill-review skill",
+		"tools": []any{
+			map[string]any{"name": "skill-review", "description": "review skill"},
+			map[string]any{"name": "read", "description": "Read a file"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := connectFrame(0, protoString(1, string(raw)))
+	req := httptest.NewRequest(http.MethodPost, "/exa.api_server_pb.ApiServerService/GetChatMessage", bytes.NewReader(frame))
+	req.Header.Set("Content-Type", "application/connect+proto")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if srv.LastDelivered == "" {
+		t.Fatalf("skill not delivered on Devin Connect run path: applyErr=%q", srv.ApplyErr)
+	}
+	payload := decodeConnectPayload(t, got)
+	inner := firstLD(payload, 1)
+	if !bytes.Contains(inner, []byte("jev-routing context")) {
+		t.Fatalf("devin writeback missing skill context: %s", inner)
+	}
+}
+
+func TestConnectDevinWritesExistingPromptContext(t *testing.T) {
+	extra := "source: skill://review/SKILL.md"
+	opt := localOpt()
+	opt.AfterRewrite = func(body []byte) []byte {
+		out, err := ApplyHostContext(host.Devin, body, extra)
+		if err != nil {
+			t.Fatalf("writeback %v body=%s", err, body)
+		}
+		return out
+	}
+	raw := devinPromptToolsJSON(t)
+	frame := connectFrame(0, protoString(1, string(raw)))
+	out, _, _, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, opt)
+	if !processed {
+		t.Fatal("frame not processed")
+	}
+	payload := decodeConnectPayload(t, out)
+	got := firstLD(payload, 1)
+	var obj map[string]any
+	if err := json.Unmarshal(got, &obj); err != nil {
+		t.Fatal(err)
+	}
+	prompt, _ := obj["prompt"].(string)
+	if !strings.Contains(prompt, "auth middleware") {
+		t.Fatalf("lost original prompt: %q", prompt)
+	}
+	if !strings.Contains(prompt, extra) {
+		t.Fatalf("missing delivered context: %q", prompt)
+	}
+	if _, ok := obj["tool_choice"]; ok {
+		t.Fatal("invented tool_choice")
 	}
 }

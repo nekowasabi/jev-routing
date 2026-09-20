@@ -31,7 +31,7 @@ func TestResponsesLiteCatalogLocations(t *testing.T) {
 			delete(root, "tools")
 		}
 		body, _ := json.Marshal(root)
-		out, stats, err := Rewrite(body, host.Codex, nil)
+		out, stats, err := RewriteWith(nil, body, host.Codex, nil, localOpt())
 		if err != nil || !stats.Changed || stats.ToolBefore != 2 || stats.ToolAfter != 1 {
 			t.Fatalf("hosted=%v stats=%+v err=%v", withHosted, stats, err)
 		}

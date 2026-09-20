@@ -90,6 +90,12 @@ func TestCodexAstraReasoningPassesThrough(t *testing.T) {
 	}
 }
 
+func localOpt() Options {
+	o := DefaultOptions()
+	o.SelectionMode = SelectionLocal
+	return o
+}
+
 func TestGrokRewriteStripsCatalog(t *testing.T) {
 	req := map[string]any{
 		"model": "grok-4",
@@ -105,7 +111,7 @@ func TestGrokRewriteStripsCatalog(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, nil)
+	out, stats, err := RewriteWith(nil, raw, host.Grok, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +308,7 @@ func TestExploreKeepsAgent(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Claude, nil)
+	out, stats, err := RewriteWith(nil, raw, host.Claude, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +491,7 @@ func TestMCPToolsSurviveUnknownPrompt(t *testing.T) {
 	}
 }
 
-// A high-confidence local decision must not cost a Jev round trip.
+// A selected sequential-locate rule must not cost a Jev round trip.
 func TestRewriteSkipsLiveWhenLocalConfident(t *testing.T) {
 	var calls int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -501,7 +507,7 @@ func TestRewriteSkipsLiveWhenLocalConfident(t *testing.T) {
 	req := map[string]any{
 		"model": "grok-4",
 		"messages": []any{
-			map[string]any{"role": "user", "content": "The auth middleware test is failing. Find it, fix the assertion in place, and re-run the tests."},
+			map[string]any{"role": "user", "content": "Do not parallel. Sequential search and read the definition of RewriteWith."},
 		},
 		"tools": []any{
 			map[string]any{"type": "function", "function": map[string]any{"name": "read_file"}},
@@ -515,7 +521,7 @@ func TestRewriteSkipsLiveWhenLocalConfident(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Chosen != "read_file" || len(stats.ToolsAfter) != 1 || stats.ToolsAfter[0] != "read_file" {
+	if stats.Chosen != "read_file" || !strings.Contains(strings.Join(stats.ToolsAfter, ","), "read_file") {
 		t.Fatalf("stats=%+v; want local read selection", stats)
 	}
 	if n := atomic.LoadInt64(&calls); n != 0 {
@@ -1004,7 +1010,7 @@ func TestCodexFunctionsNamespaceIsFilterable(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Codex, nil)
+	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1053,7 +1059,7 @@ func TestGrokMixedHostedToolsStillFiltersFunctions(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, nil)
+	out, stats, err := RewriteWith(nil, raw, host.Grok, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1103,7 +1109,7 @@ func TestGrokLiveMixedCatalogUnknownHostedStillFiltersFunctions(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, nil)
+	out, stats, err := RewriteWith(nil, raw, host.Grok, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1153,7 +1159,7 @@ func TestCursorMcpToolsCatalogIsFilterable(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Cursor, nil)
+	out, stats, err := RewriteWith(nil, raw, host.Cursor, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1187,7 +1193,7 @@ func TestDevinPromptToolsCatalogIsFilterable(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Devin, nil)
+	out, stats, err := RewriteWith(nil, raw, host.Devin, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1280,7 +1286,7 @@ func TestCursorActionMcpToolsWritebackStaysNested(t *testing.T) {
 				},
 			}
 			raw, _ := json.Marshal(req)
-			out, stats, err := Rewrite(raw, host.Cursor, nil)
+			out, stats, err := RewriteWith(nil, raw, host.Cursor, nil, localOpt())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1349,7 +1355,7 @@ func TestCursorAgentRunRequestJSONFiltersAndCompacts(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := RewriteWith(t.Context(), raw, host.Cursor, nil, DefaultOptions())
+	out, stats, err := RewriteWith(t.Context(), raw, host.Cursor, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}

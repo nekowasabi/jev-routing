@@ -11,7 +11,39 @@ import (
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/plan"
 )
+
+func TestCatalogFromRequestDoesNotLaunch(t *testing.T) {
+	probe := &plan.LaunchProbe{}
+	body := []byte(`{"tools":[{"name":"Grep","description":"search"},{"name":"mcp__slack__search","description":"slack"}]}`)
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ := extractTools(root)
+	specs := plan.SpecsFrom(asMaps(tools))
+	cat, err := plan.BuildCatalog(plan.Inventory{Tools: specs}, host.Grok, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe.MCPStarts != 0 || probe.CLIRuns != 0 {
+		t.Fatalf("request catalog launched processes %+v", probe)
+	}
+	if len(cat.Eligible()) == 0 || cat.Revision == "" {
+		t.Fatalf("empty catalog %+v", cat)
+	}
+	raw := chatReq("find a symbol", []any{
+		map[string]any{"type": "function", "function": map[string]any{"name": "grep", "description": "search"}},
+	})
+	_, stats, err := Rewrite(raw, host.Grok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.CatalogRevision == "" {
+		t.Fatalf("rewrite omitted catalog revision %+v", stats)
+	}
+}
 
 func TestCatalogShapeContainsMetadataOnly(t *testing.T) {
 	body := []byte(`{"input":[{"role":"user","content":"PRIVATE_PROMPT"}],"tools":[{"type":"namespace","name":"functions","description":"PRIVATE_DESCRIPTION","tools":[{"type":"function","name":"PRIVATE_NAME","parameters":{"type":"object","properties":{"PRIVATE_ARGUMENT":{"default":"PRIVATE_DEFAULT"}}}}]}],"authorization":"PRIVATE_AUTH"}`)
@@ -130,7 +162,7 @@ func TestCatalogShapeOpaqueProtoFieldKeys(t *testing.T) {
 func TestRunStatsApplicationCountersAndPrivacy(t *testing.T) {
 	for _, h := range []host.ID{host.Claude, host.Codex} {
 		t.Run(string(h), func(t *testing.T) {
-			s, _ := testProxy(t, h, nil, DefaultOptions())
+			s, _ := testProxy(t, h, nil, localOpt())
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = w.Write([]byte(`{"error":"PRIVATE_UPSTREAM_BODY"}`))

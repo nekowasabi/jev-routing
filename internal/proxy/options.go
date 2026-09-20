@@ -21,28 +21,54 @@ const (
 	SelectionLocal  = "local"
 	SelectionJev    = "jev"
 	SelectionHybrid = "hybrid"
+
+	PolicyRequired = "required"
+	PolicyFallback = "fallback"
+
+	KindOff     = "off"
+	KindObserve = "observe"
+	KindApply   = "apply"
+	KindFixed   = "fixed"
 )
 
 // Options are resolved once at process start. Invalid values fail startup.
 type Options struct {
-	Mode          string
-	Compaction    string
-	Reasoning     string
-	SelectionMode string
-	RunID         string
-	ArgsModel     string
-	ArgsTools     map[string]bool
-	DirectTools   map[string]bool
+	Mode              string
+	Compaction        string
+	Reasoning         string
+	SelectionMode     string
+	RunID             string
+	ArgsModel         string
+	ArgsTools         map[string]bool
+	DirectTools       map[string]bool
+	AutoApply         bool
+	ApplicationPolicy string
+	KindModes         map[string]string
+	AfterRewrite      func([]byte) []byte
 }
 
 func DefaultOptions() Options {
 	return Options{
-		Mode:          ModeFilter,
-		Compaction:    CompactionOn,
-		Reasoning:     ReasoningLegacy,
-		SelectionMode: SelectionHybrid,
-		ArgsTools:     map[string]bool{},
-		DirectTools:   map[string]bool{},
+		Mode:              ModeFilter,
+		Compaction:        CompactionOn,
+		Reasoning:         ReasoningLegacy,
+		SelectionMode:     SelectionHybrid,
+		ArgsTools:         map[string]bool{},
+		DirectTools:       map[string]bool{},
+		ApplicationPolicy: "",
+		KindModes:         defaultKindModes(),
+	}
+}
+
+func defaultKindModes() map[string]string {
+	return map[string]string{
+		"model":    KindObserve,
+		"subagent": KindObserve,
+		"skill":    KindObserve,
+		"mcp_tool": KindObserve,
+		"cli":      KindObserve,
+		"plugin":   KindObserve,
+		"ateam":    KindFixed,
 	}
 }
 
@@ -104,6 +130,47 @@ func OptionsFromEnv() (Options, error) {
 		o.ArgsModel = argsModel
 		o.ArgsTools = tools
 	}
+	if v := strings.TrimSpace(os.Getenv("JEV_AUTO_APPLY")); v != "" {
+		switch v {
+		case "1", "true", "on":
+			o.AutoApply = true
+		case "0", "false", "off":
+			o.AutoApply = false
+		default:
+			return o, fmt.Errorf("invalid JEV_AUTO_APPLY %q (on|off)", v)
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_APPLICATION_POLICY")); v != "" {
+		switch v {
+		case PolicyRequired, PolicyFallback:
+			o.ApplicationPolicy = v
+		default:
+			return o, fmt.Errorf("invalid JEV_APPLICATION_POLICY %q (required|fallback)", v)
+		}
+	} else if o.AutoApply {
+		o.ApplicationPolicy = PolicyRequired
+	}
+	if o.AutoApply {
+		for _, k := range []string{"skill", "mcp_tool", "cli", "plugin"} {
+			if o.KindModes[k] == KindObserve {
+				o.KindModes[k] = KindApply
+			}
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_KIND_MODES")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			kind, mode, ok := strings.Cut(strings.TrimSpace(part), "=")
+			if !ok || kind == "" {
+				return o, fmt.Errorf("invalid JEV_KIND_MODES %q", v)
+			}
+			switch mode {
+			case KindOff, KindObserve, KindApply, KindFixed:
+				o.KindModes[kind] = mode
+			default:
+				return o, fmt.Errorf("invalid kind mode %q", mode)
+			}
+		}
+	}
 	if direct != "" {
 		tools, err := parseNameList(direct)
 		if err != nil {
@@ -163,4 +230,16 @@ func (o Options) DirectToolSet() map[string]bool {
 		return map[string]bool{}
 	}
 	return o.DirectTools
+}
+
+func (o Options) KindMode(kind string) string {
+	if o.KindModes != nil {
+		if m, ok := o.KindModes[kind]; ok {
+			return m
+		}
+	}
+	if kind == "ateam" {
+		return KindFixed
+	}
+	return KindObserve
 }

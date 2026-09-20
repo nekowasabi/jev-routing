@@ -115,18 +115,18 @@ func TestGatewayDecision(t *testing.T) {
 			atomic.AddInt64(&calls, 1)
 			http.Error(w, "nope", 500)
 		})
-		_, stats, err := Rewrite(chatReq("The auth middleware test is failing. Find it.", tools), host.Grok, c)
+		_, stats, err := Rewrite(chatReq("Do not parallel. Sequential search and read the definition of RewriteWith.", tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if stats.Chosen != "read_file" || stats.Source != sourceLocal {
 			t.Fatalf("%+v", stats)
 		}
-		if got := strings.Join(stats.ToolsAfter, ","); got != "read_file" {
-			t.Fatalf("toolsAfter=%q; want read_file", got)
+		if !strings.Contains(strings.Join(stats.ToolsAfter, ","), "read_file") {
+			t.Fatalf("toolsAfter=%v; want read_file", stats.ToolsAfter)
 		}
 		if atomic.LoadInt64(&calls) != 0 {
-			t.Fatal("local confident should skip Jev")
+			t.Fatal("selected sequential locate should skip Jev")
 		}
 	})
 	t.Run("invalid-type", func(t *testing.T) {
@@ -137,6 +137,75 @@ func TestGatewayDecision(t *testing.T) {
 		})
 		raw := chatReq(unknown, tools)
 		out, stats, _ := Rewrite(raw, host.Grok, c)
+		if string(out) != string(raw) || stats.Reason != reasonInvalidJev {
+			t.Fatalf("%+v", stats)
+		}
+	})
+}
+
+func TestHybridDefersHeuristics(t *testing.T) {
+	tools := workTools()
+	heuristic := "The auth middleware test is failing. Find it."
+	selected := "Do not parallel. Sequential search and read the definition of RewriteWith."
+
+	t.Run("word-match-asks-jev", func(t *testing.T) {
+		var calls int64
+		c := jevAnswers(t, "grep", 0.9, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&calls, 1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{
+				"next_tool":  map[string]any{"type": "choice", "choice": "grep", "confidence": 0.9},
+				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
+			}})
+		})
+		_, stats, err := Rewrite(chatReq(heuristic, tools), host.Grok, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if atomic.LoadInt64(&calls) == 0 {
+			t.Fatal("hybrid must ask Jev for word-match; fixed 0.86 skip is the old bug")
+		}
+		if stats.Source != sourceJev {
+			t.Fatalf("%+v", stats)
+		}
+	})
+	t.Run("selected-rule-skips-jev", func(t *testing.T) {
+		var calls int64
+		c := jevAnswers(t, "grep", 0.9, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&calls, 1)
+			http.Error(w, "unexpected", http.StatusInternalServerError)
+		})
+		_, stats, err := Rewrite(chatReq(selected, tools), host.Grok, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if atomic.LoadInt64(&calls) != 0 {
+			t.Fatal("selected sequential locate must not ask Jev")
+		}
+		if stats.Source != sourceLocal || stats.Chosen != "read_file" {
+			t.Fatalf("%+v", stats)
+		}
+	})
+	t.Run("unconnected-keeps-catalog", func(t *testing.T) {
+		raw := chatReq(heuristic, tools)
+		out, stats, err := Rewrite(raw, host.Grok, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.ToolAfter != stats.ToolBefore || stats.Apply != applyNone {
+			t.Fatalf("hybrid defer without Jev must keep candidates %+v out=%s", stats, out)
+		}
+	})
+	t.Run("invalid-jev-keeps-catalog", func(t *testing.T) {
+		c := jevAnswers(t, "grep", 0.9, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"answers": map[string]any{"next_tool": "grep", "needs_tool": 1},
+			})
+		})
+		raw := chatReq(heuristic, tools)
+		out, stats, err := Rewrite(raw, host.Grok, c)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if string(out) != string(raw) || stats.Reason != reasonInvalidJev {
 			t.Fatalf("%+v", stats)
 		}
@@ -227,7 +296,7 @@ func TestGatewayForced(t *testing.T) {
 		}
 	})
 	t.Run("local-stays-filter", func(t *testing.T) {
-		out, stats, err := RewriteWith(nil, chatReq("The auth middleware test is failing. Find it.", tools), host.Grok, nil, opt)
+		out, stats, err := RewriteWith(nil, chatReq("Do not parallel. Sequential search and read the definition of RewriteWith.", tools), host.Grok, nil, opt)
 		if err != nil {
 			t.Fatal(err)
 		}

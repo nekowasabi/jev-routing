@@ -82,6 +82,7 @@ func (l *lazyConnectCursor) Read(p []byte) (int, error) {
 	return emitConnectFrame(p, &l.buf, &l.err, l.src, func(frame []byte) []byte {
 		out, stats, catalog, applied := rewriteConnectCursorFrame(ctx, frame, l.s.Host, l.s.Client, l.s.Options)
 		observeConnectFrame(l.s.events, l.seq, catalog)
+		l.s.observeHostFrames(frame)
 		if task := cursorTaskFromFrame(frame); task != "" {
 			l.s.setCursorTask(task)
 		}
@@ -275,8 +276,11 @@ func rewriteConnectCursorFrame(ctx context.Context, frame []byte, h host.ID, cli
 	if err != nil {
 		return rewriteConnectCursorExec(ctx, frame, flags, raw, h, client, opt)
 	}
+	if opt.AfterRewrite != nil {
+		rewritten = opt.AfterRewrite(rewritten)
+	}
 	shape := mergeDevinCatalog(catalogShape(lifted), protoFieldCatalog(req))
-	if !stats.Changed {
+	if !stats.Changed && bytes.Equal(rewritten, lifted) {
 		if out, cstats, catalog, applied := rewriteConnectCursorExec(ctx, frame, flags, raw, h, client, opt); applied && (cstats.CompactApplied || cstats.Changed) {
 			return out, cstats, catalog, applied
 		}
@@ -328,6 +332,9 @@ func rewriteConnectCursorExec(ctx context.Context, frame []byte, flags byte, raw
 		if lifted, err := json.Marshal(root); err == nil {
 			rewritten, st, rerr := RewriteWith(ctx, lifted, h, client, opt)
 			if rerr == nil {
+				if opt.AfterRewrite != nil {
+					rewritten = opt.AfterRewrite(rewritten)
+				}
 				catalog = mergeDevinCatalog(catalogShape(lifted), catalog)
 				if st.Changed {
 					var next map[string]any
@@ -489,6 +496,31 @@ type protoField struct {
 	wire  int
 	raw   []byte
 	full  []byte
+}
+
+func looksConnectFrame(frame []byte) bool {
+	if len(frame) < 5 {
+		return false
+	}
+	ln := int(frame[1])<<24 | int(frame[2])<<16 | int(frame[3])<<8 | int(frame[4])
+	return frame[0] <= 0x03 && ln >= 0 && ln+5 == len(frame)
+}
+
+func connectFramePayload(frame []byte) []byte {
+	body := frame
+	if len(frame) >= 5 {
+		body = frame[5:]
+		if frame[0]&connectFlagCompressed != 0 {
+			if gr, err := gzip.NewReader(bytes.NewReader(body)); err == nil {
+				if dec, err := io.ReadAll(gr); err == nil {
+					body = dec
+				}
+				_ = gr.Close()
+			}
+		}
+	}
+	unwrapped, _ := unwrapProtoPayload(body)
+	return unwrapped
 }
 
 func unwrapProtoPayload(raw []byte) (payload []byte, gzipped bool) {
@@ -723,7 +755,13 @@ func liftAgentRunJSON(req []byte) (map[string]any, map[string][]byte, bool) {
 func liftCursorAgent(req []byte) (cursorAgentLift, bool) {
 	if looksConversationAction(req) {
 		if action := liftAction(req); action != nil {
-			return cursorAgentLift{root: map[string]any{"action": action}}, true
+			root := map[string]any{"action": action}
+			lift := cursorAgentLift{root: root}
+			if tools, tb := liftActionRequestContextTools(req); len(tools) > 0 {
+				root["mcpTools"] = map[string]any{"mcpTools": tools}
+				lift.toolBytes = tb
+			}
+			return lift, true
 		}
 	}
 	fields, ok := parseProtoFields(req)
@@ -782,7 +820,45 @@ func liftCursorAgent(req []byte) (cursorAgentLift, bool) {
 			root["agentSessionId"] = string(f.raw)
 		}
 	}
+	if text := cursorLatestUserText(req); text != "" {
+		if _, ok := root["action"]; !ok {
+			root["action"] = map[string]any{
+				"userMessageAction": map[string]any{
+					"userMessage": map[string]any{"text": text},
+				},
+			}
+		}
+		if !cursorRootHasUserText(root, text) {
+			root["messages"] = append(asSlice(root["messages"]), map[string]any{"role": "user", "content": text})
+		}
+	}
 	return cursorAgentLift{root: root, toolBytes: toolBytes, histItems: histItems, field1Items: field1Items}, true
+}
+
+func cursorLatestUserText(req []byte) string {
+	if text := liftActionText(req); text != "" {
+		return text
+	}
+	return deepRequestContextTask(req)
+}
+
+func cursorRootHasUserText(root map[string]any, text string) bool {
+	if text == "" || root == nil {
+		return false
+	}
+	if action, _ := root["action"].(map[string]any); userFromAction(action) == text {
+		return true
+	}
+	for _, m := range asSlice(root["messages"]) {
+		obj, _ := m.(map[string]any)
+		if obj == nil {
+			continue
+		}
+		if s, _ := obj["content"].(string); s == text {
+			return true
+		}
+	}
+	return false
 }
 
 func liftJSONStrings(msg []byte, field int) []any {

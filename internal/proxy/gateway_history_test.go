@@ -120,7 +120,7 @@ func TestGatewayResponses(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Codex, nil)
+	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestGatewayGrokNames(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	_, stats, err := Rewrite(raw, host.Grok, nil)
+	_, stats, err := RewriteWith(nil, raw, host.Grok, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestGatewayGrokNames(t *testing.T) {
 		},
 	}
 	raw, _ = json.Marshal(req2)
-	_, stats, err = Rewrite(raw, host.Grok, nil)
+	_, stats, err = RewriteWith(nil, raw, host.Grok, nil, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}

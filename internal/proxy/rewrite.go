@@ -79,6 +79,7 @@ type RewriteStats struct {
 
 	Source           string  `json:"source,omitempty"`
 	Reason           string  `json:"reason,omitempty"`
+	CatalogRevision  string  `json:"catalogRevision,omitempty"`
 	Confidence       float64 `json:"confidence,omitempty"`
 	NeedsTool        float64 `json:"needsTool,omitempty"`
 	LastActionFailed float64 `json:"lastActionFailed,omitempty"`
@@ -151,6 +152,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 
 	toolSpecs := plan.SpecsFrom(asMaps(filterable))
+	stats.CatalogRevision = plan.RevisionOf(plan.CapabilitiesFromSpecs(toolSpecs, h))
 	msgs, _ := locateHistory(root)
 	items, user := itemsFromMessages(msgs)
 	if user == "" {
@@ -234,11 +236,18 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 
 	usedJev := false
+	// Why: Pseudo local confidence (0.86 / score/8) is not a measured hit rate.
+	// Hybrid skips Jev only for selected/constraint outcomes, never for word-match defer.
 	shouldAskJev := opt.SelectionMode == SelectionJev ||
-		(opt.SelectionMode == SelectionHybrid && decision.Confidence < adoptConfidence)
-	if opt.SelectionMode == SelectionJev && (client == nil || !client.Live()) {
-		// Why: `jev` means delegation, not a silent local fallback; otherwise the
-		// comparison would measure a different selection source.
+		(opt.SelectionMode == SelectionHybrid && decision.Outcome != plan.OutcomeSelected)
+	if shouldAskJev && (client == nil || !client.Live()) {
+		// Why: A deferred hint must not shrink the catalog when Jev is missing.
+		// An already-open local passthrough has nothing extra to preserve.
+		if decision.Passthrough || decision.Tool == plan.Respond {
+			stats.Reason = reasonLocalPassthrough
+			stats.Chosen = "passthrough"
+			return withoutSelection()
+		}
 		stats.Reason = reasonJevError
 		stats.Chosen = "passthrough:" + reasonJevError
 		return withoutSelection()
@@ -1138,6 +1147,16 @@ func userFromAction(action map[string]any) string {
 	}
 	if s := firstString(action, "prompt", "text", "content"); s != "" {
 		return s
+	}
+	if uma, ok := action["userMessageAction"].(map[string]any); ok {
+		if um, ok := uma["userMessage"].(map[string]any); ok {
+			if s := firstString(um, "text", "content"); s != "" {
+				return s
+			}
+		}
+		if s := userFromAction(uma); s != "" {
+			return s
+		}
 	}
 	// Why: Cursor AgentRunRequest nests the latest user turn under userMessageAction.
 	for _, k := range []string{"userMessageAction", "user_message_action"} {

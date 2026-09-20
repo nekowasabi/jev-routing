@@ -148,7 +148,7 @@ func mcpToolRawByName(req []byte, name string) []byte {
 
 func assertConnectCursorRewrite(t *testing.T, frame []byte, wrapped bool) ([]byte, RewriteStats) {
 	t.Helper()
-	out, stats, catalog, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, catalog, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied {
 		t.Fatal("rewrite not applied")
 	}
@@ -252,7 +252,7 @@ func TestRewriteConnectCursorGzipRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	frame := connectFrame(connectFlagCompressed, buf.Bytes())
-	out, _, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, _, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied {
 		t.Fatal("rewrite not applied")
 	}
@@ -264,7 +264,7 @@ func TestRewriteConnectCursorGzipRoundTrip(t *testing.T) {
 
 func TestRewriteConnectCursorUnchangedKeepsOriginalFrame(t *testing.T) {
 	frame := connectFrame(0, protoString(5, "conv-only"))
-	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if applied || stats.Changed {
 		t.Fatalf("want unchanged skip, got applied=%v stats=%+v", applied, stats)
 	}
@@ -277,7 +277,7 @@ func TestRewriteConnectCursorConversationActionField4(t *testing.T) {
 	uma := protoBytes(1, protoBytes(1, protoString(1, "locate the failing auth test")))
 	action := protoBytes(1, uma)
 	frame := connectFrame(0, protoBytes(4, action))
-	out, _, catalog, _ := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, _, catalog, _ := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if out == nil {
 		t.Fatal("nil rewritten frame")
 	}
@@ -308,7 +308,7 @@ func TestRewriteConnectCursorExecClientControlField5(t *testing.T) {
 
 func TestRewriteConnectCursorHeartbeatField7Unchanged(t *testing.T) {
 	frame := connectFrame(0, protoString(7, "tick"))
-	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if applied {
 		t.Fatalf("heartbeat applied: stats=%+v", stats)
 	}
@@ -322,7 +322,7 @@ func TestRewriteConnectCursorExecResultTruncates(t *testing.T) {
 	result := append(protoString(1, long), protoString(2, "SECRET_keep")...)
 	exec := append(protoString(1, "exec-id-1"), protoBytes(7, result)...)
 	frame := connectFrame(0, protoBytes(2, exec))
-	out, stats, catalog, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, catalog, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied || !stats.Changed || !stats.CompactApplied {
 		t.Fatalf("want exec result compact, applied=%v stats=%+v", applied, stats)
 	}
@@ -363,7 +363,7 @@ func TestRewriteConnectCursorKeepsHeartbeatWithAgentRun(t *testing.T) {
 	hb := []byte("tick")
 	raw := append(protoBytes(1, testAgentRunRequest(t)), protoBytes(7, hb)...)
 	frame := connectFrame(0, raw)
-	out, _, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, _, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied {
 		t.Fatal("wrapped AgentRun was not applied")
 	}
@@ -382,7 +382,7 @@ func TestHandlerConnectProtoAgentRunRewritesFirstFrame(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("CURSOR_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Cursor, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Cursor, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestHandlerConnectProtoAgentRunRewritesLaterFrame(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("CURSOR_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Cursor, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Cursor, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +513,7 @@ func TestHandlerConnectProtoCatalogUnionsEarlierFrameKeys(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("CURSOR_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Cursor, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Cursor, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +550,7 @@ func TestHandlerConnectProtoAgentRunStreamIsNotBuffered(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("CURSOR_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Cursor, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Cursor, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,7 +648,7 @@ func TestLiftConversationTurnsUserMessageText(t *testing.T) {
 		t.Fatalf("synthesized=%v", msgs[0])
 	}
 	frame := connectFrame(0, protoBytes(1, req))
-	out, _, _, _ := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, _, _, _ := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	payload := decodeConnectPayload(t, out)
 	run, _, ok := unwrapAgentRun(payload)
 	if !ok {
@@ -706,7 +706,7 @@ func TestLiftProtoUserMessageField1History(t *testing.T) {
 	}
 
 	frame := connectFrame(0, protoBytes(1, req))
-	out, stats, catalog, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, catalog, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied {
 		t.Fatal("rewrite not applied")
 	}
@@ -832,7 +832,7 @@ func TestRewriteConnectCursorProtoTurnsAndToolName(t *testing.T) {
 		t.Fatalf("tools=%d (p14 must not invent builtins)", len(tools))
 	}
 	frame := connectFrame(0, protoBytes(1, req))
-	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied {
 		t.Fatal("rewrite not applied")
 	}
@@ -906,7 +906,7 @@ func TestRewriteConnectCursorField1JSONNoTurnsEmptyTools(t *testing.T) {
 		}())
 	}
 	frame := connectFrame(0, protoBytes(1, req))
-	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied {
 		t.Fatal("rewrite not applied")
 	}
@@ -1002,7 +1002,7 @@ func TestRewriteConnectCursorGzipField1CatalogInner(t *testing.T) {
 		}())
 	}
 	frame := connectFrame(0, protoBytes(1, req))
-	_, stats, shape, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	_, stats, shape, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied && !stats.CompactApplied && stats.Protocol != "cursor" && stats.Apply != applyFilter {
 		t.Fatalf("rewrite not applied and no cursor extract: %+v", stats)
 	}
@@ -1052,7 +1052,7 @@ func TestRewriteConnectCursorRequestContextToolsOnRun(t *testing.T) {
 	req := protoBytes(2, protoBytes(1, uma))
 	req = append(req, protoString(5, "conv-rc-1")...)
 	frame := connectFrame(0, protoBytes(1, req))
-	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied || stats.Apply != applyFilter || stats.ToolAfter >= stats.ToolBefore {
 		t.Fatalf("want request_context filter, applied=%v stats=%+v", applied, stats)
 	}
@@ -1076,7 +1076,7 @@ func TestRewriteConnectCursorExecRequestContextDedupesNames(t *testing.T) {
 	prompt := "The auth middleware test is failing. Find it, fix the assertion, and re-run the tests."
 	rc := testRequestContextTools(prompt, "Read", "Grep", "Read", "Grep", "Shell", "Write")
 	frame := connectFrame(0, protoBytes(2, protoBytes(10, protoBytes(1, protoBytes(1, rc)))))
-	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied || stats.Apply != applyFilter || stats.Reason == reasonDuplicateNames {
 		t.Fatalf("duplicate names should be folded then filtered: applied=%v stats=%+v", applied, stats)
 	}
@@ -1097,7 +1097,7 @@ func TestRewriteConnectCursorExecRequestContextResult(t *testing.T) {
 	rcr := protoBytes(1, success)
 	exec := protoBytes(10, rcr)
 	frame := connectFrame(0, protoBytes(2, exec))
-	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, DefaultOptions())
+	out, stats, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, localOpt())
 	if !applied || stats.Apply != applyFilter || stats.ToolAfter >= stats.ToolBefore {
 		t.Fatalf("want exec request_context filter, applied=%v stats=%+v", applied, stats)
 	}
@@ -1119,7 +1119,7 @@ func TestHandlerConnectMergesExecCompactAndSelection(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("CURSOR_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Cursor, nil, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Cursor, nil, io.Discard, localOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1154,5 +1154,133 @@ func TestHandlerConnectMergesExecCompactAndSelection(t *testing.T) {
 	}
 	if !bytes.Contains(got, []byte("jev-compaction truncated")) {
 		t.Fatal("upstream missing exec truncation")
+	}
+}
+
+func skillReviewAgentRunRequest() []byte {
+	action := protoBytes(1, protoBytes(1, protoString(1, "use the skill-review skill")))
+	mcp := protoRepeated(1, [][]byte{testMcpTool("skill-review", "review skill")})
+	var req []byte
+	req = append(req, protoBytes(2, action)...)
+	req = append(req, protoBytes(4, mcp)...)
+	req = append(req, protoString(5, "conv-skill")...)
+	req = append(req, protoString(13, "cursor")...)
+	return req
+}
+
+func TestHandlerConnectCursorAutoAppliesSkill(t *testing.T) {
+	var got []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("CURSOR_UPSTREAM", upstream.URL)
+	opt := localOpt()
+	opt.AutoApply = true
+	opt.ApplicationPolicy = PolicyRequired
+	opt.KindModes = map[string]string{"skill": KindApply}
+	srv, err := NewWithOptions("127.0.0.1:0", host.Cursor, nil, io.Discard, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := connectFrame(0, protoBytes(1, skillReviewAgentRunRequest()))
+	req := httptest.NewRequest(http.MethodPost, "/agent.v1.AgentService/Run", bytes.NewReader(frame))
+	req.Header.Set("Content-Type", "application/connect+proto")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if srv.LastDelivered == "" {
+		t.Fatalf("skill not delivered on Connect run path: applyErr=%q", srv.ApplyErr)
+	}
+	payload := decodeConnectPayload(t, got)
+	run, _, ok := unwrapAgentRun(payload)
+	if !ok {
+		run = payload
+	}
+	text := liftActionText(run)
+	if !strings.Contains(text, "jev-routing context") && !strings.Contains(text, "review skill") {
+		t.Fatalf("connect writeback missing skill context: %q body=%q", text, got)
+	}
+}
+
+func TestHandlerConnectCursorObservesExecResult(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("CURSOR_UPSTREAM", upstream.URL)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Cursor, nil, io.Discard, localOpt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Apps.put(&Application{DecisionID: "dec-1", CallID: "call-1", State: AppStarted, Kind: "cli"})
+	result := protoString(1, `{"ok":true}`)
+	frame := connectFrame(0, protoBytes(2, append(protoString(1, "exec-2"), protoBytes(7, result)...)))
+	req := httptest.NewRequest(http.MethodPost, "/agent.v1.AgentService/Run", bytes.NewReader(frame))
+	req.Header.Set("Content-Type", "application/connect+proto")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	got := srv.Apps.Get("dec-1")
+	if got == nil || got.State != AppVerified || !strings.Contains(got.Result, "ok") {
+		t.Fatalf("exec result was not correlated: %+v", got)
+	}
+}
+
+func TestHandlerConnectCursorObservesExecResultOutsideField7(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("CURSOR_UPSTREAM", upstream.URL)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Cursor, nil, io.Discard, localOpt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := connectFrame(0, protoBytes(2, append(protoString(1, "exec-8"), protoString(8, "jev-live-cli-ok\n")...)))
+	req := httptest.NewRequest(http.MethodPost, "/agent.v1.AgentService/Run", bytes.NewReader(frame))
+	req.Header.Set("Content-Type", "application/connect+proto")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	got := srv.Apps.Get("exec-8")
+	if got == nil || got.State != AppVerified || !strings.Contains(got.Result, "jev-live-cli-ok") {
+		t.Fatalf("field-8 exec result was not correlated: %+v apps=%v", got, srv.Apps.Snapshot())
+	}
+}
+
+func TestConnectCursorWritesExistingUserContext(t *testing.T) {
+	extra := "source: skill://review/SKILL.md"
+	opt := localOpt()
+	opt.AfterRewrite = func(body []byte) []byte {
+		out, err := ApplyHostContext(host.Cursor, body, extra)
+		if err != nil {
+			t.Fatalf("writeback %v body=%s", err, body)
+		}
+		return out
+	}
+	frame := connectFrame(0, testAgentRunRequest(t))
+	out, _, _, applied := rewriteConnectCursorFrame(t.Context(), frame, host.Cursor, nil, opt)
+	if !applied {
+		t.Fatal("expected context writeback on existing action text")
+	}
+	payload := decodeConnectPayload(t, out)
+	req, _, ok := unwrapAgentRun(payload)
+	if !ok {
+		req = payload
+	}
+	text := liftActionText(req)
+	if !strings.Contains(text, "auth middleware") {
+		t.Fatalf("lost original user text: %q", text)
+	}
+	if !strings.Contains(text, extra) {
+		t.Fatalf("missing delivered context: %q", text)
 	}
 }
