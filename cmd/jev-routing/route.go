@@ -66,21 +66,9 @@ func cmdRoute(args []string, stdin io.Reader, stdout io.Writer) int {
 		Explicit:         in.Explicit,
 		NewRequest:       in.NewRequest,
 	}
-	var ask plan.ChoiceAsker
-	if c := jev.FromEnv(); c != nil && c.Live() {
-		ask = func(text string, criteria map[string]string) (string, float64, error) {
-			qs := map[string]jev.Question{"capability": {Type: "choice", Instructions: "pick one capability id", Criteria: criteria}}
-			res, err := c.AskSelectionContext(nil, map[string]any{"request": text}, qs)
-			if err != nil {
-				return "", 0, err
-			}
-			ch, reason := jev.ValidateChoice(res, "capability", criteriaSet(criteria))
-			if reason != "" {
-				return "", 0, fmt.Errorf("%s", reason)
-			}
-			return ch.Choice, ch.Conf, nil
-		}
-	}
+	c := jev.FromEnv()
+	ask := choiceAsker(c, "capability", "pick one capability id")
+	askModel := modelAsker(c)
 	routed := plan.Route(req, ask)
 	enc := json.NewEncoder(stdout)
 	enc.SetEscapeHTML(false)
@@ -91,7 +79,7 @@ func cmdRoute(args []string, stdin io.Reader, stdout io.Writer) int {
 			ModelMode: in.ModelMode, EffortMode: in.EffortMode,
 			LegacyModel: in.LegacyModel, LegacyEffort: in.LegacyEffort,
 			Pairs: in.Pairs,
-		}, ask)
+		}, askModel)
 		plan.RecordModelDecision(plan.ModelDecision{
 			Host:            string(hID),
 			Role:            in.Role,
@@ -103,6 +91,8 @@ func cmdRoute(args []string, stdin io.Reader, stdout io.Writer) int {
 			RequestedEffort: in.LegacyEffort,
 			AppliedEffort:   model.Effort,
 			Asked:           model.Asked,
+			RejectedID:      model.RejectedID,
+			RejectedConf:    model.RejectedConf,
 		})
 		payload := map[string]any{
 			"route": routed,
@@ -125,4 +115,53 @@ func criteriaSet(criteria map[string]string) map[string]bool {
 		out[k] = true
 	}
 	return out
+}
+
+func choiceQuestions(question, instructions string, criteria map[string]string) map[string]jev.Question {
+	return map[string]jev.Question{
+		question: {Type: "choice", Instructions: instructions, Criteria: criteria},
+	}
+}
+
+func choiceAsker(c *jev.Client, question, instructions string) plan.ChoiceAsker {
+	if c == nil || !c.Live() {
+		return nil
+	}
+	return func(text string, criteria map[string]string) (string, float64, error) {
+		qs := choiceQuestions(question, instructions, criteria)
+		res, err := c.AskSelectionContext(nil, map[string]any{"request": text}, qs)
+		if err != nil {
+			return "", 0, err
+		}
+		ch, reason := jev.ValidateChoice(res, question, criteriaSet(criteria))
+		if reason != "" {
+			return "", 0, fmt.Errorf("%s", reason)
+		}
+		return ch.Choice, ch.Conf, nil
+	}
+}
+
+func modelAskState(req plan.ModelRequest) map[string]any {
+	return map[string]any{
+		"request": req.Task,
+		"role":    req.Role,
+		"host":    string(req.Host),
+	}
+}
+
+func modelAsker(c *jev.Client) plan.ModelAsker {
+	if c == nil || !c.Live() {
+		return nil
+	}
+	return func(req plan.ModelRequest, criteria map[string]string) (string, float64, error) {
+		res, err := c.AskSelectionContext(nil, modelAskState(req), choiceQuestions("model_pair", plan.ModelPairInstructions, criteria))
+		if err != nil {
+			return "", 0, err
+		}
+		ch, reason := jev.ValidateChoice(res, "model_pair", criteriaSet(criteria))
+		if reason != "" {
+			return "", 0, fmt.Errorf("%s", reason)
+		}
+		return ch.Choice, ch.Conf, nil
+	}
 }

@@ -145,3 +145,16 @@ func TestAppsFromModelLog(t *testing.T) {
 	}
 	t.Fatal("missing model cell")
 }
+
+func TestAppsFromModelLogRejectedCallID(t *testing.T) {
+	t.Setenv("JEV_MODEL_LOG", filepath.Join(t.TempDir(), "model-routes.jsonl"))
+	plan.RecordModelDecision(plan.ModelDecision{
+		Host: "claude", Source: "legacy", ReasonCode: plan.ReasonLowConfidence,
+		AppliedModel: "test-opus", AppliedEffort: "medium",
+		RejectedID: "pair:claude-sonnet-5:medium",
+	})
+	apps := appsFromModelLog()
+	if len(apps) != 1 || apps[0].CallID != "low_confidence:pair:claude-sonnet-5:medium" {
+		t.Fatalf("%+v", apps)
+	}
+}

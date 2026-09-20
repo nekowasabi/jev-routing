@@ -46,6 +46,8 @@ jev-routing route --json < request.json   # ateam / 診断。モデル選定を 
 
 `route --json` は ateam と診断用の選定入口です。`model_mode` / `effort_mode` と候補 `pairs` を渡すと、応答の `model` に適用した組を返します。キーは `model` / `effort` / `source` / `reason_code` / `asked` です。Jev 未接続で候補が複数なら `reason_code` は `no_match` で、`legacy_model` と `effort` の従来値へ戻します。ateam は `ateam auto review` のときだけこの自動選定を使い、`auto` が無いときは名簿の固定値です。選定は `~/.local/state/jev-routing/model-routes.jsonl` に1行追記します。記録先は `JEV_MODEL_LOG` で変えられます。
 
+`ateam auto` のモデル選定は capability 用の `next_tool` 分類器ではなく、専用の `model_pair` 質問です。候補ペアは `difficulty` と `cost` を持ち、Jev は足りる範囲で最も安い／小さい組を選びます。確信度が低く採用できないときは適用は従来値のまま、却下した組を `rejected_id` に残します。
+
 ### tmux で起動する
 
 ```bash

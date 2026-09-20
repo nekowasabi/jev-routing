@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
 	"github.com/nekowasabi/jev-routing/internal/plan"
 )
 
@@ -96,5 +98,49 @@ func TestRouteCommandModelJSON(t *testing.T) {
 	got := plan.LoadModelDecisions()
 	if len(got) != 1 || got[0].AppliedModel != "claude-opus-5" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestChoiceAskerNilWhenNotLive(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "")
+	t.Setenv("JEV_API_KEY", "")
+	if ask := choiceAsker(jev.FromEnv(), "model_pair", "x"); ask != nil {
+		t.Fatal("expected nil asker when not live")
+	}
+}
+
+func TestChoiceQuestionsUsesRequestedID(t *testing.T) {
+	qs := choiceQuestions("model_pair", plan.ModelPairInstructions, map[string]string{"pair:a": "a"})
+	q, ok := qs["model_pair"]
+	if !ok {
+		t.Fatalf("missing model_pair: %v", qs)
+	}
+	if q.Instructions != plan.ModelPairInstructions {
+		t.Fatalf("instructions=%q", q.Instructions)
+	}
+	if _, ok := qs["capability"]; ok {
+		t.Fatalf("unexpected capability: %v", qs)
+	}
+	capQS := choiceQuestions("capability", "pick one capability id", map[string]string{"cli:x": "x"})
+	if _, ok := capQS["capability"]; !ok {
+		t.Fatalf("missing capability: %v", capQS)
+	}
+	if _, ok := capQS["model_pair"]; ok {
+		t.Fatalf("unexpected model_pair: %v", capQS)
+	}
+}
+
+func TestModelAskerUsesModelPairAndStructuredState(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "")
+	t.Setenv("JEV_API_KEY", "")
+	if ask := modelAsker(jev.FromEnv()); ask != nil {
+		t.Fatal("expected nil model asker when not live")
+	}
+	if ask := choiceAsker(jev.FromEnv(), "capability", "pick one capability id"); ask != nil {
+		t.Fatal("expected nil capability asker when not live")
+	}
+	st := modelAskState(plan.ModelRequest{Task: "print hello world and exit", Role: "worker", Host: host.Claude})
+	if st["request"] != "print hello world and exit" || st["role"] != "worker" || st["host"] != string(host.Claude) {
+		t.Fatalf("%v", st)
 	}
 }

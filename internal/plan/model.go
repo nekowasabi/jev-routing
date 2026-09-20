@@ -20,11 +20,30 @@ const (
 	ReasonLegacyFallback      = "legacy_fallback"
 )
 
+const ModelPairInstructions = "Pick the cheapest, smallest pair that is sufficient for this task. Use a lower cost and difficulty pair for simple work (hello world, echo, one-liner). Use a higher-cost pair only when the work is review, multi-file, or ambiguous. Pick no_match only if none of these pairs can run this request on this host."
+
 type Pair struct {
-	ID     string   `json:"id"`
-	Model  string   `json:"model"`
-	Effort string   `json:"effort"`
-	Hosts  []string `json:"hosts"`
+	ID          string   `json:"id"`
+	Model       string   `json:"model"`
+	Effort      string   `json:"effort"`
+	Hosts       []string `json:"hosts"`
+	Difficulty  string   `json:"difficulty,omitempty"`
+	Cost        string   `json:"cost,omitempty"`
+	Description string   `json:"description,omitempty"`
+}
+
+func PairLabel(p Pair) string {
+	s := p.Model + " " + p.Effort
+	if p.Difficulty != "" {
+		s += "; difficulty=" + p.Difficulty
+	}
+	if p.Cost != "" {
+		s += "; cost=" + p.Cost
+	}
+	if p.Description != "" {
+		s += "; " + p.Description
+	}
+	return s
 }
 
 type ModelRequest struct {
@@ -38,13 +57,17 @@ type ModelRequest struct {
 	AdoptConfidence float64
 }
 
+type ModelAsker func(req ModelRequest, criteria map[string]string) (string, float64, error)
+
 type ModelResult struct {
-	Model      string `json:"model"`
-	Effort     string `json:"effort"`
-	Source     string `json:"source"`
-	ReasonCode string `json:"reason_code"`
-	PairID     string `json:"pair_id,omitempty"`
-	Asked      bool   `json:"asked"`
+	Model        string  `json:"model"`
+	Effort       string  `json:"effort"`
+	Source       string  `json:"source"`
+	ReasonCode   string  `json:"reason_code"`
+	PairID       string  `json:"pair_id,omitempty"`
+	Asked        bool    `json:"asked"`
+	RejectedID   string  `json:"rejected_id,omitempty"`
+	RejectedConf float64 `json:"rejected_conf,omitempty"`
 }
 
 func LoadPairs(path string) ([]Pair, error) {
@@ -61,7 +84,7 @@ func LoadPairs(path string) ([]Pair, error) {
 	return file.Pairs, nil
 }
 
-func RouteModel(req ModelRequest, ask ChoiceAsker) ModelResult {
+func RouteModel(req ModelRequest, ask ModelAsker) ModelResult {
 	if req.ModelMode == "" {
 		req.ModelMode = ModeFixed
 	}
@@ -89,12 +112,12 @@ func RouteModel(req ModelRequest, ask ChoiceAsker) ModelResult {
 	if ask == nil {
 		return pickOnlyOrLegacy(allowed, legacy)
 	}
-	criteria := map[string]string{NoMatchID: "no valid pair"}
+	criteria := map[string]string{NoMatchID: "none of these pairs can run this request on this host"}
 	for _, p := range allowed {
-		criteria[p.ID] = p.Model + " " + p.Effort
+		criteria[p.ID] = PairLabel(p)
 	}
 	legacy.Asked = true
-	choice, conf, err := ask(req.Task+" "+req.Role, criteria)
+	choice, conf, err := ask(req, criteria)
 	if err != nil {
 		if strings.Contains(err.Error(), "timeout") {
 			legacy.ReasonCode = ReasonAskTimeout
@@ -111,6 +134,8 @@ func RouteModel(req ModelRequest, ask ChoiceAsker) ModelResult {
 	}
 	if conf < req.AdoptConfidence {
 		legacy.ReasonCode = ReasonLowConfidence
+		legacy.RejectedID = choice
+		legacy.RejectedConf = conf
 		return legacy
 	}
 	for _, p := range allowed {
@@ -119,6 +144,8 @@ func RouteModel(req ModelRequest, ask ChoiceAsker) ModelResult {
 		}
 	}
 	legacy.ReasonCode = ReasonInvalidID
+	legacy.RejectedID = choice
+	legacy.RejectedConf = conf
 	return legacy
 }
 

@@ -23,6 +23,8 @@ type ModelDecision struct {
 	RequestedEffort string    `json:"requested_effort,omitempty"`
 	AppliedEffort   string    `json:"applied_effort"`
 	Asked           bool      `json:"asked"`
+	RejectedID      string    `json:"rejected_id,omitempty"`
+	RejectedConf    float64   `json:"rejected_conf,omitempty"`
 }
 
 func ModelLogPath() string {

@@ -343,12 +343,16 @@ func appsFromModelLog() []*Application {
 				state = AppFailed
 			}
 		}
+		callID := d.ReasonCode
+		if d.RejectedID != "" {
+			callID = d.ReasonCode + ":" + d.RejectedID
+		}
 		out = append(out, &Application{
 			DecisionID:   id,
 			State:        state,
 			Kind:         plan.KindModel,
 			CapabilityID: plan.CapabilityID(plan.KindModel, d.Host, applied, d.AppliedEffort),
-			CallID:       d.ReasonCode,
+			CallID:       callID,
 			Verified:     verified,
 			Host:         d.Host,
 		})
