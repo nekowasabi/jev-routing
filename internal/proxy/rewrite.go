@@ -52,16 +52,21 @@ const (
 )
 
 type RewriteStats struct {
-	Host           host.ID `json:"host"`
-	ToolBefore     int     `json:"toolBefore"`
-	ToolAfter      int     `json:"toolAfter"`
-	Chosen         string  `json:"chosen"`
-	Done           float64 `json:"done"`
-	Gated          bool    `json:"gated"`
-	CharsBefore    int     `json:"charsBefore"`
-	CharsAfter     int     `json:"charsAfter"`
-	CompactDropped int     `json:"compactDropped"`
-	Engine         string  `json:"engine"`
+	Host               host.ID  `json:"host"`
+	ToolBefore         int      `json:"toolBefore"`
+	ToolAfter          int      `json:"toolAfter"`
+	ToolsBefore        []string `json:"toolsBefore,omitempty"`
+	ToolsAfter         []string `json:"toolsAfter,omitempty"`
+	HistoryTypes       []string `json:"historyTypes,omitempty"`
+	UnsupportedHistory []string `json:"unsupportedHistory,omitempty"`
+	HistoryIssues      []string `json:"historyIssues,omitempty"`
+	Chosen             string   `json:"chosen"`
+	Done               float64  `json:"done"`
+	Gated              bool     `json:"gated"`
+	CharsBefore        int      `json:"charsBefore"`
+	CharsAfter         int      `json:"charsAfter"`
+	CompactDropped     int      `json:"compactDropped"`
+	Engine             string   `json:"engine"`
 
 	Source           string  `json:"source,omitempty"`
 	Reason           string  `json:"reason,omitempty"`
@@ -118,9 +123,14 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	names := plan.ToolNames(asMaps(filterable))
 	stats.ToolBefore = len(names)
 	stats.ToolAfter = len(names)
+	stats.ToolsBefore = names
+	stats.ToolsAfter = names
 
 	elig := inspectRequest(root)
 	stats.Protocol = elig.Protocol
+	stats.HistoryTypes = elig.HistoryTypes
+	stats.UnsupportedHistory = elig.UnsupportedHistory
+	stats.HistoryIssues = elig.HistoryIssues
 	if !elig.OK {
 		stats.Chosen = "passthrough:" + elig.Reason
 		stats.Reason = elig.Reason
@@ -317,6 +327,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	stats.Done = decision.Done
 	stats.Gated = decision.Gated
 	stats.ToolAfter = len(filterableTools(kept))
+	stats.ToolsAfter = plan.ToolNames(asMaps(filterableTools(kept)))
 	stats.Changed = true
 	if stats.Reason == "" {
 		if usedJev {
@@ -334,10 +345,13 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 }
 
 type eligibility struct {
-	OK       bool
-	ForcedOK bool
-	Reason   string
-	Protocol string
+	OK                 bool
+	ForcedOK           bool
+	Reason             string
+	Protocol           string
+	HistoryTypes       []string
+	UnsupportedHistory []string
+	HistoryIssues      []string
 }
 
 func inspectRequest(root map[string]any) eligibility {
@@ -380,8 +394,9 @@ func inspectRequest(root map[string]any) eligibility {
 	if hist == nil {
 		hist = asSlice(root["input"])
 	}
+	types, unsupported, issues := historyShape(hist)
 	if reason := historyReason(hist); reason != "" {
-		return eligibility{Reason: reason, Protocol: protocol}
+		return eligibility{Reason: reason, Protocol: protocol, HistoryTypes: types, UnsupportedHistory: unsupported, HistoryIssues: issues}
 	}
 
 	forcedOK := true
@@ -401,7 +416,7 @@ func inspectRequest(root map[string]any) eligibility {
 	default:
 		forcedOK = false
 	}
-	return eligibility{OK: true, ForcedOK: forcedOK, Protocol: protocol}
+	return eligibility{OK: true, ForcedOK: forcedOK, Protocol: protocol, HistoryTypes: types, UnsupportedHistory: unsupported, HistoryIssues: issues}
 }
 
 func streamTrue(root map[string]any) bool {
@@ -630,10 +645,86 @@ func historyReason(msgs []any) string {
 	return ""
 }
 
+func historyShape(msgs []any) (types, unsupported, issues []string) {
+	// Why: Record type labels instead of request bodies so unsupported formats are diagnosable without retaining prompts or tool arguments.
+	seenTypes, seenUnsupported := map[string]bool{}, map[string]bool{}
+	add := func(dst *[]string, seen map[string]bool, value string) {
+		if value == "" || seen[value] || len(*dst) >= 32 {
+			return
+		}
+		seen[value] = true
+		*dst = append(*dst, value)
+	}
+	var content func(any, int)
+	content = func(v any, item int) {
+		parts, ok := v.([]any)
+		if !ok {
+			return
+		}
+		for _, raw := range parts {
+			p, ok := raw.(map[string]any)
+			if !ok {
+				add(&types, seenTypes, "content:<non-object>")
+				add(&unsupported, seenUnsupported, "content:<non-object>")
+				add(&issues, seenUnsupported, fmt.Sprintf("input[%d].content:<non-object>", item))
+				continue
+			}
+			typ, _ := p["type"].(string)
+			label := "content:" + typ
+			if typ == "" {
+				label = "content:<missing>"
+			}
+			add(&types, seenTypes, label)
+			switch typ {
+			case "text", "output_text", "input_text", "tool_use", "tool_result", "thinking", "redacted_thinking", "tool_reference", "":
+			case "image", "image_url", "input_image", "image_file":
+				add(&unsupported, seenUnsupported, label)
+				add(&issues, seenUnsupported, fmt.Sprintf("input[%d].%s", item, label))
+			default:
+				if _, hasText := p["text"]; !hasText {
+					add(&unsupported, seenUnsupported, label)
+					add(&issues, seenUnsupported, fmt.Sprintf("input[%d].%s", item, label))
+				}
+			}
+			content(p["content"], item)
+		}
+	}
+	for i, raw := range msgs {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			add(&types, seenTypes, "item:<non-object>")
+			add(&unsupported, seenUnsupported, "item:<non-object>")
+			add(&issues, seenUnsupported, fmt.Sprintf("input[%d]:<non-object>", i))
+			continue
+		}
+		typ, _ := m["type"].(string)
+		label := "item:" + typ
+		if typ == "" {
+			label = "item:<missing>"
+		}
+		add(&types, seenTypes, label)
+		switch typ {
+		case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "local_shell_call_output", "message", "reasoning", "item_reference", "":
+		default:
+			if _, hasRole := m["role"]; !hasRole {
+				add(&unsupported, seenUnsupported, label)
+				issue := fmt.Sprintf("input[%d].%s", i, label)
+				if tool, _ := m["name"].(string); tool != "" {
+					issue += " tool=" + clip(tool, eventStrMax)
+				}
+				add(&issues, seenUnsupported, issue)
+			}
+		}
+		content(m["content"], i)
+		content(m["output"], i)
+	}
+	return types, unsupported, issues
+}
+
 func messageReason(m map[string]any) string {
 	typ, _ := m["type"].(string)
 	switch typ {
-	case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output",
+	case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "local_shell_call_output",
 		"message", "reasoning", "item_reference", "":
 		// known Responses / Chat
 	default:
@@ -1808,6 +1899,10 @@ func cloneMap(m map[string]any) map[string]any {
 }
 
 func FormatStats(s RewriteStats) string {
-	return fmt.Sprintf("host=%s tools %d→%d chosen=%s compact -%d chars engine=%s",
-		s.Host, s.ToolBefore, s.ToolAfter, s.Chosen, s.CharsBefore-s.CharsAfter, s.Engine)
+	issues := "-"
+	if len(s.HistoryIssues) > 0 {
+		issues = strings.Join(s.HistoryIssues, ",")
+	}
+	return fmt.Sprintf("host=%s tools %d→%d chosen=%s compact -%d chars engine=%s history_issues=%s",
+		s.Host, s.ToolBefore, s.ToolAfter, s.Chosen, s.CharsBefore-s.CharsAfter, s.Engine, issues)
 }

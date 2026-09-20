@@ -105,3 +105,29 @@ func TestRunCombinesCodexConfigBeforeExec(t *testing.T) {
 		t.Fatalf("configuration still spans subcommand scopes: %#v", args)
 	}
 }
+
+func TestRunDashboardOpensAfterStartup(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("JEV_LISTEN", "127.0.0.1:0")
+	t.Setenv("JEV_RUN_STATS", "")
+
+	var got string
+	previous := openDashboard
+	openDashboard = func(url string) error {
+		got = url
+		return nil
+	}
+	t.Cleanup(func() { openDashboard = previous })
+
+	if code := cmdRun([]string{"--dashboard", "codex"}); code != 0 {
+		t.Fatalf("run exit=%d", code)
+	}
+	if !strings.HasPrefix(got, "http://127.0.0.1:") || !strings.HasSuffix(got, "/dashboard") {
+		t.Fatalf("dashboard URL = %q", got)
+	}
+}

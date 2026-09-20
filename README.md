@@ -1,8 +1,8 @@
 # jev-routing
 
-Claude Code / Codex / **Grok Build** / **Cursor Agent CLI** / **Devin CLI** 向けの Jev ハーネス。単一の Go バイナリです。**npx は使いません。MCP サーバーでもありません。** [nekowasabi/jev-routing-mcp](https://github.com/nekowasabi/jev-routing-mcp) の置き換えです。既存リポジトリへは Contents 権限の都合でブランチを押せなかったため、このリポジトリに置きました。
+Claude Code / Codex / **Grok Build** / **Cursor Agent CLI** / **Devin CLI** 向けの Jev ハーネス。単一の Go バイナリです。
 
-`claude mcp add` / `codex mcp add` / `grok mcp add` / Cursor・Devin の MCP 追加で足すと、ホストの組み込みツールも他の MCP も残ったまま往復が増え、トークンは悪化します。このバイナリはリクエスト前に:
+このバイナリはリクエスト前に:
 
 1. 会話の tool 結果を [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction) と同じ判定で drop / truncate する（本文は要約しない）
 2. Jev に次ツール（Choice）と done（Noul）を同時に聞く
@@ -86,20 +86,9 @@ requires_openai_auth = true
 
 Cursor Agent CLI は既定で `https://api2.cursor.sh` の Connect RPC（`/aiserver` / `/agent.v1`）に送ります。JSON の `tools[]` または `mcpTools` を含む POST を書き換え、protobuf 本体はそのまま上流へ渡します。Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`・`/sessions` および `prompt`/`message` + `tools[]` JSON を想定しています。Codex ChatGPT ログインは Responses Lite の `input` 内にある `additional_tools` から `functions` 名前空間を展開し、元の位置を保ってローカルツールを絞ります。外部名前空間と提供側の実行ツールは残します。
 
-## やらないこと
-
-```bash
-# カタログが増えるだけ。tools[] は消えない
-claude mcp add jev-routing -- npx -y jev-routing-mcp
-codex mcp add jev-routing -- npx -y jev-routing-mcp
-grok mcp add jev-routing -- npx -y jev-routing-mcp
-```
-
-Grok の `PreCompact` / Claude の `PreToolUse` は、モデルが全スキーマを見たあとです。拒否はできてもカタログは剥がせません。
-
 ## Compaction
 
-`tamaratran/fast-jev-compaction` と同じ契約です。
+履歴圧縮の判定は [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)（[MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE)、Copyright (c) 2025）を参考に Go へ移植した。要約はせず、`tool_use` / `tool_result` の drop / truncate 契約を踏襲する。
 
 - ユーザー文とアシスタント文は触らない
 - tool_use と tool_result だけを noul で採点
@@ -126,9 +115,24 @@ jev-routing compact < transcript.json
 | 一覧 | Glob | list_dir | list_dir | Glob | glob |
 | サブエージェント | Agent | spawn_agent | spawn_subagent | Task | run_subagent |
 
-MCP プラグイン名（`github_get_pr` など）は共通です。Grok の旧名 `run_terminal_cmd` / `task` は別名として残し、実カタログに無い名前は作りません。
+外部ツール名（`github_get_pr` など）は共通です。Grok の旧名 `run_terminal_cmd` / `task` は別名として残し、実カタログに無い名前は作りません。
 
-ループバックで待受しているときだけ、読み取り専用の `http://127.0.0.1:<port>/dashboard` を開けます。公開待受では 404 です。画面から設定は変えられません。料金は表示しません。
+## Dashboard
+
+ループバックで待受しているときだけ、読み取り専用の `http://127.0.0.1:<port>/dashboard` を開けます。公開待受では 404 です。画面から設定は変えられません。料金は表示しません。CORS は付けず、GET 以外は受けません。
+
+```bash
+jev-routing run --dashboard grok
+```
+
+`run --dashboard` は起動後にブラウザーでダッシュボードを開きます。`serve` のときは同じ URL を手で開きます。画面は現在のプロセスだけを 2 秒間隔で更新します。
+
+- ルーティング概要（判定元・適用の件数）
+- 上流レスポンスから集計したトークン消費（入力・出力・キャッシュ・推論）
+- 直近のリクエスト（連番、判定元、適用、採用ツール、理由、変更、ツール置換、jev、トークン、時間）
+- Comparison JSON の貼り付け（ローカル表示のみ。送信しません）
+
+ブラウザー側は最大 1000 件を保持し、表は直近 200 件です。
 
 ## 比較実験（既定では無効）
 
