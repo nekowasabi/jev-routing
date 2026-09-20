@@ -32,6 +32,8 @@ type Server struct {
 	Log         *log.Logger
 	Options     Options
 	mu          sync.Mutex
+	catalogMu   sync.RWMutex
+	applyMu     sync.Mutex
 	Last        RewriteStats
 	Requests    int
 	CharsBefore int
@@ -872,6 +874,8 @@ func (s *Server) autoApply(body []byte) {
 	if s == nil || !s.Options.AutoApply {
 		return
 	}
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	s.LastDelivered = ""
 	if s.Executor == nil {
 		s.Executor = &recordingExec{}
@@ -884,9 +888,12 @@ func (s *Server) autoApply(body []byte) {
 		return
 	}
 	if tools, _ := extractTools(root); len(tools) > 0 {
+		s.catalogMu.Lock()
 		s.Catalog.Merge(plan.CapabilitiesFromSpecs(specsFromToolArray(tools), s.Host))
+		s.catalogMu.Unlock()
 	}
-	if len(s.Catalog.Items) == 0 {
+	cat, bodies := s.catalogSnapshot()
+	if len(cat.Items) == 0 {
 		return
 	}
 	msgs, _ := locateHistory(root)
@@ -899,6 +906,7 @@ func (s *Server) autoApply(body []byte) {
 		return
 	}
 	s.ensureSkillBodies()
+	cat, bodies = s.catalogSnapshot()
 	var ask plan.ChoiceAsker
 	if s.Client != nil && s.Client.Live() {
 		ask = func(text string, criteria map[string]string) (string, float64, error) {
@@ -920,19 +928,19 @@ func (s *Server) autoApply(body []byte) {
 	}
 	var explicit []string
 	low := strings.ToLower(user)
-	for _, item := range s.Catalog.Items {
+	for _, item := range cat.Items {
 		if strings.Contains(low, strings.ToLower(item.Name)) && (item.Kind == plan.KindSkill || item.Kind == plan.KindCLI || item.Kind == plan.KindMCP || item.Explicit) {
 			explicit = append(explicit, item.ID)
 		}
 	}
-	route := plan.Route(plan.RouteRequest{Text: user, Host: s.Host, Catalog: s.Catalog, Explicit: explicit, NewRequest: true}, ask)
+	route := plan.Route(plan.RouteRequest{Text: user, Host: s.Host, Catalog: cat, Explicit: explicit, NewRequest: true}, ask)
 	if route.Outcome != plan.RouteSelected {
 		if s.Options.ApplicationPolicy == PolicyRequired && len(explicit) > 0 {
 			s.ApplyErr = "required application: no selection (" + route.ReasonCode + ")"
 		}
 		return
 	}
-	item, ok := plan.Lookup(s.Catalog, route.CapabilityID)
+	item, ok := plan.Lookup(cat, route.CapabilityID)
 	if !ok {
 		if s.Options.ApplicationPolicy == PolicyRequired {
 			s.ApplyErr = "required application: unknown capability"
@@ -962,7 +970,7 @@ func (s *Server) autoApply(body []byte) {
 		}
 		return
 	}
-	app, err := Apply(s.Apps, route, s.Catalog, s.SkillBodies, nil, s.Executor)
+	app, err := Apply(s.Apps, route, cat, bodies, nil, s.Executor)
 	if err != nil || !Success(app) && s.Options.ApplicationPolicy == PolicyRequired {
 		if err != nil {
 			s.ApplyErr = err.Error()
@@ -986,6 +994,12 @@ func (s *Server) ensureSkillBodies() {
 	if s == nil {
 		return
 	}
+	s.catalogMu.Lock()
+	defer s.catalogMu.Unlock()
+	s.ensureSkillBodiesLocked()
+}
+
+func (s *Server) ensureSkillBodiesLocked() {
 	if s.SkillBodies == nil {
 		s.SkillBodies = map[string]string{}
 	}
@@ -1001,6 +1015,19 @@ func (s *Server) ensureSkillBodies() {
 			s.SkillBodies[ref] = body
 		}
 	}
+}
+
+func (s *Server) catalogSnapshot() (plan.Catalog, map[string]string) {
+	s.catalogMu.RLock()
+	defer s.catalogMu.RUnlock()
+	cat := s.Catalog
+	// Why: Use copies instead of holding catalogMu through Apply, which can invoke a HostExecutor.
+	cat.Items = append([]plan.Capability(nil), s.Catalog.Items...)
+	bodies := make(map[string]string, len(s.SkillBodies))
+	for ref, body := range s.SkillBodies {
+		bodies[ref] = body
+	}
+	return cat, bodies
 }
 
 func loadSkillBody(ref, desc string) string {
@@ -1525,6 +1552,8 @@ func (s *Server) startObservedCall(callID, name string) {
 	if s == nil || s.Apps == nil || strings.TrimSpace(name) == "" {
 		return
 	}
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	if plan.HostMeta(name) {
 		return
 	}
@@ -1538,6 +1567,7 @@ func (s *Server) startObservedCall(callID, name string) {
 	}
 	var item plan.Capability
 	found := false
+	s.catalogMu.Lock()
 	for _, cand := range s.Catalog.Items {
 		if strings.EqualFold(cand.Name, name) && cand.Kind != plan.KindSkill {
 			item, found = cand, true
@@ -1564,11 +1594,13 @@ func (s *Server) startObservedCall(callID, name string) {
 		}
 		s.Catalog.Merge([]plan.Capability{item})
 	}
+	cat, bodies := s.catalogSnapshotLocked()
+	s.catalogMu.Unlock()
 	route := plan.RouteResult{DecisionID: callID, Outcome: plan.RouteSelected, CapabilityID: item.ID}
 	if route.DecisionID == "" {
 		route.DecisionID = item.ID
 	}
-	app, err := Apply(s.Apps, route, s.Catalog, s.SkillBodies, nil, s.Executor)
+	app, err := Apply(s.Apps, route, cat, bodies, nil, s.Executor)
 	if err != nil || app == nil {
 		return
 	}
@@ -1577,6 +1609,16 @@ func (s *Server) startObservedCall(callID, name string) {
 		s.Apps.put(app)
 	}
 	s.stampApp(app)
+}
+
+func (s *Server) catalogSnapshotLocked() (plan.Catalog, map[string]string) {
+	cat := s.Catalog
+	cat.Items = append([]plan.Capability(nil), s.Catalog.Items...)
+	bodies := make(map[string]string, len(s.SkillBodies))
+	for ref, body := range s.SkillBodies {
+		bodies[ref] = body
+	}
+	return cat, bodies
 }
 
 func (s *Server) stampApp(app *Application) {

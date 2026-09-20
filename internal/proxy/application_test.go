@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,50 @@ type fakeExec struct {
 	calls  []HostCall
 	nextID string
 	err    error
+}
+
+func TestAppStoreCopiesApplications(t *testing.T) {
+	store := NewAppStore()
+	store.put(&Application{DecisionID: "d1", Host: "claude", Command: []string{"rg"}})
+
+	got := store.Get("d1")
+	got.Host = "codex"
+	got.Command[0] = "grep"
+
+	snapshot := store.Snapshot()
+	if len(snapshot) != 1 || snapshot[0].Host != "claude" || snapshot[0].Command[0] != "rg" {
+		t.Fatalf("store leaked returned mutation: %+v", snapshot)
+	}
+}
+
+func TestServerCatalogConcurrentUpdates(t *testing.T) {
+	s := &Server{
+		Host:     host.Claude,
+		Options:  Options{AutoApply: true},
+		Apps:     NewAppStore(),
+		Executor: &recordingExec{},
+	}
+	body := []byte(`{"messages":[{"role":"user","content":"say pong"}],"tools":[{"name":"Read","description":"read a file"}]}`)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			s.autoApply(body)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := range 100 {
+			s.startObservedCall(fmt.Sprintf("call-%d", i), fmt.Sprintf("tool-%d", i))
+		}
+	}()
+	wg.Wait()
+
+	cat, _ := s.catalogSnapshot()
+	if len(cat.Items) < 100 {
+		t.Fatalf("Catalog has %d items, want observed tools", len(cat.Items))
+	}
 }
 
 func (f *fakeExec) DeliverSkill(decisionID, body, source string) error {

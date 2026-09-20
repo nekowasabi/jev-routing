@@ -3,7 +3,14 @@ package main
 import (
 	"net"
 	"testing"
+	"time"
 )
+
+func TestHTTPServerReadTimeout(t *testing.T) {
+	if got, want := newHTTPServer(nil).ReadTimeout, 30*time.Second; got != want {
+		t.Fatalf("ReadTimeout = %s, want %s", got, want)
+	}
+}
 
 func TestListenForRunFallsBackWhenDefaultPortIsBusy(t *testing.T) {
 	t.Setenv("JEV_LISTEN", "")

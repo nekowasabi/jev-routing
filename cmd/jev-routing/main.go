@@ -174,6 +174,7 @@ func newHTTPServer(handler http.Handler) *http.Server {
 	return &http.Server{
 		Handler:           h2c.NewHandler(handler, &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 }

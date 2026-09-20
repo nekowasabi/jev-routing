@@ -66,7 +66,7 @@ func (s *AppStore) Get(id string) *Application {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.byID[id]
+	return cloneApplication(s.byID[id])
 }
 
 func (s *AppStore) put(app *Application) {
@@ -74,8 +74,18 @@ func (s *AppStore) put(app *Application) {
 		return
 	}
 	s.mu.Lock()
-	s.byID[app.DecisionID] = app
+	s.byID[app.DecisionID] = cloneApplication(app)
 	s.mu.Unlock()
+}
+
+func cloneApplication(app *Application) *Application {
+	if app == nil {
+		return nil
+	}
+	// Why: Store-owned copies prevent callers from mutating values that Snapshot reads under the store lock.
+	cp := *app
+	cp.Command = append([]string(nil), app.Command...)
+	return &cp
 }
 
 func (s *AppStore) startCount(id string) int {
@@ -301,8 +311,7 @@ func (s *AppStore) Snapshot() []*Application {
 	defer s.mu.Unlock()
 	out := make([]*Application, 0, len(s.byID))
 	for _, app := range s.byID {
-		cp := *app
-		out = append(out, &cp)
+		out = append(out, cloneApplication(app))
 	}
 	return out
 }
