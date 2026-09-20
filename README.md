@@ -103,19 +103,31 @@ Cursor Agent CLI は既定で `https://api2.cursor.sh` の Connect RPC（`/aiser
 jev-routing compact < transcript.json
 ```
 
-## ホストの組み込み名
+## 対応ツール
+
+プロキシはリクエストに含まれる実行時カタログを正本にし、未知のツールを生成しません。下表は選択ロジックが役割を対応付ける組み込み名です。MCP・Skills・Pluginsが追加するツールは、実行時カタログの名前をそのまま扱います。
 
 | 役割 | Claude Code | Codex | Grok Build | Cursor Agent | Devin CLI |
 |---|---|---|---|---|---|
-| 読む | Read | read_file | read_file | Read | read |
-| 直す | Edit | apply_patch | search_replace | Write | edit |
-| 書く | Write | add_file | search_replace | Write | write |
-| シェル | Bash | exec_command | run_terminal_command | Shell | exec |
-| 検索 | Grep | grep_files | grep | Grep | grep |
-| 一覧 | Glob | list_dir | list_dir | Glob | glob |
-| サブエージェント | Agent | spawn_agent | spawn_subagent | Task | run_subagent |
+| 読み取り | Read | read_file | read_file | Read File | read |
+| 編集 | Edit | apply_patch | search_replace | Edit & Reapply | edit |
+| 書き込み | Write | add_file | write | Edit & Reapply | write |
+| シェル | Bash | exec_command | run_terminal_cmd | Terminal | exec |
+| 検索 | Grep / Glob | grep_files / list_dir | grep_search / list_dir | Grep / Search Files / Codebase | grep / glob |
+| Web | WebSearch / WebFetch | web_search / web_fetch | web_search / web_fetch | Web | web_search / webfetch |
+| サブエージェント | Agent | spawn_agent | task | — | run_subagent / read_subagent |
+| タスク管理 | TodoWrite | update_plan | todo_write / get_task_output / kill_task | — | todo_write |
+| MCP | ToolSearch / MCPツール | `mcp__<server>__<tool>` | search_tool / use_tool | 設定済みMCPツール | mcp_list_tools / mcp_call_tool / mcp_read_resource |
 
-外部ツール名（`github_get_pr` など）は共通です。Grok の旧名 `run_terminal_cmd` / `task` は別名として残し、実カタログに無い名前は作りません。
+### 製品別の範囲
+
+- [Claude Code](https://code.claude.com/docs/en/tools-reference): `tool_use` / `tool_result` の履歴形式を受理します。組み込み名は実行環境・機能フラグで変化するため、固定の許可リストにはしません。
+- Codex: `functions.*`、`custom_tool_call`、Responsesの組み込みツールおよびMCP呼び出しの履歴形式を受理します。
+- [Grok Build](https://docs.x.ai/build/features/permissions): `read_file`、`search_replace`、`grep_search`、`list_dir`、`run_terminal_cmd`、`web_search`、`web_fetch`、`todo_write`、`task`、`kill_task`、`get_task_output`、`memory_search`、`memory_get`、`search_tool`、`use_tool`、`lsp`、条件付きの`write`を実行時カタログから扱います。
+- [Cursor Agent](https://cursor.com/ja/docs/agent/overview#tools): ファイル・フォルダー検索、Web、ルール取得、読取、編集、ターミナル、ブラウザ、画像生成、質問、MCPを実行時カタログから扱います。CLIの`stream-json`は観測出力であり、会話履歴には混在させません。
+- [Devin CLI](https://docs.devin.ai/cli/reference/permissions#tool-based-permissions): `read`、`write`、`edit`、`apply_patch`、ノートブック、検索、シェル、`webfetch`、タスク、Skills、サブエージェント、権限、MCP管理ツールを実行時カタログから扱います。ATIFエクスポート形式は公開スキーマが確認できるまで履歴判定へ推測追加しません。
+
+履歴形式は、Claudeの`tool_use` / `tool_result`、Codex・Responsesの`*_call`、MCPの`mcp_call`を明示的に受理します。画像を含む履歴は安全側で通過します。
 
 ## Dashboard
 

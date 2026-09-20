@@ -80,11 +80,14 @@ func TestParse(t *testing.T) {
 }
 
 func TestNativeGrokCatalogNames(t *testing.T) {
-	if Native(Grok, "Bash") != "run_terminal_command" {
+	if Native(Grok, "Bash") != "run_terminal_cmd" {
 		t.Fatalf("grok Bash: %s", Native(Grok, "Bash"))
 	}
-	if Native(Grok, "Agent") != "spawn_subagent" {
+	if Native(Grok, "Agent") != "task" {
 		t.Fatalf("grok Agent: %s", Native(Grok, "Agent"))
+	}
+	if Native(Grok, "Grep") != "grep_search" || Native(Grok, "Write") != "write" || Native(Grok, "ToolSearch") != "search_tool" {
+		t.Fatalf("grok official catalog: Grep=%s Write=%s ToolSearch=%s", Native(Grok, "Grep"), Native(Grok, "Write"), Native(Grok, "ToolSearch"))
 	}
 }
 
@@ -130,6 +133,9 @@ func TestNativeCursorDevin(t *testing.T) {
 	}
 	if Native(Devin, "WebFetch") != "webfetch" {
 		t.Fatalf("devin WebFetch: %s", Native(Devin, "WebFetch"))
+	}
+	if Native(Devin, "NotebookEdit") != "notebook_edit" || Native(Devin, "TaskOutput") != "read_subagent" || Native(Devin, "ReadMcpResourceTool") != "mcp_read_resource" {
+		t.Fatalf("devin official catalog: NotebookEdit=%s TaskOutput=%s ReadMcpResourceTool=%s", Native(Devin, "NotebookEdit"), Native(Devin, "TaskOutput"), Native(Devin, "ReadMcpResourceTool"))
 	}
 	if Native(Devin, "TodoWrite") != "todo_write" {
 		t.Fatalf("devin TodoWrite: %s", Native(Devin, "TodoWrite"))

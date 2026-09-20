@@ -157,14 +157,14 @@ func TestWorkRequestUsesUserQueryNotPreamble(t *testing.T) {
 func TestGrokMapsGrepThenReadThenSearchReplace(t *testing.T) {
 	p := "The auth middleware test is failing. Find the test, read it, fix the assertion in place, and re-run the tests."
 	g0 := Remaining(p, nil, host.Grok)
-	if g0[0][0] != "grep" && g0[0][0] != "list_dir" {
+	if g0[0][0] != "grep_search" && g0[0][0] != "list_dir" {
 		t.Fatalf("first goal %v", g0[0])
 	}
-	after := Remaining(p, []Action{{Tool: "grep"}}, host.Grok)
+	after := Remaining(p, []Action{{Tool: "grep_search"}}, host.Grok)
 	if after[0][0] != "read_file" {
 		t.Fatalf("after grep %v", after[0])
 	}
-	afterRead := Remaining(p, []Action{{Tool: "grep"}, {Tool: "read_file"}}, host.Grok)
+	afterRead := Remaining(p, []Action{{Tool: "grep_search"}, {Tool: "read_file"}}, host.Grok)
 	if afterRead[0][0] != "search_replace" {
 		t.Fatalf("after read %v", afterRead[0])
 	}

@@ -360,10 +360,11 @@ func aliasIn(set map[string]bool, want string) string {
 		"Agent":                {"Task", "task", "spawn_agent", "spawn_subagent"},
 		"Task":                 {"Agent", "spawn_agent", "spawn_subagent", "task"},
 		"spawn_subagent":       {"Agent", "Task", "task", "spawn_agent"},
-		"Grep":                 {"grep", "grep_files"},
+		"Grep":                 {"grep", "grep_search", "grep_files"},
 		"Read":                 {"read_file"},
 		"Edit":                 {"search_replace", "apply_patch"},
-		"Bash":                 {"run_terminal_command", "run_terminal_cmd", "exec_command", "shell", "shell_command", "exec"},
+		"Bash":                 {"run_terminal_cmd", "run_terminal_command", "exec_command", "shell", "shell_command", "exec"},
+		"run_terminal_cmd":     {"run_terminal_command", "exec_command", "shell", "shell_command", "Bash"},
 		"run_terminal_command": {"run_terminal_cmd", "exec_command", "shell", "shell_command", "Bash"},
 		"exec_command":         {"shell", "shell_command", "run_terminal_command", "Bash"},
 	}

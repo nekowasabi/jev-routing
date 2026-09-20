@@ -99,14 +99,13 @@ var toCodex = map[string]string{
 }
 
 var toGrok = map[string]string{
-	"Read": "read_file", "Edit": "search_replace", "Write": "search_replace",
-	// Why: Confirmed Grok catalog uses run_terminal_command / spawn_subagent.
-	// Legacy run_terminal_cmd / task stay aliases in plan.aliasIn only.
-	"Bash": "run_terminal_command", "Glob": "list_dir", "Grep": "grep",
-	"Agent": "spawn_subagent", "Skill": "workflow", "WebFetch": "web_fetch",
+	"Read": "read_file", "Edit": "search_replace", "Write": "write",
+	// Why: Grok Build documents run_terminal_cmd and task as the model-facing IDs;
+	// do not substitute older aliases that its live catalog may not advertise.
+	"Bash": "run_terminal_cmd", "Glob": "list_dir", "Grep": "grep_search",
+	"Agent": "task", "ToolSearch": "search_tool", "WebFetch": "web_fetch",
 	"WebSearch": "web_search", "TodoWrite": "todo_write", "LSP": "lsp",
-	"AskUserQuestion": "ask_user_question", "EnterPlanMode": "enter_plan_mode",
-	"ExitPlanMode": "exit_plan_mode", "Monitor": "monitor",
+	"Monitor": "get_task_output", "TaskStop": "kill_task",
 }
 
 // Cursor catalog IDs from docs.cursor.com plus cursor-agent 2026.08.31 index.js.
@@ -133,13 +132,16 @@ var toDevin = map[string]string{
 	"Glob": "glob",
 	"Grep": "grep",
 	// Why: Instead of spawn_agent, adopted run_subagent. Reason: official subagent docs; parent also has read_subagent but Native(Agent) is run_subagent only.
-	"Agent":           "run_subagent",
-	"WebSearch":       "web_search",
-	"WebFetch":        "webfetch", // Why: toolbox webfetch.rs / binary tool name webfetch, not WebFetch.
-	"TodoWrite":       "todo_write",
-	"AskUserQuestion": "ask_user_question",
-	"EnterPlanMode":   "write_plan",
-	"ExitPlanMode":    "exit_plan_mode",
+	"Agent":               "run_subagent",
+	"WebSearch":           "web_search",
+	"WebFetch":            "webfetch", // Why: toolbox webfetch.rs / binary tool name webfetch, not WebFetch.
+	"NotebookEdit":        "notebook_edit",
+	"TaskOutput":          "read_subagent",
+	"ReadMcpResourceTool": "mcp_read_resource",
+	"TodoWrite":           "todo_write",
+	"AskUserQuestion":     "ask_user_question",
+	"EnterPlanMode":       "write_plan",
+	"ExitPlanMode":        "exit_plan_mode",
 }
 
 func Advertise(h ID, listen string) string {
@@ -177,6 +179,7 @@ func ChildEnv(h ID, listen string) []string {
 	case Cursor:
 		// Why: Instead of OPENAI_BASE_URL, adopted CURSOR_API_ENDPOINT plus CURSOR_API_BASE_URL.
 		// Reason: cursor-agent --help documents CURSOR_API_ENDPOINT; index.js also reads CURSOR_API_BASE_URL.
+		drop["OPENAI_BASE_URL"] = true
 		u := "http://" + Advertise(h, listen)
 		add["CURSOR_API_ENDPOINT"] = u
 		add["CURSOR_API_BASE_URL"] = u

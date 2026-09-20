@@ -112,10 +112,10 @@ func TestGrokRewriteStripsCatalog(t *testing.T) {
 	if stats.ToolAfter != 1 {
 		t.Fatalf("tools after=%d chosen=%s", stats.ToolAfter, stats.Chosen)
 	}
-	if stats.Chosen != "grep" {
+	if stats.Chosen != "read_file" {
 		t.Fatalf("chosen %s", stats.Chosen)
 	}
-	if !reflect.DeepEqual(stats.ToolsBefore, []string{"read_file", "grep", "search_replace", "run_terminal_cmd", "mcp_edit_file"}) || !reflect.DeepEqual(stats.ToolsAfter, []string{"grep"}) {
+	if !reflect.DeepEqual(stats.ToolsBefore, []string{"read_file", "grep", "search_replace", "run_terminal_cmd", "mcp_edit_file"}) || !reflect.DeepEqual(stats.ToolsAfter, []string{"read_file"}) {
 		t.Fatalf("tool names before=%v after=%v", stats.ToolsBefore, stats.ToolsAfter)
 	}
 	var got map[string]any
