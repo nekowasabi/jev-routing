@@ -14,6 +14,7 @@ import (
 )
 
 const connectFlagCompressed byte = 0x01
+const connectFlagEndStream byte = 0x02
 
 func protoString(field int, s string) []byte {
 	return protoTagAndBytes(uint64(field)<<3|2, []byte(s))
@@ -99,6 +100,18 @@ func (l *lazyConnectCursor) record(frame, out []byte, stats RewriteStats, catalo
 	l.s.events.Update(l.seq, func(e *Event) {
 		if stats.Source != "" {
 			e.Source = stats.Source
+			c := stats.Confidence
+			e.Confidence = &c
+		}
+		if stats.NeedsTool != 0 || stats.Source == sourceJev {
+			n := stats.NeedsTool
+			e.NeedsTool = &n
+		}
+		if stats.OriginalModel != "" {
+			e.OriginalModel = stats.OriginalModel
+		}
+		if stats.SentModel != "" {
+			e.SentModel = stats.SentModel
 		}
 		if stats.Reason != "" && (e.Reason == "" || e.Reason == reasonStream || e.Reason == reasonNotChat) {
 			e.Reason = stats.Reason
