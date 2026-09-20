@@ -10,12 +10,6 @@ import (
 	"strings"
 )
 
-type directCall struct {
-	ID   string
-	Name string
-	Args string
-}
-
 func directArgsFor(tool any) (string, bool) {
 	m, ok := tool.(map[string]any)
 	if !ok {

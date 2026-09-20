@@ -1311,27 +1311,6 @@ func cursorTaskFromFrame(frame []byte) string {
 	return liftActionText(raw)
 }
 
-func liftToolsRepeated(msg []byte, field int) ([]any, map[string][]byte) {
-	fields, ok := parseProtoFields(msg)
-	if !ok {
-		return nil, nil
-	}
-	var tools []any
-	tb := map[string][]byte{}
-	for _, f := range fields {
-		if f.field != field || f.wire != 2 {
-			continue
-		}
-		name, desc := mcpToolNameDesc(f.raw)
-		if name == "" {
-			continue
-		}
-		tb[name] = append([]byte(nil), f.raw...)
-		tools = append(tools, map[string]any{"name": name, "description": desc})
-	}
-	return tools, tb
-}
-
 func requestContextTask(rc []byte) string {
 	if t := firstLD(rc, 21); protoLikelyLeafText(t) {
 		return string(t)
