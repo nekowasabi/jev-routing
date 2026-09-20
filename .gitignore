@@ -4,6 +4,7 @@
 .env.*
 !.env.example
 .serena/
+.agent-checkpoints/
 .tgrep/
 bin/
 artifacts/
