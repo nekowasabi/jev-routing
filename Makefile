@@ -1,4 +1,5 @@
 BINARY := jev-routing
+.DEFAULT_GOAL := install
 GOBIN ?= $(shell go env GOBIN)
 ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
