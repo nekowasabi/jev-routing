@@ -9,6 +9,41 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   const MAX_STORE = 1000;
   const TABLE_ROWS = 200;
+  const STRINGS = {
+    ja: {
+      language: "表示言語", routingOverview: "ルーティング概要", tokenUsage: "トークン消費",
+      route: "判定経路", routeHelp: "どの判断元を通ったか", apply: "適用方式", applyHelp: "ツール一覧をどう扱ったか",
+      local: "ローカル判定", jev: "Jev 判定", passthrough: "安全側通過", ineligible: "対象外", filter: "絞り込み適用", forced: "強制適用", direct: "そのまま送信", jev_failed: "Jev 呼び出し失敗",
+      loading: "読み込み中…", unavailable: "履歴を取得できません", disconnected: "接続切れ", instance: "インスタンス", recorded: "記録", mode: "モード", updated: "最終更新", historyTruncated: "履歴を省略", sample: "サンプル",
+      input: "入力", output: "出力", cacheRead: "キャッシュ読取", cacheWrite: "キャッシュ書込", reasoning: "推論", directSaved: "直通で回避した入力（推定）", compactSaved: "コンパクションで削減した入力（推定）", tokens: "トークン", usageNote: "件の上流レスポンスから実測。回避・削減は送信前の推定値。",
+      history: "安全側へ通過した履歴（不明な箇所）", skippedTools: "カタログから除外したツール", application: "可動個所と適用", unapplied: "未適用の理由", effects: "比較効果", funnel: "判断が届いたか", kinds: "Jevが働いた場所", events: "直近のリクエスト", host: "ホスト", source: "判定元", all: "すべて", reconnect: "再接続", sequence: "連番", outcome: "判定結果", chosenTool: "採用ツール", reason: "理由", confidence: "確信度", replacement: "ツール置換", time: "時間",
+      noTool: "Jev がツール不要と判断", jevSelected: "Jev 分類で採用", localSelected: "ローカル分類で採用", localAfterJev: "Jev を使ったがローカル分類を採用", unsupported: "履歴形式が未対応のため通過", uncertain: "Jev 判定が不確実のため通過", safePass: "安全側通過: ", unrecorded: "未記録", missing: "欠測", changed: "変更", yes: "あり", no: "なし"
+    },
+    en: {
+      language: "Language", routingOverview: "Routing overview", tokenUsage: "Token usage",
+      route: "Decision source", routeHelp: "Where each routing decision came from", apply: "Application", applyHelp: "How the tool catalog was handled",
+      local: "Local decision", jev: "Jev decision", passthrough: "Safe pass-through", ineligible: "Ineligible", filter: "Filtered", forced: "Forced", direct: "Sent unchanged", jev_failed: "Jev call failures",
+      loading: "Loading…", unavailable: "Could not load history", disconnected: "Disconnected", instance: "Instance", recorded: "Recorded", mode: "Mode", updated: "Updated", historyTruncated: "History truncated", sample: "Sample",
+      input: "Input", output: "Output", cacheRead: "Cache read", cacheWrite: "Cache write", reasoning: "Reasoning", directSaved: "Input avoided directly (estimated)", compactSaved: "Input saved by compaction (estimated)", tokens: "tokens", usageNote: "upstream responses measured. Avoided and saved values are pre-send estimates.",
+      history: "History passed through safely (unknown parts)", skippedTools: "Tools excluded from the catalog", application: "Applications", unapplied: "Why not applied", effects: "Comparison effects", funnel: "Did the decision arrive?", kinds: "Where Jev ran", events: "Recent requests", host: "Host", source: "Decision source", all: "All", reconnect: "Reconnect", sequence: "Sequence", outcome: "Outcome", chosenTool: "Chosen tool", reason: "Reason", confidence: "Confidence", replacement: "Tool replacement", time: "Time",
+      noTool: "Jev determined no tool is needed", jevSelected: "Selected by Jev", localSelected: "Selected locally", localAfterJev: "Jev consulted; local selection used", unsupported: "Passed through: unsupported history format", uncertain: "Passed through: Jev decision uncertain", safePass: "Safe pass-through: ", unrecorded: "Not recorded", missing: "missing", changed: "changed", yes: "yes", no: "no"
+    }
+  };
+
+  function t(key, lang) {
+    const values = STRINGS[lang] || STRINGS.ja;
+    return values[key] || STRINGS.ja[key] || key;
+  }
+
+  function overviewGroups(summary, lang) {
+    // Why: Keep decision source separate from application mode so a pass-through is not mistaken for a Jev failure.
+    return [
+      { title: t("route", lang), help: t("routeHelp", lang), values: ["local", "jev", "passthrough", "ineligible"] },
+      { title: t("apply", lang), help: t("applyHelp", lang), values: ["filter", "forced", "direct", "jev_failed"] }
+    ].map(function (group) {
+      return Object.assign(group, { values: group.values.map(function (key) { return { key: key, label: t(key, lang), value: Number(summary[key]) || 0 }; }) });
+    });
+  }
 
   function clip(s, n) {
     s = String(s == null ? "" : s);
@@ -86,16 +121,16 @@
     return value == null ? "—" : (Number(value) * 100).toFixed(0) + "%";
   }
 
-  function routeOutcome(e) {
-    if (e.reason === "no_tool_needed") return "Jev がツール不要と判断";
-    if (e.source === "jev" && e.changed) return "Jev 分類で採用";
+  function routeOutcome(e, lang) {
+    if (e.reason === "no_tool_needed") return t("noTool", lang);
+    if (e.source === "jev" && e.changed) return t("jevSelected", lang);
     if (e.source === "local" && e.changed) {
-      return (e.selectionJevCalls || 0) > 0 ? "Jev を使ったがローカル分類を採用" : "ローカル分類で採用";
+      return (e.selectionJevCalls || 0) > 0 ? t("localAfterJev", lang) : t("localSelected", lang);
     }
-    if (e.reason === "unrecognized_format") return "履歴形式が未対応のため通過";
-    if (e.reason === "uncertain_jev") return "Jev 判定が不確実のため通過";
-    if (e.reason) return "安全側通過: " + e.reason;
-    return "未記録";
+    if (e.reason === "unrecognized_format") return t("unsupported", lang);
+    if (e.reason === "uncertain_jev") return t("uncertain", lang);
+    if (e.reason) return t("safePass", lang) + e.reason;
+    return t("unrecorded", lang);
   }
 
   function skippedTools(events) {
@@ -139,6 +174,63 @@
     return { ok: true, data };
   }
 
+  function summarizeApplication(metrics) {
+    metrics = metrics || {};
+    return {
+      selected: Number(metrics.selected) || 0,
+      delivered: Number(metrics.delivered) || 0,
+      started: Number(metrics.started) || 0,
+      result_received: Number(metrics.result_received) || 0,
+      verified: Number(metrics.verified) || 0,
+      failed: Number(metrics.failed) || 0,
+      unapplied: Number(metrics.unapplied) || 0,
+      local_skip: Number(metrics.local_skip) || 0,
+      missing_usage: Number(metrics.missing_usage) || 0,
+      sample: !!metrics.sample
+    };
+  }
+
+  function unappliedReasons(metrics) {
+    const src = (metrics && metrics.unapplied_reason) || {};
+    return Object.keys(src).sort().map(function (k) { return { reason: k, count: src[k] }; });
+  }
+
+  function formatEffect(kind) {
+    switch (kind) {
+      case "increase": return "増加";
+      case "decrease": return "削減";
+      case "unapplied": return "未適用";
+      case "local_skip": return "正常なローカル省略";
+      case "missing": return "欠測";
+      case "none": return "比較なし";
+      default: return "比較なし";
+    }
+  }
+
+  function filterEvents(events, filters) {
+    filters = filters || {};
+    return (events || []).filter(function (e) {
+      if (filters.host && e.host !== filters.host) return false;
+      if (filters.source && e.source !== filters.source) return false;
+      if (filters.apply && e.apply !== filters.apply) return false;
+      return true;
+    });
+  }
+
+  const SAMPLE_EVENTS = [
+    { seq: 1, host: "grok", source: "local", apply: "filter", chosen: "read_file", reason: "local", confidence: 0.2, changed: true, toolsBefore: ["read_file", "exec"], toolsAfter: ["read_file"], usage: { inputTokens: 12, outputTokens: 3 } },
+    { seq: 2, host: "codex", source: "jev", apply: "filter", chosen: "exec", reason: "top_set_jev", confidence: 0.7, changed: true, toolsBefore: ["exec", "web"], toolsAfter: ["exec"], usage: { inputTokens: 9, outputTokens: 4 } },
+    { seq: 3, host: "cursor", source: "passthrough", apply: "none", chosen: "", reason: "unknown_history", changed: false, usageMissing: "no_usage" }
+  ];
+
+  const SAMPLE_METRICS = {
+    selected: 2, delivered: 1, started: 1, result_received: 0, verified: 1,
+    failed: 0, unapplied: 1, local_skip: 1, missing_usage: 1,
+    unapplied_reason: { selected_not_delivered: 1 },
+    by_kind: { skill: 1, cli: 1, mcp_tool: 1 },
+    sample: true
+  };
+
   function mergeEvents(store, incoming, oldestSeq, truncated) {
     const next = store.slice();
     for (const e of incoming || []) {
@@ -157,48 +249,211 @@
     const historyEl = document.getElementById("history-summary");
     const toolChart = document.getElementById("tool-chart");
     const toolLegend = document.getElementById("tool-legend");
+    const applyCounts = document.getElementById("apply-counts");
+    const unappliedEl = document.getElementById("unapplied-chart");
+    const effectEl = document.getElementById("effect-list");
+    const sampleNote = document.getElementById("sample-note");
     const cmp = document.getElementById("cmp");
     const cmpOut = document.getElementById("cmp-out");
+    const filterHost = document.getElementById("filter-host");
+    const filterSource = document.getElementById("filter-source");
+    const filterApply = document.getElementById("filter-apply");
+    const reconnectBtn = document.getElementById("reconnect");
+    const detail = document.getElementById("detail");
+    const funnelEl = document.getElementById("funnel");
+    const kindEl = document.getElementById("kind-map");
+    const language = document.getElementById("language");
     if (!status || !rows) return;
+    const useSample = typeof location !== "undefined" && /(?:\?|&)sample=1(?:&|$)/.test(location.search || "");
     let store = [];
     let since = 0;
+    let lastPayload = null;
+    let selectedSeq = 0;
+    let lastUpdated = "";
+    let connected = true;
+    let lang = language && language.value === "en" ? "en" : "ja";
 
     function text(el, value) {
       el.textContent = value == null ? "" : String(value);
     }
 
-    function render(payload) {
-      if (!payload) {
-      text(status, "履歴を取得できません");
+    function renderOverview(summary) {
+      countsEl.replaceChildren();
+      overviewGroups(summary, lang).forEach(function (group) {
+        const box = document.createElement("div");
+        box.className = "count-group";
+        const title = document.createElement("h3");
+        const help = document.createElement("p");
+        const values = document.createElement("dl");
+        values.className = "count-values";
+        text(title, group.title);
+        text(help, group.help);
+        group.values.forEach(function (entry) {
+          const dt = document.createElement("dt");
+          const dd = document.createElement("dd");
+          text(dt, entry.label);
+          text(dd, entry.value);
+          if (entry.key === "jev_failed" && entry.value) dd.className = "danger";
+          values.append(dt, dd);
+        });
+        box.append(title, help, values);
+        countsEl.appendChild(box);
+      });
+    }
+
+    function translatePage() {
+      document.documentElement.lang = lang;
+      document.querySelectorAll("[data-i18n]").forEach(function (el) { text(el, t(el.dataset.i18n, lang)); });
+    }
+
+    function currentFilters() {
+      return {
+        host: filterHost && filterHost.value,
+        source: filterSource && filterSource.value,
+        apply: filterApply && filterApply.value
+      };
+    }
+
+    function fillHostFilter(events) {
+      if (!filterHost) return;
+      const prev = filterHost.value;
+      const hosts = [];
+      for (const e of events || []) {
+        if (e.host && hosts.indexOf(e.host) < 0) hosts.push(e.host);
+      }
+      filterHost.replaceChildren();
+      const all = document.createElement("option");
+      all.value = "";
+      text(all, t("all", lang));
+      filterHost.appendChild(all);
+      hosts.sort().forEach(function (h) {
+        const opt = document.createElement("option");
+        opt.value = h;
+        text(opt, h);
+        filterHost.appendChild(opt);
+      });
+      if (prev && hosts.indexOf(prev) >= 0) filterHost.value = prev;
+    }
+
+    function showDetail(e, apps) {
+      if (!detail) return;
+      if (!e) {
+        detail.hidden = true;
         return;
       }
+      detail.hidden = false;
+      const related = (apps || []).filter(function (a) {
+        return a && (String(a.decisionId) === String(e.seq) || (e.chosen && a.capabilityId && String(a.capabilityId).indexOf(e.chosen) >= 0));
+      });
+      const lines = [
+        "連番 " + e.seq,
+        "ホスト " + (e.host || "—"),
+        "判定元 " + (e.source || "—"),
+        "適用 " + (e.apply || "—"),
+        "採用 " + (e.chosen || "—"),
+        "理由 " + (e.reason || "—")
+      ];
+      if (related.length) {
+        related.forEach(function (a) {
+          lines.push("判断ID " + a.decisionId + " · " + a.kind + " · " + a.state + (a.callId ? " · 操作 " + a.callId : ""));
+        });
+      } else if (payloadApps().length) {
+        payloadApps().slice(0, 5).forEach(function (a) {
+          lines.push("判断ID " + a.decisionId + " · " + a.kind + " · " + a.state);
+        });
+      }
+      text(detail, lines.join("\n"));
+    }
+
+    function payloadApps() {
+      return (lastPayload && lastPayload.applications) || [];
+    }
+
+    function renderBars(el, rows) {
+      if (!el) return;
+      el.replaceChildren();
+      const max = Math.max.apply(null, rows.map(function (r) { return r[1]; }).concat([1]));
+      rows.forEach(function (row) {
+        const item = document.createElement("div");
+        item.className = "funnel-row";
+        const name = document.createElement("span");
+        const meter = document.createElement("i");
+        const amount = document.createElement("b");
+        text(name, row[0]);
+        meter.style.width = (row[1] / max) * 100 + "%";
+        text(amount, String(row[1]));
+        item.append(name, meter, amount);
+        el.appendChild(item);
+      });
+    }
+
+    function render(payload) {
+      if (!payload) {
+      text(status, connected ? t("unavailable", lang) : t("disconnected", lang) + " · " + t("updated", lang) + " " + lastUpdated);
+        return;
+      }
+      lastPayload = payload;
       const r = payload.router || {};
       const merged = mergeEvents(store, payload.events, r.oldestSeq, payload.historyTruncated);
       store = merged.events;
       if (store.length) since = store[store.length - 1].seq;
+      fillHostFilter(store);
       const summary = summarizeEvents(store, r.counts);
       const totals = usageTotals(store);
       const unsupported = unknownHistoryDetails(store);
       const skipped = skippedTools(store);
+      const app = summarizeApplication(payload.metrics);
+      if (sampleNote) sampleNote.hidden = !app.sample;
+      if (applyCounts) {
+        applyCounts.replaceChildren();
+        for (const [k, v] of Object.entries(app)) {
+          if (k === "sample") continue;
+          const dt = document.createElement("dt");
+          text(dt, k);
+          const dd = document.createElement("dd");
+          text(dd, v);
+          applyCounts.append(dt, dd);
+        }
+      }
+      if (unappliedEl) {
+        unappliedEl.replaceChildren();
+        const reasons = unappliedReasons(payload.metrics);
+        if (!reasons.length) text(unappliedEl, "未適用はありません");
+        reasons.forEach(function (row) {
+          const item = document.createElement("span");
+          text(item, row.reason + " · " + row.count + " 件");
+          unappliedEl.appendChild(item);
+        });
+      }
+      if (effectEl) {
+        effectEl.replaceChildren();
+        const effects = [];
+        if (app.local_skip) effects.push("local_skip");
+        if (app.unapplied) effects.push("unapplied");
+        if (app.missing_usage) effects.push("missing");
+        if (!effects.length) effects.push("none");
+        effects.forEach(function (kind) {
+          const item = document.createElement("li");
+          text(item, formatEffect(kind));
+          effectEl.appendChild(item);
+        });
+      }
+      lastUpdated = (r.now && String(r.now)) || new Date().toISOString();
       text(
         status,
-        "インスタンス " +
+        (connected ? "" : t("disconnected", lang) + " · ") +
+          t("instance", lang) + " " +
           (r.instanceId || "?") +
-          " · 記録 " +
+          " · " + t("recorded", lang) + " " +
           (r.recorded != null ? r.recorded : store.length) +
-          (payload.historyTruncated ? " · 履歴を省略" : "") +
-          (r.mode ? " · モード " + r.mode : "")
+          (payload.historyTruncated ? " · " + t("historyTruncated", lang) : "") +
+          (r.mode ? " · " + t("mode", lang) + " " + r.mode : "") +
+          " · " + t("updated", lang) + " " + lastUpdated +
+          (useSample ? " · " + t("sample", lang) : "")
       );
-      countsEl.replaceChildren();
-      for (const [k, v] of Object.entries(summary)) {
-        const dt = document.createElement("dt");
-        text(dt, k);
-        const dd = document.createElement("dd");
-        text(dd, v);
-        countsEl.append(dt, dd);
-      }
+      renderOverview(summary);
       if (usageEl) {
-        const metrics = [["入力", totals.input, "input"], ["出力", totals.output, "output"], ["キャッシュ読取", totals.cached, "cached"], ["キャッシュ書込", totals.cacheWrite, "cached"], ["推論", totals.reasoning, "reasoning"], ["直通で回避した入力（推定）", totals.directSaved, "cached"], ["コンパクションで削減した入力（推定）", totals.compactionSaved, "cached"]];
+        const metrics = [[t("input", lang), totals.input, "input"], [t("output", lang), totals.output, "output"], [t("cacheRead", lang), totals.cached, "cached"], [t("cacheWrite", lang), totals.cacheWrite, "cached"], [t("reasoning", lang), totals.reasoning, "reasoning"], [t("directSaved", lang), totals.directSaved, "cached"], [t("compactSaved", lang), totals.compactionSaved, "cached"]];
         const max = Math.max(...metrics.map(([, value]) => value), 1);
         usageEl.replaceChildren();
         for (const [label, value, kind] of metrics) {
@@ -209,12 +464,12 @@
           const amount = document.createElement("b");
           text(name, label);
           meter.style.width = (value / max) * 100 + "%";
-          text(amount, value.toLocaleString() + " トークン");
+          text(amount, value.toLocaleString() + " " + t("tokens", lang));
           item.append(name, meter, amount);
           usageEl.appendChild(item);
         }
         const note = document.createElement("small");
-        text(note, totals.known + " 件の上流レスポンスから実測。回避・削減は送信前の推定値。");
+        text(note, totals.known + " " + t("usageNote", lang));
         usageEl.appendChild(note);
       }
       if (historyEl) {
@@ -260,24 +515,38 @@
           });
         }
       }
+      renderBars(funnelEl, [
+        ["選定", app.selected],
+        ["配達", app.delivered],
+        ["開始", app.started],
+        ["結果受信", app.result_received],
+        ["成果確認", app.verified]
+      ]);
+      const kinds = payload.metrics && payload.metrics.by_kind ? payload.metrics.by_kind : {};
+      renderBars(kindEl, Object.keys(kinds).sort().map(function (k) { return [k, kinds[k]]; }).concat(Object.keys(kinds).length ? [] : [["未観測", 0]]));
       rows.replaceChildren();
-      const shown = store.slice(-TABLE_ROWS).reverse();
+      const shown = filterEvents(store, currentFilters()).slice(-TABLE_ROWS).reverse();
+      if (selectedSeq && !shown.some(function (e) { return e.seq === selectedSeq; })) selectedSeq = shown[0] ? shown[0].seq : 0;
       for (const e of shown) {
         const tr = document.createElement("tr");
+        tr.dataset.seq = String(e.seq);
+        tr.tabIndex = 0;
+        if (e.seq === selectedSeq) tr.className = "selected";
         const usage = formatUsage(e.usage, e.usageMissing, e.usagePartial);
         const savings = formatSavings(e.savedTokens);
         const vals = [
           e.seq,
+          e.host || "—",
           e.source,
           e.apply,
-          routeOutcome(e),
+          routeOutcome(e, lang),
           e.chosen,
           e.reason,
           formatConfidence(e.confidence),
-          e.changed ? "yes" : "no",
+          e.changed ? t("yes", lang) : t("no", lang),
           toolReplacement(e),
           savings ? usage.text + " · " + savings : usage.text,
-          e.headerMs != null ? e.headerMs + "ms" : e.bodyMs != null ? e.bodyMs + "ms" : "missing",
+          e.headerMs != null ? e.headerMs + "ms" : e.bodyMs != null ? e.bodyMs + "ms" : t("missing", lang),
         ];
         for (const v of vals) {
           const td = document.createElement("td");
@@ -285,22 +554,56 @@
           if (usage.missing && !savings && v === usage.text) td.className = "missing";
           tr.appendChild(td);
         }
+        tr.addEventListener("click", function () {
+          selectedSeq = e.seq;
+          showDetail(e, payloadApps());
+          render(lastPayload);
+        });
         rows.appendChild(tr);
       }
+      const selected = shown.filter(function (e) { return e.seq === selectedSeq; })[0];
+      if (selected) showDetail(selected, payloadApps());
+    }
+
+    function reconnect() {
+      store = [];
+      since = 0;
+      selectedSeq = 0;
+      lastPayload = null;
+      connected = true;
+      if (filterHost) filterHost.value = "";
+      if (filterSource) filterSource.value = "";
+      if (filterApply) filterApply.value = "";
+      if (detail) detail.hidden = true;
+      poll();
     }
 
     async function poll() {
+      if (useSample) {
+        connected = true;
+        render({
+          router: { instanceId: "sample", recorded: SAMPLE_EVENTS.length, now: new Date().toISOString(), mode: "sample" },
+          events: SAMPLE_EVENTS,
+          metrics: SAMPLE_METRICS,
+          applications: [{ decisionId: "dec-sample", state: "verified", kind: "cli", capabilityId: "cli:local:exec@1", callId: "call_sample", verified: true }],
+          historyTruncated: false
+        });
+        return;
+      }
       try {
         const res = await fetch("/dashboard/events?since=" + encodeURIComponent(since), {
           headers: { accept: "application/json" },
         });
         if (!res.ok) {
-          text(status, "履歴を取得できません (" + res.status + ")");
+          connected = false;
+          text(status, t("disconnected", lang) + " · " + t("updated", lang) + " " + (lastUpdated || t("no", lang)) + " (" + res.status + ")");
           return;
         }
+        connected = true;
         render(await res.json());
       } catch (err) {
-        text(status, "履歴を取得できません");
+        connected = false;
+        text(status, t("disconnected", lang) + " · " + t("updated", lang) + " " + (lastUpdated || t("no", lang)));
       }
     }
 
@@ -316,9 +619,49 @@
         text(cmpOut, JSON.stringify(got.data, null, 2));
       });
     }
+    [filterHost, filterSource, filterApply].forEach(function (el) {
+      if (!el) return;
+      el.addEventListener("change", function () {
+        if (lastPayload) render(Object.assign({}, lastPayload, { events: [] }));
+      });
+    });
+    if (reconnectBtn) reconnectBtn.addEventListener("click", function () {
+      reconnect();
+      reconnectBtn.blur();
+    });
+    if (language) language.addEventListener("change", function () {
+      lang = language.value === "en" ? "en" : "ja";
+      translatePage();
+      if (lastPayload) render(Object.assign({}, lastPayload, { events: [] }));
+    });
+    document.addEventListener("keydown", function (ev) {
+      const tag = ev.target && ev.target.tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT" || tag === "BUTTON") return;
+      const shown = filterEvents(store, currentFilters()).slice(-TABLE_ROWS).reverse();
+      if (ev.key === "j" || ev.key === "k") {
+        if (!shown.length) return;
+        ev.preventDefault();
+        let idx = shown.findIndex(function (e) { return e.seq === selectedSeq; });
+        if (idx < 0) idx = 0;
+        else idx += ev.key === "j" ? 1 : -1;
+        if (idx < 0) idx = 0;
+        if (idx >= shown.length) idx = shown.length - 1;
+        selectedSeq = shown[idx].seq;
+        if (lastPayload) render(Object.assign({}, lastPayload, { events: [] }));
+      } else if (ev.key === "Enter") {
+        const selected = shown.filter(function (e) { return e.seq === selectedSeq; })[0] || shown[0];
+        if (selected) {
+          selectedSeq = selected.seq;
+          showDetail(selected, payloadApps());
+        }
+      } else if (ev.key === "r") {
+        reconnect();
+      }
+    });
+    translatePage();
     poll();
     setInterval(poll, 2000);
   }
 
-  return { clip, formatUsage, formatSavings, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, formatComparison, mergeEvents, start };
+  return { clip, formatUsage, formatSavings, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, SAMPLE_EVENTS, start };
 });

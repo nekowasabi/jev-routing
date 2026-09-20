@@ -1,0 +1,8 @@
+{
+  "sample": true,
+  "apps": [
+    {"state": "delivered", "kind": "skill"},
+    {"state": "verified", "kind": "cli"},
+    {"state": "failed", "kind": "mcp_tool"}
+  ]
+}

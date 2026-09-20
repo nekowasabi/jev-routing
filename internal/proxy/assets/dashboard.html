@@ -19,9 +19,14 @@
     textarea { width: 100%; min-height: 8rem; }
     #status { margin: 0.5rem 0 1.25rem; color: var(--muted); }
     #overview { display: grid; grid-template-columns: 1fr 1.5fr; gap: 1rem; margin-bottom: 1rem; }
-    #counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.65rem; margin: 0; }
-    #counts dt { color: var(--muted); font-size: 0.75rem; }
-    #counts dd { margin: 0.15rem 0 0; font-size: 1.45rem; font-weight: 700; }
+    #counts { display: grid; gap: 0.9rem; margin: 0; }
+    .count-group { border-left: 3px solid var(--blue); padding-left: 0.7rem; }
+    .count-group h3 { font-size: 0.8rem; margin: 0 0 0.35rem; color: var(--muted); }
+    .count-group p { font-size: 0.72rem; margin: 0 0 0.55rem; color: var(--muted); }
+    .count-values { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.45rem 0.65rem; margin: 0; }
+    .count-values dt { color: var(--muted); font-size: 0.75rem; }
+    .count-values dd { margin: 0.1rem 0 0; font-size: 1.25rem; font-weight: 700; }
+    .count-values .danger { color: #b00020; }
     #usage-summary { display: grid; gap: 0.6rem; }
     .usage-bar { display: grid; grid-template-columns: 5rem 1fr 7rem; align-items: center; gap: 0.65rem; font-size: 0.8rem; }
     .usage-bar i { display: block; min-width: 2px; height: 0.7rem; border-radius: 999px; background: var(--blue); }
@@ -35,46 +40,110 @@
     #tool-chart { width: 9rem; height: 9rem; border-radius: 50%; flex: 0 0 auto; }
     #tool-legend { display: flex; flex-wrap: wrap; gap: 0.5rem; color: var(--muted); font-size: 0.85rem; }
     .tool-legend-item::before { content: ""; display: inline-block; width: 0.65rem; height: 0.65rem; margin-right: 0.35rem; border-radius: 50%; background: var(--swatch); }
-    @media (max-width: 760px) { #overview { grid-template-columns: 1fr; } #counts { grid-template-columns: repeat(2, 1fr); } table { min-width: 980px; } section { overflow-x: auto; } }
+    #overview-apply { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+    #apply-counts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; margin: 0; }
+    #apply-counts dt { color: var(--muted); font-size: 0.75rem; }
+    #apply-counts dd { margin: 0; font-size: 1.2rem; font-weight: 700; }
+    #unapplied-chart span, #effect-list li { display: block; margin: 0.35rem 0; }
+    #faq { color: var(--muted); }
+    #filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+    #filters label { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; }
+    #detail { border: 1px solid var(--line); border-radius: 8px; padding: 0.75rem; margin: 0.75rem 0; background: #f6f8fc; white-space: pre-wrap; }
+    #detail[hidden] { display: none; }
+    tr.selected { outline: 2px solid var(--blue); background: #eef2ff; }
+    tr[data-seq] { cursor: pointer; }
+    #kbd-help { color: var(--muted); font-size: 0.8rem; }
+    #funnel, #kind-map { display: grid; gap: 0.45rem; }
+    .funnel-row, .kind-row { display: grid; grid-template-columns: 8rem 1fr 3rem; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+    .funnel-row i, .kind-row i { display: block; min-width: 2px; height: 0.65rem; border-radius: 999px; background: var(--blue); }
+    #updated.disconnected { color: #b00020; }
+    @media (max-width: 760px) { #overview, #overview-apply { grid-template-columns: 1fr; } #counts { grid-template-columns: repeat(2, 1fr); } table { min-width: 980px; } section { overflow-x: auto; } }
   </style>
 </head>
 <body>
-  <h1>jev-routing</h1>
+  <header>
+    <h1>jev-routing</h1>
+    <label><span data-i18n="language">表示言語</span> <select id="language" aria-label="表示言語"><option value="ja">日本語</option><option value="en">English</option></select></label>
+  </header>
   <p id="status" role="status">読み込み中…</p>
   <div id="overview">
     <section aria-labelledby="counts-h">
-      <h2 id="counts-h">ルーティング概要</h2>
+      <h2 id="counts-h" data-i18n="routingOverview">ルーティング概要</h2>
       <dl id="counts"></dl>
     </section>
     <section aria-labelledby="usage-h">
-      <h2 id="usage-h">トークン消費</h2>
+      <h2 id="usage-h" data-i18n="tokenUsage">トークン消費</h2>
       <div id="usage-summary"></div>
     </section>
   </div>
   <section aria-labelledby="history-h">
-    <h2 id="history-h">安全側へ通過した履歴（不明な箇所）</h2>
+    <h2 id="history-h" data-i18n="history">安全側へ通過した履歴（不明な箇所）</h2>
     <div id="history-summary"></div>
   </section>
   <section aria-labelledby="tool-chart-h">
-    <h2 id="tool-chart-h">カタログから除外したツール</h2>
+    <h2 id="tool-chart-h" data-i18n="skippedTools">カタログから除外したツール</h2>
     <div id="tool-summary"><div id="tool-chart" role="img" aria-label="除外したツールの内訳"></div><div id="tool-legend"></div></div>
   </section>
+  <div id="overview-apply">
+    <section aria-labelledby="apply-h">
+      <h2 id="apply-h" data-i18n="application">可動個所と適用</h2>
+      <p id="sample-note" hidden>この表示はサンプルです。実測ではありません。</p>
+      <dl id="apply-counts"></dl>
+    </section>
+    <section aria-labelledby="unapplied-h">
+      <h2 id="unapplied-h" data-i18n="unapplied">未適用の理由</h2>
+      <div id="unapplied-chart" role="img" aria-label="未適用理由"></div>
+    </section>
+    <section aria-labelledby="effect-h">
+      <h2 id="effect-h" data-i18n="effects">比較効果</h2>
+      <ul id="effect-list"></ul>
+    </section>
+  </div>
+  <div id="overview-apply">
+    <section aria-labelledby="funnel-h">
+      <h2 id="funnel-h" data-i18n="funnel">判断が届いたか</h2>
+      <div id="funnel" role="img" aria-label="選定から成果確認までの件数"></div>
+    </section>
+    <section aria-labelledby="kind-h">
+      <h2 id="kind-h" data-i18n="kinds">Jevが働いた場所</h2>
+      <div id="kind-map" role="img" aria-label="処理分類ごとの件数"></div>
+    </section>
+  </div>
+  <section aria-labelledby="faq-h">
+    <h2 id="faq-h">この画面だけで分かること</h2>
+    <ol id="faq">
+      <li>Jev は今動いていますか？（概要の jev / local / passthrough）</li>
+      <li>選定した能力は実際に適用されましたか？（可動個所と適用）</li>
+      <li>適用されなかった理由は何ですか？（未適用の理由）</li>
+      <li>トークンは増えたのか減ったのか、欠測なのか？（比較効果とトークン消費）</li>
+      <li>ローカル判断で Jev を呼ばなかったのは正常ですか？（正常なローカル省略）</li>
+    </ol>
+  </section>
   <section aria-labelledby="events-h">
-    <h2 id="events-h">直近のリクエスト</h2>
+    <h2 id="events-h" data-i18n="events">直近のリクエスト</h2>
+    <p id="filters">
+      <label><span data-i18n="host">ホスト</span> <select id="filter-host" aria-label="ホストで絞込み"><option value="" data-i18n="all">すべて</option></select></label>
+      <label><span data-i18n="source">判定元</span> <select id="filter-source" aria-label="判定元で絞込み"><option value="" data-i18n="all">すべて</option><option value="local">local</option><option value="jev">jev</option><option value="passthrough">passthrough</option></select></label>
+      <label><span data-i18n="apply">適用</span> <select id="filter-apply" aria-label="適用で絞込み"><option value="" data-i18n="all">すべて</option><option value="filter">filter</option><option value="none">none</option><option value="forced">forced</option></select></label>
+      <button type="button" id="reconnect" data-i18n="reconnect">再接続</button>
+      <span id="kbd-help">j/k で行移動、Enter で詳細、r で再接続</span>
+    </p>
+    <div id="detail" hidden tabindex="0" aria-live="polite"></div>
     <table>
       <thead>
         <tr>
-          <th scope="col">連番</th>
-          <th scope="col">判定元</th>
-          <th scope="col">適用</th>
-          <th scope="col">判定結果</th>
-          <th scope="col">採用ツール</th>
-          <th scope="col">理由</th>
-          <th scope="col">確信度</th>
-          <th scope="col">変更</th>
-          <th scope="col">ツール置換</th>
-          <th scope="col">トークン</th>
-          <th scope="col">時間</th>
+          <th scope="col" data-i18n="sequence">連番</th>
+          <th scope="col" data-i18n="host">ホスト</th>
+          <th scope="col" data-i18n="source">判定元</th>
+          <th scope="col" data-i18n="apply">適用</th>
+          <th scope="col" data-i18n="outcome">判定結果</th>
+          <th scope="col" data-i18n="chosenTool">採用ツール</th>
+          <th scope="col" data-i18n="reason">理由</th>
+          <th scope="col" data-i18n="confidence">確信度</th>
+          <th scope="col" data-i18n="changed">変更</th>
+          <th scope="col" data-i18n="replacement">ツール置換</th>
+          <th scope="col" data-i18n="tokenUsage">トークン</th>
+          <th scope="col" data-i18n="time">時間</th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
