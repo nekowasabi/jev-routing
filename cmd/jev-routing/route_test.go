@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/plan"
@@ -45,5 +46,55 @@ func TestRouteCommand(t *testing.T) {
 
 	if code := cmdRoute(nil, bytes.NewReader(raw), &out); code != 2 {
 		t.Fatalf("missing --json exit %d", code)
+	}
+}
+
+func TestRouteCommandModelJSON(t *testing.T) {
+	t.Setenv("JEV_MODEL_LOG", filepath.Join(t.TempDir(), "model-routes.jsonl"))
+	t.Setenv("TYPESAFE_API_KEY", "")
+	t.Setenv("JEV_API_KEY", "")
+	in := routeInput{
+		Request: "review", Host: "claude", Role: "reviewer",
+		ModelMode: "auto", EffortMode: "auto",
+		LegacyModel: "claude-opus-5", LegacyEffort: "medium",
+		Pairs: []plan.Pair{
+			{ID: "a", Model: "claude-opus-5", Effort: "medium"},
+			{ID: "b", Model: "grok-4.6", Effort: "medium"},
+		},
+	}
+	raw, _ := json.Marshal(in)
+	var out bytes.Buffer
+	if code := cmdRoute([]string{"--json"}, bytes.NewReader(raw), &out); code != 0 {
+		t.Fatalf("exit %d out=%s", code, out.String())
+	}
+	var wrap map[string]any
+	if err := json.Unmarshal(out.Bytes(), &wrap); err != nil {
+		t.Fatal(err)
+	}
+	model, ok := wrap["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model %T %s", wrap["model"], out.Bytes())
+	}
+	if _, ok := model["model"]; !ok {
+		t.Fatalf("missing model: %s", out.Bytes())
+	}
+	if _, ok := model["reason_code"]; !ok {
+		t.Fatalf("missing reason_code: %s", out.Bytes())
+	}
+	if _, ok := model["Model"]; ok {
+		t.Fatalf("pascal Model: %s", out.Bytes())
+	}
+	if _, ok := model["ReasonCode"]; ok {
+		t.Fatalf("pascal ReasonCode: %s", out.Bytes())
+	}
+	if model["reason_code"] != plan.ReasonNoMatch {
+		t.Fatalf("reason_code=%v", model["reason_code"])
+	}
+	if model["model"] != "claude-opus-5" {
+		t.Fatalf("model=%v", model["model"])
+	}
+	got := plan.LoadModelDecisions()
+	if len(got) != 1 || got[0].AppliedModel != "claude-opus-5" {
+		t.Fatalf("%+v", got)
 	}
 }

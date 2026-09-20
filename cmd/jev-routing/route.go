@@ -86,14 +86,27 @@ func cmdRoute(args []string, stdin io.Reader, stdout io.Writer) int {
 	enc.SetEscapeHTML(false)
 	if in.ModelMode != "" || in.EffortMode != "" || len(in.Pairs) > 0 {
 		hID, _ := host.Parse(in.Host)
+		model := plan.RouteModel(plan.ModelRequest{
+			Task: in.Request, Role: in.Role, Host: hID,
+			ModelMode: in.ModelMode, EffortMode: in.EffortMode,
+			LegacyModel: in.LegacyModel, LegacyEffort: in.LegacyEffort,
+			Pairs: in.Pairs,
+		}, ask)
+		plan.RecordModelDecision(plan.ModelDecision{
+			Host:            string(hID),
+			Role:            in.Role,
+			Source:          model.Source,
+			ReasonCode:      model.ReasonCode,
+			PairID:          model.PairID,
+			RequestedModel:  in.LegacyModel,
+			AppliedModel:    model.Model,
+			RequestedEffort: in.LegacyEffort,
+			AppliedEffort:   model.Effort,
+			Asked:           model.Asked,
+		})
 		payload := map[string]any{
 			"route": routed,
-			"model": plan.RouteModel(plan.ModelRequest{
-				Task: in.Request, Role: in.Role, Host: hID,
-				ModelMode: in.ModelMode, EffortMode: in.EffortMode,
-				LegacyModel: in.LegacyModel, LegacyEffort: in.LegacyEffort,
-				Pairs: in.Pairs,
-			}, ask),
+			"model": model,
 		}
 		if err := enc.Encode(payload); err != nil {
 			return 1
