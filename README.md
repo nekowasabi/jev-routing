@@ -1,23 +1,47 @@
 # jev-routing
 
-Claude Code / Codex / **Grok Build** / **Cursor Agent CLI** / **Devin CLI** 向けの Jev ハーネス。単一の Go バイナリです。
+[日本語版はこちら](README_ja.md)
 
-このバイナリはリクエスト前に:
+## What this is
 
-1. 会話の tool 結果を [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction) と同じ判定で drop / truncate する（本文は要約しない）
-2. Jev に次ツール（Choice）と done（Noul）を同時に聞く
-3. そのステップの `tools[]` を **1 スキーマ**（respond ならゼロ）にする
-4. thinking / reasoning を落とす
+jev-routing is a local proxy that sits between a coding-agent CLI (Claude Code / Codex / Grok Build / Cursor Agent CLI / Devin CLI) and the upstream LLM API. It does not replace the agent: it accepts the requests the agent already sends, reshapes them right before they go out, and forwards them upstream.
 
-## 入れ方
+Agent CLIs keep resending the same growing payload every turn: the full tool schema catalog, a swollen history of tool calls and results, and the previous step's thinking. That accumulation is the main source of latency, token spend, and wrong tool picks. jev-routing inserts four things at that point.
 
-Node は不要です。Go 1.22+。
+1. **History compaction** — only `tool_use` / `tool_result` are scored and then dropped or truncated. User and assistant prose is untouched and nothing is summarized
+2. **One schema for tool selection** — Jev is asked for the next tool and for done in the same call, so the step's `tools[]` shrinks to a single schema (zero when the step is a plain response)
+3. **thinking / reasoning stripping** — reasoning blocks that the next decision does not need are removed
+4. **Model / effort routing** — `route --json` picks, among the candidate pairs, the cheapest one that is still strong enough for the difficulty
+
+What you get from adopting it:
+
+- **Fewer bytes and tokens on the wire** — the per-request tool catalog and the bloated tool history go away
+- **Fewer wrong tool picks** — the model only sees the tools that are meaningful at that moment
+- **No paying for a big model on a small job** — model and effort are chosen to match the difficulty
+- **Observability** — a loopback-only, read-only dashboard shows what was rewritten and what was not applied, and why
+- **Low adoption cost** — a single Go binary. No Node, one environment variable on the agent side, and your existing logins keep working
+- **Fail-safe design** — when uncertain it does not narrow the candidates, unsupported history shapes pass through unrewritten, and real tool execution and approval stay on the host
+
+---
+
+A Jev harness for Claude Code / Codex / **Grok Build** / **Cursor Agent CLI** / **Devin CLI**. A single Go binary.
+
+Before each request, the binary:
+
+1. Drops / truncates the conversation's tool results using the same judgment as [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction) (prose is never summarized)
+2. Asks Jev for the next tool (Choice) and for done (Noul) at the same time
+3. Reduces that step's `tools[]` to **one schema** (zero when the answer is respond)
+4. Strips thinking / reasoning
+
+## Installation
+
+Node is not required. Go 1.22+.
 
 ```bash
 go install github.com/nekowasabi/jev-routing/cmd/jev-routing@latest
 ```
 
-ソースから:
+From source:
 
 ```bash
 git clone https://github.com/nekowasabi/jev-routing.git
@@ -25,13 +49,13 @@ cd jev-routing
 go install ./cmd/jev-routing
 ```
 
-キーは任意。無いときはオンデバイスの分類器です。
+The key is optional. Without it, an on-device classifier is used.
 
 ```bash
 export TYPESAFE_API_KEY=ts_...    # https://console.typesafe.ai/settings/keys
 ```
 
-## 起動
+## Running
 
 ```bash
 jev-routing run grok              # GROK_CLI_CHAT_PROXY_BASE_URL をプロキシへ
@@ -42,23 +66,23 @@ jev-routing run devin             # DEVIN_API_URL をプロキシへ
 jev-routing route --json < request.json   # ateam / 診断。モデル選定を JSON で返す
 ```
 
-`run` はまず `127.0.0.1:8787` を使い、使用中なら空きポートを自動割当します。`JEV_LISTEN` を指定すると、そのアドレスを優先します。
+`run` tries `127.0.0.1:8787` first and automatically picks a free port if it is in use. If `JEV_LISTEN` is set, that address takes precedence.
 
-`route --json` は ateam と診断用の選定入口です。`model_mode` / `effort_mode` と候補 `pairs` を渡すと、応答の `model` に適用した組を返します。キーは `model` / `effort` / `source` / `reason_code` / `asked` です。Jev 未接続で候補が複数なら `reason_code` は `no_match` で、`legacy_model` と `effort` の従来値へ戻します。ateam は `ateam auto review` のときだけこの自動選定を使い、`auto` が無いときは名簿の固定値です。選定は `~/.local/state/jev-routing/model-routes.jsonl` に1行追記します。記録先は `JEV_MODEL_LOG` で変えられます。
+`route --json` is the selection entry point for ateam and for diagnostics. Given `model_mode` / `effort_mode` and candidate `pairs`, it returns the pair applied to the response's `model`. The keys are `model` / `effort` / `source` / `reason_code` / `asked`. If Jev is not connected and there is more than one candidate, `reason_code` is `no_match` and it falls back to the legacy values of `legacy_model` and `effort`. ateam uses this automatic selection only for `ateam auto review`; without `auto` it uses the fixed values from the roster. Each selection appends one line to `~/.local/state/jev-routing/model-routes.jsonl`. The destination can be changed with `JEV_MODEL_LOG`.
 
-`ateam auto` のモデル選定は capability 用の `next_tool` 分類器ではなく、専用の `model_pair` 質問です。候補ペアは `difficulty` と `cost` を持ち、Jev は足りる範囲で最も安い／小さい組を選びます。確信度が低く採用できないときは適用は従来値のまま、却下した組を `rejected_id` に残します。
+Model selection for `ateam auto` does not use the `next_tool` classifier meant for capability; it uses a dedicated `model_pair` question. Candidate pairs carry `difficulty` and `cost`, and Jev picks the cheapest / smallest pair that is still sufficient. When confidence is too low to adopt a pair, the applied values stay at the legacy ones and the rejected pair is recorded in `rejected_id`.
 
-### tmux で起動する
+### Launching inside tmux
 
 ```bash
 jev-routing run --tmux codex
 ```
 
-接続中の tmux 内なら、現在の pane でホストを起動するため、tmux をネストせず pane border は一重のままです。tmux 外、または古い `TMUX` 環境変数だけが残った状態からは、実行ごとに独立した tmux セッションを作成します。
+Inside an attached tmux session it launches the host in the current pane, so tmux is not nested and the pane border stays single. From outside tmux, or from a state where only a stale `TMUX` environment variable remains, it creates an independent tmux session per run.
 
-既存の `grok login` / `claude login` / `codex login` / `cursor-agent login` / `devin auth` はそのままです。
+Your existing `grok login` / `claude login` / `codex login` / `cursor-agent login` / `devin auth` keep working as they are.
 
-手で環境を書く場合:
+To set the environment by hand:
 
 ```bash
 # Grok Build
@@ -84,7 +108,7 @@ jev-routing serve --host devin &
 devin
 ```
 
-Codex を手動で起動する場合だけ、`~/.codex/config.toml` に設定します。
+Only when starting Codex manually, configure `~/.codex/config.toml`.
 
 ```toml
 model_provider = "jev"
@@ -97,97 +121,97 @@ requires_openai_auth = true
 ```
 
 
-Cursor Agent CLI は既定で `https://api2.cursor.sh` の Connect RPC（`/aiserver` / `/agent.v1`）に送ります。JSON の `tools[]` または `mcpTools` を含む POST を書き換え、protobuf 本体はそのまま上流へ渡します。Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`・`/sessions` および `prompt`/`message` + `tools[]` JSON を想定しています。Codex ChatGPT ログインは Responses Lite の `input` 内にある `additional_tools` から `functions` 名前空間を展開し、元の位置を保ってローカルツールを絞ります。外部名前空間と提供側の実行ツールは残します。
+By default Cursor Agent CLI sends to the Connect RPC endpoints (`/aiserver` / `/agent.v1`) at `https://api2.cursor.sh`. POSTs whose JSON contains `tools[]` or `mcpTools` are rewritten; protobuf bodies are forwarded upstream untouched. Devin CLI is assumed to use `/messages` and `/sessions` under `DEVIN_API_URL` (default `https://api.devin.ai`), with `prompt`/`message` + `tools[]` JSON. For Codex ChatGPT login, the `functions` namespace is expanded from `additional_tools` inside the Responses Lite `input`, and local tools are narrowed while keeping their original position. External namespaces and provider-side execution tools are left in place.
 
 ## Compaction
 
-履歴圧縮の判定は [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)（[MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE)、Copyright (c) 2025）を参考に Go へ移植した。要約はせず、`tool_use` / `tool_result` の drop / truncate 契約を踏襲する。
+The history-compaction judgment was ported to Go with reference to [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction) ([MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE), Copyright (c) 2025). It does not summarize; it follows the same drop / truncate contract for `tool_use` / `tool_result`.
 
-- ユーザー文とアシスタント文は触らない
-- tool_use と tool_result だけを noul で採点
-- `keepResult` → 両方残す
-- `keepCall` のみ → 結果を先頭 300 字に truncate
-- どちらも閾値未満 → 両方 drop
-- 先頭と直近はピン留め
+- User and assistant prose is never touched
+- Only tool_use and tool_result are scored with noul
+- `keepResult` → keep both
+- `keepCall` only → truncate the result to the first 300 characters
+- Both below threshold → drop both
+- The first and the most recent entries are pinned
 
-ツール選択が不確実でも、安全に適用できる履歴圧縮は実行します。Claude の `system` 境界、署名付き思考、ツール参照、呼び出しと結果の対応は維持します。
+Even when tool selection is uncertain, history compaction is still applied where it is safe to do so. Claude's `system` boundary, signed thinking, tool references, and the pairing of calls with their results are all preserved.
 
 ```bash
 jev-routing compact < transcript.json
 ```
 
-## 対応ツール
+## Supported tools
 
-プロキシはリクエストに含まれる実行時カタログを正本にし、未知のツールを生成しません。下表は選択ロジックが役割を対応付ける組み込み名です。MCP・Skills・Pluginsが追加するツールは、実行時カタログの名前をそのまま扱います。
+The proxy treats the runtime catalog included in the request as the source of truth and never invents unknown tools. The table below lists the built-in names the selection logic maps to roles. Tools added by MCP, Skills, and Plugins are handled under the names given in the runtime catalog.
 
-| 役割 | Claude Code | Codex | Grok Build | Cursor Agent | Devin CLI |
+| Role | Claude Code | Codex | Grok Build | Cursor Agent | Devin CLI |
 |---|---|---|---|---|---|
-| 読み取り | Read | read_file | read_file | Read File | read |
-| 編集 | Edit | apply_patch | search_replace | Edit & Reapply | edit |
-| 書き込み | Write | add_file | write | Edit & Reapply | write |
-| シェル | Bash | exec_command | run_terminal_cmd | Terminal | exec |
-| 検索 | Grep / Glob | grep_files / list_dir | grep_search / list_dir | Grep / Search Files / Codebase | grep / glob |
+| Read | Read | read_file | read_file | Read File | read |
+| Edit | Edit | apply_patch | search_replace | Edit & Reapply | edit |
+| Write | Write | add_file | write | Edit & Reapply | write |
+| Shell | Bash | exec_command | run_terminal_cmd | Terminal | exec |
+| Search | Grep / Glob | grep_files / list_dir | grep_search / list_dir | Grep / Search Files / Codebase | grep / glob |
 | Web | WebSearch / WebFetch | web_search / web_fetch | web_search / web_fetch | Web | web_search / webfetch |
-| サブエージェント | Agent | spawn_agent | task | — | run_subagent / read_subagent |
-| タスク管理 | TodoWrite | update_plan | todo_write / get_task_output / kill_task | — | todo_write |
-| MCP | ToolSearch / MCPツール | `mcp__<server>__<tool>` | search_tool / use_tool | 設定済みMCPツール | mcp_list_tools / mcp_call_tool / mcp_read_resource |
+| Subagent | Agent | spawn_agent | task | — | run_subagent / read_subagent |
+| Task management | TodoWrite | update_plan | todo_write / get_task_output / kill_task | — | todo_write |
+| MCP | ToolSearch / MCP tools | `mcp__<server>__<tool>` | search_tool / use_tool | configured MCP tools | mcp_list_tools / mcp_call_tool / mcp_read_resource |
 
-### 製品別の範囲
+### Scope per product
 
-- [Claude Code](https://code.claude.com/docs/en/tools-reference): `tool_use` / `tool_result` の履歴形式を受理します。組み込み名は実行環境・機能フラグで変化するため、固定の許可リストにはしません。
-- Codex: `functions.*`、`custom_tool_call`、Responsesの組み込みツールおよびMCP呼び出しの履歴形式を受理します。
-- [Grok Build](https://docs.x.ai/build/features/permissions): `read_file`、`search_replace`、`grep_search`、`list_dir`、`run_terminal_cmd`、`web_search`、`web_fetch`、`todo_write`、`task`、`kill_task`、`get_task_output`、`memory_search`、`memory_get`、`search_tool`、`use_tool`、`lsp`、条件付きの`write`を実行時カタログから扱います。
-- [Cursor Agent](https://cursor.com/ja/docs/agent/overview#tools): ファイル・フォルダー検索、Web、ルール取得、読取、編集、ターミナル、ブラウザ、画像生成、質問、MCPを実行時カタログから扱います。CLIの`stream-json`は観測出力であり、会話履歴には混在させません。
-- [Devin CLI](https://docs.devin.ai/cli/reference/permissions#tool-based-permissions): `read`、`write`、`edit`、`apply_patch`、ノートブック、検索、シェル、`webfetch`、タスク、Skills、サブエージェント、権限、MCP管理ツールを実行時カタログから扱います。ATIFエクスポート形式は公開スキーマが確認できるまで履歴判定へ推測追加しません。
+- [Claude Code](https://code.claude.com/docs/en/tools-reference): the `tool_use` / `tool_result` history shapes are accepted. Built-in names vary with the runtime and feature flags, so they are not kept as a fixed allow list.
+- Codex: the history shapes for `functions.*`, `custom_tool_call`, the Responses built-in tools, and MCP calls are accepted.
+- [Grok Build](https://docs.x.ai/build/features/permissions): `read_file`, `search_replace`, `grep_search`, `list_dir`, `run_terminal_cmd`, `web_search`, `web_fetch`, `todo_write`, `task`, `kill_task`, `get_task_output`, `memory_search`, `memory_get`, `search_tool`, `use_tool`, `lsp`, and conditionally `write` are handled from the runtime catalog.
+- [Cursor Agent](https://cursor.com/ja/docs/agent/overview#tools): file and folder search, Web, rule retrieval, read, edit, terminal, browser, image generation, ask, and MCP are handled from the runtime catalog. The CLI's `stream-json` is observation output and is never mixed into the conversation history.
+- [Devin CLI](https://docs.devin.ai/cli/reference/permissions#tool-based-permissions): `read`, `write`, `edit`, `apply_patch`, notebooks, search, shell, `webfetch`, tasks, Skills, subagents, permissions, and MCP management tools are handled from the runtime catalog. The ATIF export format will not be added to the history judgment on speculation until its public schema can be confirmed.
 
-履歴形式は、Claudeの`tool_use` / `tool_result`、Codex・Responsesの`*_call`、MCPの`mcp_call`を明示的に受理します。画像を含む履歴は安全側で通過します。
+For history shapes, Claude's `tool_use` / `tool_result`, the `*_call` shapes of Codex and Responses, and MCP's `mcp_call` are explicitly accepted. History containing images passes through on the safe side.
 
 ## Dashboard
 
-ループバックで待受しているときだけ、読み取り専用の `http://127.0.0.1:<port>/dashboard` を開けます。公開待受では 404 です。画面から設定は変えられません。料金は表示しません。CORS は付けず、GET 以外は受けません。
+The read-only `http://127.0.0.1:<port>/dashboard` can be opened only while listening on loopback. On a public listener it returns 404. Settings cannot be changed from the page. Pricing is not shown. No CORS headers are added, and only GET is accepted.
 
 ```bash
 jev-routing run --dashboard grok
 ```
 
-`run --dashboard` は起動後にブラウザーでダッシュボードを開きます。`serve` のときは同じ URL を手で開きます。画面は現在のプロセスだけを 2 秒間隔で更新します。
+`run --dashboard` opens the dashboard in a browser after startup. With `serve`, open the same URL by hand. The page refreshes every 2 seconds and covers only the current process.
 
-- ルーティング概要（判定元・適用の件数）
-- 六分類の状態（モデルとeffort、子エージェント、スキル、MCP、CLI、プラグイン、圧縮）。未観測は未観測のまま残す
-- 適用一覧。プロキシの書き換えに加え、`route --json` が選んだモデルとeffortを `kind=model` として出す。capability が適用モデル、callId が `jev` / `no_match` などの理由
-- 上流レスポンスから集計したトークン消費（入力・出力・キャッシュ・推論）
-- 直近のリクエスト（連番、ホスト、判定元、適用、採用ツール、理由、変更、ツール置換、jev、トークン、時間）
-- ホスト／判定元／適用の絞込みと行の詳細（判断ID・操作ID）。j/k で行移動、Enter で詳細、r で再接続
-- Comparison JSON の貼り付け（ローカル表示のみ。送信しません）
+- Routing overview (counts by decision source and by application)
+- Status of the six categories (model and effort, subagents, skills, MCP, CLI, plugins, compaction). Unobserved stays unobserved
+- Application list. In addition to the proxy's rewrites, the model and effort chosen by `route --json` are emitted as `kind=model`, where capability is the applied model and callId is the reason such as `jev` / `no_match`
+- Token consumption aggregated from upstream responses (input, output, cache, reasoning)
+- Recent requests (sequence number, host, decision source, application, selected tool, reason, changes, tool substitution, jev, tokens, time)
+- Filters by host / decision source / application, and per-row detail (decision ID, operation ID). j/k moves between rows, Enter opens the detail, r reconnects
+- Pasting Comparison JSON (displayed locally only; nothing is sent)
 
-ブラウザー側は最大 1000 件を保持し、表は直近 200 件です。通信が切れたときは最終更新時刻と「接続切れ」を出し、再接続で履歴を取り直します。`?sample=1` は表示確認用の模擬値で、画面にサンプルと出します。
+The browser side keeps up to 1000 entries and the table shows the most recent 200. When the connection drops it shows the last update time and "disconnected", and reconnecting re-fetches the history. `?sample=1` shows mock values for checking the display and is labeled as a sample on the page.
 
-## 比較実験（既定では無効）
+## Comparison experiments (disabled by default)
 
-起動時に一度だけ読みます。不正値は起動失敗です。
+These are read once at startup. Invalid values make startup fail.
 
-| 変数 | 値 | 既定 |
+| Variable | Values | Default |
 |---|---|---|
 | `JEV_ROUTING_MODE` | `baseline` / `filter` / `forced` | `filter` |
 | `JEV_COMPACTION` | `off` / `on` | `on` |
 | `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
 | `JEV_SELECTION_MODE` | `local` / `jev` / `hybrid` | `hybrid` |
-| `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | モデル識別子とカンマ区切りの完全一致名 | 空（無効） |
-| `JEV_DIRECT_TOOLS` | 無引数/定数引数 Chat function の許可名 | 空（無効） |
-| `JEV_RUN_ID` | 比較用 ID | 自動生成 |
-| `JEV_AUTO_APPLY` | `on` / `off` | `off`（導入例の `examples/*.sh` は `on`） |
-| `JEV_APPLICATION_POLICY` | `required` / `fallback` | 自動適用を新規に有効にしたときだけ `required` |
-| `JEV_KIND_MODES` | `skill=apply,mcp_tool=observe` など | 新種類は `observe`、ateam は `fixed` |
+| `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | a model identifier and comma-separated exact-match names | empty (disabled) |
+| `JEV_DIRECT_TOOLS` | allowed names of Chat functions with no arguments / constant arguments | empty (disabled) |
+| `JEV_RUN_ID` | ID for comparison | auto-generated |
+| `JEV_AUTO_APPLY` | `on` / `off` | `off` (the `examples/*.sh` adoption samples use `on`) |
+| `JEV_APPLICATION_POLICY` | `required` / `fallback` | `required` only when auto-apply is newly enabled |
+| `JEV_KIND_MODES` | e.g. `skill=apply,mcp_tool=observe` | new kinds default to `observe`, ateam to `fixed` |
 
-`forced` は、検証済みの実 Jev 回答がある要求だけ `tool_choice` を固定します。ローカル採点だけでは強制しません。`JEV_ARGS_MODEL` は `forced` 専用で、許可ツールの送信モデルだけを透過的に差し替えます。価格や互換性は推測しません。`JEV_DIRECT_TOOLS` は `forced` と同時だけ有効で、ARGS_MODEL とは併用できません。対象外・不正スキーマは上流へ戻します。実ツール実行と承認はホストに残します。上流拒否の自動再送はありません。
+`forced` pins `tool_choice` only for requests that have a verified, real Jev answer. Local scoring alone never forces it. `JEV_ARGS_MODEL` is for `forced` only and transparently swaps just the sending model for allowed tools. Pricing and compatibility are never guessed. `JEV_DIRECT_TOOLS` is effective only together with `forced` and cannot be combined with ARGS_MODEL. Out-of-scope requests and invalid schemas are returned upstream. Real tool execution and approval remain with the host. There is no automatic retry on upstream rejection.
 
-`JEV_SELECTION_MODE=local` はローカル規則だけを使い、Jev へ選定を問い合わせません。`jev` は適格な選定を Jev に委譲し、Jev が未設定・不正・不確実・失敗なら候補を絞りません。`hybrid` は確定したローカル規則だけを使い、語一致などの保留は Jev に渡します。Jev 未接続なら候補を絞りません。
+`JEV_SELECTION_MODE=local` uses local rules only and never asks Jev for a selection. `jev` delegates eligible selections to Jev, and if Jev is unconfigured, invalid, uncertain, or fails, the candidates are not narrowed. `hybrid` uses only the local rules that are conclusive and hands the pending cases, such as word matches, to Jev. If Jev is not connected, the candidates are not narrowed.
 
-通常のプロキシ要求では同じ判断関数が自動で呼ばれ、選定したスキル本文の供給・MCP/CLI 呼出し・結果照合まで進みます。`JEV_AUTO_APPLY=on` のとき種類別モードが `apply` の対象だけを起動し、`required` では未配達・未対応・選定不消費を成功終了にしません。`fallback` は明示指定時だけ従来設定へ戻します。`jev-routing route --json` は ateam と診断用の同じ入口であり、LLM が自発的に呼ぶことは前提にしません。モデル選定の JSON は `model` / `effort` / `reason_code` です。選定ログや候補絞込みだけでは適用完了にしません。不明な実行は自動再送しません。ダッシュボードは可動個所・未適用理由・比較効果を日本語で示します。欠測と比較なしは欠測／比較なしのまま残し、模擬値はサンプルと表示します。
+On ordinary proxy requests the same decision function is called automatically, and it goes on to supply the body of the selected skill, invoke MCP/CLI, and verify the result. When `JEV_AUTO_APPLY=on`, only targets whose per-kind mode is `apply` are started, and under `required` a non-delivery, an unsupported case, or an unconsumed selection is not treated as a successful exit. `fallback` reverts to the legacy settings only when explicitly specified. `jev-routing route --json` is the same entry point used by ateam and diagnostics, and it is not assumed that an LLM will call it on its own. The model-selection JSON is `model` / `effort` / `reason_code`. A selection log or narrowed candidates alone do not count as an application having completed. Unknown executions are never retried automatically. The dashboard shows the movable points, the reasons for non-application, and the comparison effects in Japanese. Missing data and "no comparison" are left as missing / no comparison, and mock values are labeled as samples.
 
-模擬試験は実ホストの承認互換や実サービスの高速化・費用改善の証拠ではありません。読取/検索と自由記述のコマンド・差分は別課題で評価してください。
+A mock run is not evidence of approval compatibility on a real host, nor of a real-service speedup or cost improvement. Read/search versus free-form commands and diffs should be evaluated as separate tasks.
 
-## 検証
+## Verification
 
 ```bash
 env -u TYPESAFE_API_KEY -u JEV_API_KEY go test -race -count=1 ./...
@@ -198,9 +222,9 @@ python3 -m unittest discover -s scripts -p 'test_summarize_selection_benchmark.p
 bash scripts/test-x-cell.sh --summarize scripts/testdata/x-cell
 ```
 
-## 実測比較
+## Measured comparison
 
-通常テストには含めません。各対象を同じコミットから作る別 worktree で 1 回ずつ実行し、素の CLI と `jev-routing` 経由のトークン使用量・経過時間を JSON で保存します。
+This is not part of the normal test suite. Each target is run once in a separate worktree built from the same commit, and the token usage and elapsed time of the bare CLI versus going through `jev-routing` are saved as JSON.
 
 ```bash
 make test-x-cell           # Claude Code → Codex → Grok Build → Cursor → Devin
@@ -208,17 +232,17 @@ make test-x-cell claude    # 1 製品だけ
 make test-selection-benchmark claude # baseline/local/jev/hybrid を1製品で比較
 ```
 
-結果は `artifacts/x-cell/<日時>/<host>/comparison.json` に出ます。`comparable: true`（`valid: true`）の結果だけを比較に使ってください。プロキシ未到達、`rewritten=0`（passthrough のみ）、または完了条件不一致は `comparable: false` で、削減値は出しません。請求トークンは独立セッション間のキャッシュ状態で大きく変わるため、単発結果では比較しません。代わりに `routing_request_chars`（実際にプロキシが受け取り上流へ送った JSON 本文の削減バイト数）と、出力トークン・実行時間の差分を記録します。ChatGPT ログインの Codex は `-m gpt-5.6-terra`（`CODEX_MODEL` で上書き）を使います。短名 `terra` は 400 になります。
+Results land in `artifacts/x-cell/<datetime>/<host>/comparison.json`. Use only results with `comparable: true` (`valid: true`) for comparison. Not reaching the proxy, `rewritten=0` (passthrough only), or a mismatch in the completion condition yields `comparable: false` and no reduction figures. Billed tokens vary a lot with cache state across independent sessions, so they are not compared on a single run. Instead, `routing_request_chars` (the reduction in bytes of the JSON body the proxy actually received and sent upstream) and the differences in output tokens and runtime are recorded. Codex with ChatGPT login uses `-m gpt-5.6-terra` (override with `CODEX_MODEL`). The short name `terra` returns 400.
 
-`make test-selection-benchmark` は、全プロキシ条件で `JEV_COMPACTION=off` と `JEV_REASONING=preserve` を固定します。履歴に未対応の内容型（例: Claude の `tool_addition`）があると `unknown_history` となり、書換えずに通過します。この結果は正常な安全停止であり、外部品質が合格しても選定比較の採点対象にはなりません。`comparison.json` の `invalid_reason` を確認し、対応済みの履歴形式だけで再実行してください。
+`make test-selection-benchmark` fixes `JEV_COMPACTION=off` and `JEV_REASONING=preserve` for all proxy conditions. If the history contains an unsupported content type (for example Claude's `tool_addition`), the result is `unknown_history` and it passes through unrewritten. That result is a normal fail-safe stop: even if external quality passes, it is not scored in the selection comparison. Check `invalid_reason` in `comparison.json` and re-run with supported history shapes only.
 
-保存済み観測の再集計（外部 CLI / ネットワークなし）:
+Re-aggregating saved observations (no external CLI, no network):
 
 ```bash
 bash scripts/test-x-cell.sh --summarize scripts/testdata/x-cell
 python3 scripts/summarize_selection_benchmark.py scripts/testdata/selection-benchmark
 ```
 
-`CHECK: PASS` の自己申告だけでは成功にしません。費用は単価と出典が揃うときだけ出し、欠測は 0 や削減率に変換しません。比較条件（圧縮・推論・課題）が揃わない群は比較不能です。基準リビジョンが無い選択比較は改善率を出しません。
+A self-reported `CHECK: PASS` alone is not treated as success. Costs are reported only when the unit price and its source are both available, and missing data is never converted into 0 or into a reduction rate. Groups whose comparison conditions (compaction, reasoning, task) do not match are not comparable. A selection comparison without a baseline revision does not produce an improvement rate.
 
-1 回の差分はモデルの揺れ、プロンプトキャッシュ、サービス混雑の影響を受けます。効果を主張する用途では複数回実行し、各条件の中央値を比較してください。模擬フィクスチャの合格を実測の効率改善とは呼びません。
+A single-run difference is affected by model variance, prompt caching, and service congestion. To claim an effect, run multiple times and compare the median of each condition. Passing a mock fixture is not called a measured efficiency improvement.
