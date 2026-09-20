@@ -1,6 +1,7 @@
 package jev
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nekowasabi/jev-routing/internal/compact"
 )
@@ -166,5 +168,72 @@ func TestAskFitsOversizedState(t *testing.T) {
 	joint := compact.EstimateTokens(string(in.State)) + longest
 	if joint > InputBudget {
 		t.Fatalf("posted joint %d > %d", joint, InputBudget)
+	}
+}
+
+func TestRoutingBatchBudget(t *testing.T) {
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&calls, 1)
+		var in struct {
+			State     map[string]any             `json:"state"`
+			Questions map[string]json.RawMessage `json:"questions"`
+			Model     string                     `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		if _, ok := in.Questions["q-cli"]; !ok {
+			t.Error("missing q-cli")
+		}
+		if _, ok := in.Questions["q-mcp"]; !ok {
+			t.Error("missing q-mcp")
+		}
+		inTok, outTok := 4, 2
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "fake",
+			"answers": map[string]any{
+				"q-mcp": map[string]any{"type": "choice", "choice": "mcp_tool:slack:search@1", "confidence": 0.9, "probabilities": map[string]float64{"mcp_tool:slack:search@1": 0.9}},
+				"q-cli": map[string]any{"type": "choice", "choice": "cli:test:rg@1", "confidence": 0.9, "probabilities": map[string]float64{"cli:test:rg@1": 0.9}},
+			},
+			"usage": map[string]any{"inputTokens": inTok, "outputTokens": outTok},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{APIKey: "test", BaseURL: srv.URL, Model: "fake", HTTP: srv.Client()}
+	qs := map[string]Question{
+		"q-cli": {Type: "choice", Instructions: "pick", Criteria: map[string]string{"cli:test:rg@1": "rg"}},
+		"q-mcp": {Type: "choice", Instructions: "pick", Criteria: map[string]string{"mcp_tool:slack:search@1": "search"}},
+	}
+	state := map[string]any{"catalog_revision": "fixture", "policy_revision": "route-v1", "permission": "unknown"}
+	res, err := c.AskBatch(context.Background(), state, qs, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, reason := ValidateChoice(res, "q-cli", map[string]bool{"cli:test:rg@1": true})
+	mcp, reason2 := ValidateChoice(res, "q-mcp", map[string]bool{"mcp_tool:slack:search@1": true})
+	if reason != "" || reason2 != "" || cli.Choice != "cli:test:rg@1" || mcp.Choice != "mcp_tool:slack:search@1" {
+		t.Fatalf("%q %q %+v %+v", reason, reason2, cli, mcp)
+	}
+	if res.Usage == nil || res.Usage.InputTokens == nil || *res.Usage.InputTokens != 4 {
+		t.Fatalf("usage %+v", res.Usage)
+	}
+	res2, err := c.AskBatch(context.Background(), state, qs, time.Time{})
+	if err != nil || atomic.LoadInt64(&calls) != 1 {
+		t.Fatalf("cache: calls=%d err=%v", calls, err)
+	}
+	if res2.Usage == nil {
+		t.Fatal("cached usage dropped")
+	}
+	changed := map[string]any{"catalog_revision": "other", "policy_revision": "route-v1", "permission": "unknown"}
+	if _, err := c.AskBatch(context.Background(), changed, qs, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt64(&calls) != 2 {
+		t.Fatalf("version change must miss cache, calls=%d", calls)
+	}
+	_, err = c.AskBatch(context.Background(), map[string]any{"catalog_revision": "deadline", "policy_revision": "route-v1"}, qs, time.Now().Add(-time.Second))
+	if err == nil {
+		t.Fatal("deadline must fail without retry")
 	}
 }

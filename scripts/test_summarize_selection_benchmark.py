@@ -13,8 +13,8 @@ class SelectionBenchmark(unittest.TestCase):
     def test_contract_and_retention_denominator(self):
         out = summarize(ROOT)
         self.assertTrue(out["contract_valid"])
-        self.assertEqual(out["modes"]["local"]["denominator"], 2)
-        self.assertEqual(out["modes"]["local"]["correct_tools_retained"], 1)
+        self.assertEqual(out["modes"]["local"]["denominator"], 6)
+        self.assertEqual(out["modes"]["local"]["correct_tools_retained"], 2)
         self.assertEqual(out["modes"]["local"]["excluded"][0]["reason"], "unsupported_host_format")
 
     def test_missing_selection_tokens_stays_missing(self):

@@ -9,6 +9,19 @@ import (
 
 const Respond = "respond_to_user"
 
+const (
+	OutcomeSelected = "selected"
+	OutcomeExcluded = "excluded"
+	OutcomeDefer    = "defer"
+
+	ReasonPendingAgent     = "pending_agent"
+	ReasonAgentStreak      = "agent_streak"
+	ReasonSequentialLocate = "sequential_locate"
+	ReasonWordMatch        = "word_match"
+	ReasonCatalogScore     = "catalog_score"
+	ReasonUnknown          = "unknown"
+)
+
 type Action struct {
 	Tool    string
 	Result  string
@@ -28,6 +41,12 @@ type Decision struct {
 	Set []string
 	// LastFailed is the reported probability that the most recent action failed.
 	LastFailed float64
+	// Outcome is selected, excluded, or defer. Hybrid uses this, not Confidence,
+	// to decide whether Jev can be skipped.
+	Outcome string
+	// ReasonCode is the local branch that produced Outcome.
+	ReasonCode string
+	Excluded   []string
 }
 
 type Rank struct {
@@ -70,6 +89,9 @@ func nestedAgent(t string) bool {
 
 func sequentialLocate(t string) bool {
 	t = strings.ToLower(t)
+	if explicitShellAsk(t) {
+		return false
+	}
 	if strings.Contains(t, "検索") && strings.Contains(t, "読") {
 		return true
 	}
@@ -87,10 +109,21 @@ func sequentialLocate(t string) bool {
 
 func SequentialLocate(t string) bool { return sequentialLocate(t) }
 
+func explicitShellAsk(t string) bool {
+	t = strings.ToLower(t)
+	return strings.Contains(t, "echo ") ||
+		strings.Contains(t, "shell command") ||
+		strings.Contains(t, "exec tool") ||
+		strings.Contains(t, "run this exact")
+}
+
 func PreferTaskText(prev, next string) string {
 	next = strings.TrimSpace(next)
 	if next == "" {
 		return prev
+	}
+	if explicitShellAsk(next) {
+		return next
 	}
 	if sequentialLocate(prev) && !sequentialLocate(next) {
 		return prev
@@ -289,19 +322,48 @@ func isAgentTool(name string) bool {
 	return isAgent(name)
 }
 
+func decideFromGoals(request string, specs []Spec, set map[string]bool, goals [][]string, outcome, reason string) (Decision, bool) {
+	for _, g := range goals {
+		for _, n := range g {
+			if set[n] {
+				if sequentialLocate(request) && isAgent(n) {
+					if alt := preferLocateTool(specs); alt != "" {
+						return Decision{Tool: alt, Confidence: 0.86, Done: 0.08, Top: ranks(g), Outcome: outcome, ReasonCode: reason}, true
+					}
+				}
+				return Decision{Tool: n, Confidence: 0.86, Done: 0.08, Top: ranks(g), Outcome: outcome, ReasonCode: reason}, true
+			}
+			if alias := AliasIn(set, n); alias != "" {
+				if sequentialLocate(request) && isAgent(alias) {
+					if alt := preferLocateTool(specs); alt != "" {
+						return Decision{Tool: alt, Confidence: 0.8, Done: 0.08, Top: ranks(g), Outcome: outcome, ReasonCode: reason}, true
+					}
+				}
+				return Decision{Tool: alias, Confidence: 0.8, Done: 0.08, Top: ranks(g), Outcome: outcome, ReasonCode: reason}, true
+			}
+		}
+	}
+	return Decision{}, false
+}
+
 func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Decision {
 	if pendingAgent(actions) {
-		return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.9}
+		return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.9, Outcome: OutcomeSelected, ReasonCode: ReasonPendingAgent}
 	}
 	// Why: Instead of shrinking to Agent again after a spawn storm, adopted passthrough once consecutive Agent tools reach 2. Reason: stale first-goal scoring plus catalog shrink to spawn_subagent loops Grok on canned child replies.
 	if agentStreak(actions) >= 2 {
-		return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.9}
+		return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.9, Outcome: OutcomeSelected, ReasonCode: ReasonAgentStreak}
 	}
 	request = taskText(request)
 	available := make([]string, 0, len(specs))
 	set := map[string]bool{}
+	var excluded []string
 	for _, s := range specs {
 		if s.Name == "" {
+			continue
+		}
+		if HostMeta(s.Name) {
+			excluded = append(excluded, s.Name)
 			continue
 		}
 		available = append(available, s.Name)
@@ -309,47 +371,47 @@ func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Deci
 	}
 	if len(available) == 0 {
 		for _, n := range defaultAvailable(h) {
+			if HostMeta(n) {
+				continue
+			}
 			available = append(available, n)
 			set[n] = true
 			specs = append(specs, Spec{Name: n})
 		}
 	}
+	if explicitShellAsk(request) {
+		if name := AliasIn(set, "Bash"); name != "" {
+			return Decision{Tool: name, Confidence: 0.9, Done: 0.08, Outcome: OutcomeSelected, ReasonCode: ReasonCatalogScore, Excluded: excluded}
+		}
+	}
 
 	goals := Remaining(request, actions, h)
-	for _, g := range goals {
-		for _, n := range g {
-			if set[n] {
-				if sequentialLocate(request) && isAgent(n) {
-					if alt := preferLocateTool(specs); alt != "" {
-						return Decision{Tool: alt, Confidence: 0.86, Done: 0.08, Top: ranks(g)}
-					}
-				}
-				return Decision{Tool: n, Confidence: 0.86, Done: 0.08, Top: ranks(g)}
-			}
-			if alias := AliasIn(set, n); alias != "" {
-				if sequentialLocate(request) && isAgent(alias) {
-					if alt := preferLocateTool(specs); alt != "" {
-						return Decision{Tool: alt, Confidence: 0.8, Done: 0.08, Top: ranks(g)}
-					}
-				}
-				return Decision{Tool: alias, Confidence: 0.8, Done: 0.08, Top: ranks(g)}
-			}
+	if sequentialLocate(request) {
+		if d, ok := decideFromGoals(request, specs, set, goals, OutcomeSelected, ReasonSequentialLocate); ok {
+			d.Excluded = excluded
+			return d
 		}
+		if alt := preferLocateTool(specs); alt != "" {
+			return Decision{Tool: alt, Confidence: 0.86, Done: 0.08, Outcome: OutcomeSelected, ReasonCode: ReasonSequentialLocate, Excluded: excluded}
+		}
+	} else if d, ok := decideFromGoals(request, specs, set, goals, OutcomeDefer, ReasonWordMatch); ok {
+		d.Excluded = excluded
+		return d
 	}
 
 	best, score := scoreCatalog(request, actions, specs)
 	if sequentialLocate(request) && (isAgent(best) || best == "" || score < 0.25) {
 		if alt := preferLocateTool(specs); alt != "" {
-			return Decision{Tool: alt, Confidence: 0.86, Done: 0.08}
+			return Decision{Tool: alt, Confidence: 0.86, Done: 0.08, Outcome: OutcomeSelected, ReasonCode: ReasonSequentialLocate, Excluded: excluded}
 		}
 	}
 	if best != "" && score >= 0.25 {
-		return Decision{Tool: best, Confidence: clamp01(score / 8), Done: 0.08}
+		return Decision{Tool: best, Confidence: clamp01(score / 8), Done: 0.08, Outcome: OutcomeDefer, ReasonCode: ReasonCatalogScore, Excluded: excluded}
 	}
 
 	// Unknown prompt: never end the host loop. Claude Code still has Agent/Task/MCP
 	// tools the 6-task heuristic never heard of; stripping tools[] makes the session stop.
-	return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.2}
+	return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.2, Outcome: OutcomeDefer, ReasonCode: ReasonUnknown, Excluded: excluded}
 }
 
 func AliasIn(set map[string]bool, want string) string {
@@ -436,8 +498,10 @@ func scoreCatalog(request string, actions []Action, specs []Spec) (string, float
 			if hasAny(requestText, "fix", "edit", "patch", "replace", "直") {
 				score += 2
 			}
-		default:
-			if isExec(name) && (hasAny(requestText, "find", "search", "grep", "where", "探", "検索", "read", "open", "show", "見て", "読")) {
+		case isExec(name):
+			if explicitShellAsk(requestText) {
+				score += 5
+			} else if hasAny(requestText, "find", "search", "grep", "where", "探", "検索", "read", "open", "show", "見て", "読") {
 				score -= 4
 			}
 		}

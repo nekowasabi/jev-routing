@@ -2,7 +2,11 @@
   "cases": [
     {"id": "claude-search", "host": "claude", "request": "Find the definition", "catalog": ["Grep", "Read"], "correct_tools": ["Grep"], "external_success": "exact source location"},
     {"id": "codex-read", "host": "codex", "request": "Read the named file", "catalog": ["Read", "Bash"], "correct_tools": ["Read"], "external_success": "file contents verified"},
-    {"id": "cursor-unsupported", "host": "cursor", "request": "Find a symbol", "catalog": ["Search", "Read"], "correct_tools": ["Search"], "external_success": "exact source location"}
+    {"id": "cursor-unsupported", "host": "cursor", "request": "Find a symbol", "catalog": ["Search", "Read"], "correct_tools": ["Search"], "external_success": "exact source location"},
+    {"id": "negation-no-search", "host": "claude", "request": "Do not search. Read the known path go.mod.", "catalog": ["Grep", "Read"], "correct_tools": ["Read"], "external_success": "file contents without search"},
+    {"id": "ambiguous-or", "host": "claude", "request": "Maybe find the helper or just summarize it.", "catalog": ["Grep", "Read", "Agent"], "correct_tools": ["Grep"], "external_success": "located helper before summary"},
+    {"id": "multi-purpose", "host": "claude", "request": "Find the failing test and also leave a review comment on PR 842.", "catalog": ["Grep", "Read", "github_pr_review"], "correct_tools": ["Grep"], "external_success": "located test before review"},
+    {"id": "single-unsuitable", "host": "claude", "request": "Read README only. Do not execute anything.", "catalog": ["Read", "Bash"], "correct_tools": ["Read"], "external_success": "file contents without shell"}
   ],
   "runs": [
     {"case_id": "claude-search", "mode": "baseline", "reachable": true, "selected_tools": ["Grep"], "external_pass": true, "selection_tokens": null},
@@ -10,7 +14,15 @@
     {"case_id": "claude-search", "mode": "local", "reachable": true, "selected_tools": ["Grep"], "external_pass": true, "selection_tokens": null},
     {"case_id": "codex-read", "mode": "local", "reachable": true, "selected_tools": ["Bash"], "external_pass": true, "selection_tokens": null},
     {"case_id": "cursor-unsupported", "mode": "local", "reachable": true, "rewrite_supported": false, "selected_tools": [], "external_pass": true, "exclude_reason": "unsupported_host_format", "selection_tokens": null},
+    {"case_id": "negation-no-search", "mode": "local", "reachable": true, "selected_tools": ["Grep"], "external_pass": false, "selection_tokens": null},
+    {"case_id": "ambiguous-or", "mode": "local", "reachable": true, "selected_tools": ["Agent"], "external_pass": false, "selection_tokens": null},
+    {"case_id": "multi-purpose", "mode": "local", "reachable": true, "selected_tools": ["Grep"], "external_pass": true, "selection_tokens": null},
+    {"case_id": "single-unsuitable", "mode": "local", "reachable": true, "selected_tools": ["Bash"], "external_pass": false, "selection_tokens": null},
     {"case_id": "claude-search", "mode": "jev", "reachable": true, "selected_tools": ["Grep"], "external_pass": true, "selection_tokens": null},
-    {"case_id": "claude-search", "mode": "hybrid", "reachable": true, "selected_tools": ["Grep"], "external_pass": true, "selection_tokens": 12}
+    {"case_id": "claude-search", "mode": "hybrid", "reachable": true, "selected_tools": ["Grep"], "external_pass": true, "selection_tokens": 12},
+    {"case_id": "negation-no-search", "mode": "hybrid", "reachable": true, "selected_tools": ["Read"], "external_pass": true, "selection_tokens": 8},
+    {"case_id": "ambiguous-or", "mode": "hybrid", "reachable": true, "selected_tools": ["Grep"], "external_pass": true, "selection_tokens": 8},
+    {"case_id": "multi-purpose", "mode": "hybrid", "reachable": true, "selected_tools": ["Grep"], "external_pass": true, "selection_tokens": 8},
+    {"case_id": "single-unsuitable", "mode": "hybrid", "reachable": true, "selected_tools": ["Read"], "external_pass": true, "selection_tokens": 8}
   ]
 }

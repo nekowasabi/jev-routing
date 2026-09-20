@@ -1,0 +1,78 @@
+{
+  "revision": "fixture",
+  "items": [
+    {
+      "id": "model:test:fast@1",
+      "kind": "model",
+      "name": "fast",
+      "description": "test model pair",
+      "provider": "test",
+      "hosts": ["claude"],
+      "availability": "installed",
+      "permission": "unknown",
+      "version": "1",
+      "target": {"model_pairs": [{"model": "test-fast", "effort": "low"}]}
+    },
+    {
+      "id": "subagent:test:reviewer@1",
+      "kind": "subagent",
+      "name": "reviewer",
+      "description": "review role",
+      "provider": "test",
+      "hosts": ["claude"],
+      "availability": "installed",
+      "permission": "unknown",
+      "version": "1",
+      "target": {"subagent_launcher": "Agent"}
+    },
+    {
+      "id": "skill:test:review@1",
+      "kind": "skill",
+      "name": "review",
+      "description": "review skill",
+      "provider": "test",
+      "hosts": ["claude"],
+      "availability": "installed",
+      "permission": "unknown",
+      "version": "1",
+      "explicit": true,
+      "target": {"skill_body_ref": "skill://review/SKILL.md"}
+    },
+    {
+      "id": "mcp_tool:slack:search@1",
+      "kind": "mcp_tool",
+      "name": "search",
+      "description": "search messages",
+      "provider": "slack",
+      "hosts": ["claude"],
+      "availability": "installed",
+      "permission": "unknown",
+      "version": "1",
+      "target": {"mcp_conn": "snap:slack", "mcp_tool": "search"}
+    },
+    {
+      "id": "cli:test:rg@1",
+      "kind": "cli",
+      "name": "rg",
+      "description": "search files",
+      "provider": "test",
+      "hosts": ["claude"],
+      "availability": "installed",
+      "permission": "unknown",
+      "version": "1",
+      "target": {"cli_command": "rg", "cli_args": ["--json"]}
+    },
+    {
+      "id": "plugin:test:devtools@1",
+      "kind": "plugin",
+      "name": "devtools",
+      "description": "installed plugin",
+      "provider": "test",
+      "hosts": ["claude"],
+      "availability": "installed",
+      "permission": "unknown",
+      "version": "1",
+      "target": {"plugin_children": ["mcp_tool:devtools:lookup@1"]}
+    }
+  ]
+}

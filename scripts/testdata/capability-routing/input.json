@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {"id": "skill-review", "host": "claude", "request": "use the review skill", "catalog": ["review"], "correct_tools": ["review"], "external_success": "skill body delivered", "kind": "skill"},
+    {"id": "cli-rg", "host": "claude", "request": "search files with rg", "catalog": ["rg", "Read"], "correct_tools": ["rg"], "external_success": "rg started", "kind": "cli"},
+    {"id": "observe-only", "host": "claude", "request": "maybe search slack", "catalog": ["search"], "correct_tools": ["search"], "external_success": "observed not applied", "kind": "mcp_tool"}
+  ],
+  "runs": [
+    {"case_id": "skill-review", "mode": "baseline", "reachable": true, "selected_tools": ["review"], "external_pass": true, "selection_tokens": null, "kind_mode": "fixed"},
+    {"case_id": "cli-rg", "mode": "baseline", "reachable": true, "selected_tools": ["rg"], "external_pass": true, "selection_tokens": null, "kind_mode": "fixed"},
+    {"case_id": "observe-only", "mode": "baseline", "reachable": true, "selected_tools": ["search"], "external_pass": true, "selection_tokens": null, "kind_mode": "observe"},
+    {"case_id": "skill-review", "mode": "local", "reachable": true, "selected_tools": ["review"], "external_pass": true, "selection_tokens": null, "kind_mode": "apply", "applied": true},
+    {"case_id": "cli-rg", "mode": "local", "reachable": true, "selected_tools": ["rg"], "external_pass": true, "selection_tokens": null, "kind_mode": "apply", "applied": true},
+    {"case_id": "observe-only", "mode": "local", "reachable": true, "selected_tools": ["search"], "external_pass": true, "selection_tokens": null, "kind_mode": "observe", "applied": false},
+    {"case_id": "skill-review", "mode": "jev", "reachable": true, "selected_tools": ["review"], "external_pass": true, "selection_tokens": 4, "kind_mode": "apply", "applied": true},
+    {"case_id": "cli-rg", "mode": "hybrid", "reachable": true, "selected_tools": ["rg"], "external_pass": true, "selection_tokens": 4, "kind_mode": "apply", "applied": true},
+    {"case_id": "observe-only", "mode": "hybrid", "reachable": true, "selected_tools": ["search"], "external_pass": true, "selection_tokens": 4, "kind_mode": "observe", "applied": false}
+  ]
+}

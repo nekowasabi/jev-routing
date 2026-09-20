@@ -295,6 +295,27 @@ func TestDecideSpecsStopsAfterAgentStreak(t *testing.T) {
 	}
 }
 
+func TestDecideSpecsDefersWordMatchAndSelectsSequentialLocate(t *testing.T) {
+	specs := []Spec{{Name: "Read"}, {Name: "Grep"}, {Name: "Bash"}}
+	word := DecideSpecs("The auth middleware test is failing. Find it.", nil, specs, host.Claude)
+	if word.Outcome != OutcomeDefer || word.ReasonCode != ReasonWordMatch {
+		t.Fatalf("word match should defer, got %+v", word)
+	}
+	if word.Confidence >= 0.85 && word.Outcome == OutcomeSelected {
+		t.Fatal("pseudo confidence must not mark word match selected")
+	}
+	seq := DecideSpecs("Do not parallel. Sequential search and read the definition of RewriteWith.", nil, specs, host.Claude)
+	if seq.Outcome != OutcomeSelected || seq.ReasonCode != ReasonSequentialLocate {
+		t.Fatalf("sequential locate should be selected, got %+v", seq)
+	}
+	explore := DecideSpecs("Explore the auth package thoroughly and report how sessions are stored.", nil, []Spec{
+		{Name: "Read"}, {Name: "Grep"}, {Name: "Agent", Desc: "Launch a new agent"}, {Name: "Bash"},
+	}, host.Claude)
+	if explore.Tool != "Agent" || explore.Outcome != OutcomeDefer {
+		t.Fatalf("explore hint stays Agent but must defer, got %+v", explore)
+	}
+}
+
 func TestPhaseOfIgnoresDescriptionProse(t *testing.T) {
 	// Real descriptions name other phases: an edit tool tells you to read the
 	// file first, a shell tool offers to find and list files.

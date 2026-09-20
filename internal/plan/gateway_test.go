@@ -40,3 +40,16 @@ func TestGatewayGrokNames(t *testing.T) {
 		t.Fatalf("explore new catalog: %+v", d3)
 	}
 }
+
+func TestDecideSpecsKeepsShellOnEchoCommand(t *testing.T) {
+	p := "Run this exact shell command now: echo jev-live-cli-ok. Use a shell or exec tool."
+	polluted := "検索してから読んでください。\n" + p
+	specs := []Spec{{Name: "read_file"}, {Name: "grep"}, {Name: "run_terminal_command"}, {Name: "spawn_subagent"}}
+	d := DecideSpecs(polluted, nil, specs, host.Grok)
+	if d.Tool != "run_terminal_command" || d.Passthrough {
+		t.Fatalf("echo command must keep the shell tool: %+v", d)
+	}
+	if SequentialLocate(polluted) {
+		t.Fatal("explicit shell ask must not count as sequential locate")
+	}
+}

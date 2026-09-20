@@ -137,6 +137,20 @@ func (c *Client) AskSelectionContext(ctx context.Context, state any, questions m
 	return c.doAsk(ctx, "selection", state, questions, true)
 }
 
+// AskBatch asks independent questions in one request. Answers are keyed by
+// question ID so callers must not depend on response order.
+func (c *Client) AskBatch(ctx context.Context, state any, questions map[string]Question, deadline time.Time) (*Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !deadline.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+	return c.doAsk(ctx, "selection", state, questions, true)
+}
+
 func (c *Client) doAsk(ctx context.Context, purpose string, state any, questions map[string]Question, useCache bool) (*Response, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -275,6 +289,17 @@ func ParseChoice(r *Response, id string) (Choice, bool) {
 		return Choice{}, false
 	}
 	return c, true
+}
+
+func ValidateChoice(r *Response, id string, allowed map[string]bool) (Choice, string) {
+	c, ok := ParseChoice(r, id)
+	if !ok {
+		return Choice{}, "missing_answer"
+	}
+	if allowed != nil && !allowed[c.Choice] {
+		return Choice{}, "invalid_id"
+	}
+	return c, ""
 }
 
 func finite01(v float64) bool {

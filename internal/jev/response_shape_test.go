@@ -36,4 +36,12 @@ func TestResponseRequiredNumericFields(t *testing.T) {
 			t.Errorf("%s: valid=%v", tc.body, ok)
 		}
 	}
+	allowed := map[string]bool{"exec": true, "no_match": true}
+	if _, reason := ValidateChoice(&Response{Answers: map[string]json.RawMessage{}}, "q", allowed); reason != "missing_answer" {
+		t.Fatalf("missing reason=%s", reason)
+	}
+	bad := &Response{Answers: map[string]json.RawMessage{"q": json.RawMessage(`{"type":"choice","choice":"nope","confidence":0.9}`)}}
+	if _, reason := ValidateChoice(bad, "q", allowed); reason != "invalid_id" {
+		t.Fatalf("invalid reason=%s", reason)
+	}
 }
