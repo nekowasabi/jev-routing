@@ -39,11 +39,12 @@ type ModelRequest struct {
 }
 
 type ModelResult struct {
-	Model, Effort string
-	Source        string
-	ReasonCode    string
-	PairID        string
-	Asked         bool
+	Model      string `json:"model"`
+	Effort     string `json:"effort"`
+	Source     string `json:"source"`
+	ReasonCode string `json:"reason_code"`
+	PairID     string `json:"pair_id,omitempty"`
+	Asked      bool   `json:"asked"`
 }
 
 func LoadPairs(path string) ([]Pair, error) {
