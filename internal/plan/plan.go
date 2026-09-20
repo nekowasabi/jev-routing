@@ -23,6 +23,11 @@ type Decision struct {
 	Gated       bool
 	Passthrough bool
 	Top         []Rank
+	// Set is a shortlist to filter the catalog down to when Tool alone is not
+	// confident enough to adopt. Empty means "filter to Tool" as before.
+	Set []string
+	// LastFailed is the reported probability that the most recent action failed.
+	LastFailed float64
 }
 
 type Rank struct {
@@ -443,6 +448,36 @@ func scoreCatalog(request string, actions []Action, specs []Spec) (string, float
 		}
 	}
 	return best, bestScore
+}
+
+// Coarse task phases, matching the task_phase criteria asked of Jev.
+const (
+	PhaseLocate  = "locate"
+	PhaseRead    = "read"
+	PhaseModify  = "modify"
+	PhaseExecute = "execute"
+	PhaseRespond = "respond"
+)
+
+// PhaseOf classifies a tool from its name. An unrecognized tool returns ""
+// and callers keep it under every phase.
+// Why: Descriptions are not classifiable — an edit tool's prose mentions
+// reading the file first, and a shell tool's prose mentions find and list.
+func PhaseOf(s Spec) string {
+	n := strings.ToLower(s.Name)
+	switch {
+	// Why: A name can carry two verbs (search_replace, apply_patch); the
+	// action it performs wins over the material it works on.
+	case hasAny(n, "edit", "write", "create", "patch"):
+		return PhaseModify
+	case hasAny(n, "bash", "exec", "run", "shell", "command"):
+		return PhaseExecute
+	case hasAny(n, "grep", "glob", "search", "list", "find"):
+		return PhaseLocate
+	case hasAny(n, "read", "fetch", "get", "view"):
+		return PhaseRead
+	}
+	return ""
 }
 
 func isAgent(n string) bool {

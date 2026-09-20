@@ -294,3 +294,24 @@ func TestDecideSpecsStopsAfterAgentStreak(t *testing.T) {
 		t.Fatalf("want passthrough Respond after agent streak, got %+v", d)
 	}
 }
+
+func TestPhaseOfIgnoresDescriptionProse(t *testing.T) {
+	// Real descriptions name other phases: an edit tool tells you to read the
+	// file first, a shell tool offers to find and list files.
+	for _, tc := range []struct {
+		spec Spec
+		want string
+	}{
+		{Spec{Name: "Edit", Desc: "Performs exact string replacement in a file. You must Read the file before editing it, and the old string must match exactly."}, PhaseModify},
+		{Spec{Name: "Write", Desc: "Writes a file to the local filesystem, overwriting if one exists. Read the existing file first; use Edit for partial changes."}, PhaseModify},
+		{Spec{Name: "Bash", Desc: "Executes a bash command. Avoid using it to read files or to find and list paths; use the dedicated search tools for that."}, PhaseExecute},
+		{Spec{Name: "Grep", Desc: "Searches file contents with a regular expression and lists every matching path, so you can then read the interesting ones."}, PhaseLocate},
+		{Spec{Name: "Read", Desc: "Reads a file from the local filesystem. Use it when you know the path; it does not search, edit or run anything."}, PhaseRead},
+		{Spec{Name: "sentry_get_issue", Desc: "Fetch one production error by id."}, PhaseRead},
+		{Spec{Name: "wait", Desc: "Pause for a while."}, ""},
+	} {
+		if got := PhaseOf(tc.spec); got != tc.want {
+			t.Errorf("PhaseOf(%s) = %q, want %q", tc.spec.Name, got, tc.want)
+		}
+	}
+}

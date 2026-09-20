@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
+	"github.com/nekowasabi/jev-routing/internal/host"
 	"github.com/nekowasabi/jev-routing/internal/jev"
 	"github.com/nekowasabi/jev-routing/internal/plan"
 )
@@ -42,9 +44,120 @@ func TestSelectionUsesCompleteCandidateCapabilities(t *testing.T) {
 		}})
 	})
 	decision, reason, err := askNextTool(context.Background(), client, "Find the function definition", nil,
-		[]plan.Spec{{Name: "exec", Desc: description}, {Name: "wait"}})
+		[]plan.Spec{{Name: "exec", Desc: description}, {Name: "wait"}}, "")
 	if err != nil || reason != "" || decision.Tool != "exec" {
 		t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
+	}
+}
+
+// jevRaw answers with the exact payload the test supplies.
+func jevRaw(t *testing.T, answers map[string]any) *jev.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"answers": answers})
+	}))
+	t.Cleanup(srv.Close)
+	return &jev.Client{APIKey: "k", BaseURL: srv.URL, Model: "m", HTTP: srv.Client()}
+}
+
+func uncertainChoice(probabilities map[string]float64, extra map[string]any) map[string]any {
+	answers := map[string]any{
+		"next_tool":  map[string]any{"type": "choice", "choice": "grep", "confidence": 0.6, "probabilities": probabilities},
+		"needs_tool": map[string]any{"type": "noul", "noul": 0.9},
+	}
+	for k, v := range extra {
+		answers[k] = v
+	}
+	return answers
+}
+
+func TestUncertainChoiceKeepsConfidentTopSet(t *testing.T) {
+	client := jevRaw(t, uncertainChoice(map[string]float64{"grep": 0.55, "read_file": 0.38, "run_terminal_command": 0.07}, nil))
+	_, stats, err := Rewrite(chatReq("summarize this repo's architecture for me", workTools()), host.Grok, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Reason != reasonTopSetJev || strings.Join(stats.ToolsAfter, ",") != "grep,read_file" {
+		t.Fatalf("reason=%s tools=%v", stats.Reason, stats.ToolsAfter)
+	}
+}
+
+func TestUncertainChoiceWithSpreadMassPassesThrough(t *testing.T) {
+	client := jevRaw(t, uncertainChoice(map[string]float64{"grep": 0.5, "read_file": 0.3, "run_terminal_command": 0.2}, nil))
+	_, stats, err := Rewrite(chatReq("summarize this repo's architecture for me", workTools()), host.Grok, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Reason != reasonUncertainJev || stats.ToolAfter != stats.ToolBefore {
+		t.Fatalf("reason=%s tools %d→%d", stats.Reason, stats.ToolBefore, stats.ToolAfter)
+	}
+}
+
+// phaseSpecs carries descriptions as verbose as a real host's, each naming
+// phases other than its own.
+func phaseSpecs() []plan.Spec {
+	return []plan.Spec{
+		{Name: "grep", Desc: "Search file contents with a regular expression and list the matching paths so you can read them afterwards."},
+		{Name: "read_file", Desc: "Read a file from the workspace. Use it when you already know the path; it cannot search, edit or run anything."},
+		{Name: "run_terminal_command", Desc: "Execute a shell command in the workspace. Prefer the dedicated tools when you only need to find, list or read files."},
+	}
+}
+
+func TestUncertainChoiceRestrictsToTaskPhase(t *testing.T) {
+	client := jevRaw(t, uncertainChoice(map[string]float64{"grep": 0.5, "read_file": 0.3, "run_terminal_command": 0.2}, map[string]any{
+		"task_phase": map[string]any{"type": "choice", "choice": plan.PhaseExecute, "confidence": 0.9},
+	}))
+	decision, reason, err := askNextTool(context.Background(), client, "run the tests", nil, phaseSpecs(), "")
+	if err != nil || reason != reasonPhaseJev || strings.Join(decision.Set, ",") != "run_terminal_command" {
+		t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
+	}
+}
+
+func TestPhaseSetKeepsRepeatedTool(t *testing.T) {
+	client := jevRaw(t, uncertainChoice(map[string]float64{"grep": 0.5, "read_file": 0.3, "run_terminal_command": 0.2}, map[string]any{
+		"task_phase":       map[string]any{"type": "choice", "choice": plan.PhaseExecute, "confidence": 0.9},
+		"repeat_same_tool": map[string]any{"type": "noul", "noul": 0.9},
+	}))
+	decision, reason, err := askNextTool(context.Background(), client, "run the tests",
+		[]plan.Action{{Tool: "grep", Result: "no match"}}, phaseSpecs(), "")
+	if err != nil || reason != reasonPhaseJev || strings.Join(decision.Set, ",") != "run_terminal_command,grep" {
+		t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
+	}
+}
+
+func TestSelectionStateCarriesAssistantPlan(t *testing.T) {
+	var got string
+	client := jevAnswers(t, "grep", 0.9, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			State struct {
+				AssistantPlan string `json:"assistant_plan"`
+			} `json:"state"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		got = request.State.AssistantPlan
+		_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{
+			"next_tool":  map[string]any{"type": "choice", "choice": "grep", "confidence": 0.9},
+			"needs_tool": map[string]any{"type": "noul", "noul": 0.9},
+		}})
+	})
+	body, _ := json.Marshal(map[string]any{
+		"model": "grok-4",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "summarize this repo's architecture for me"},
+			map[string]any{"role": "assistant", "content": "I read the old plan, which no longer applies"},
+			map[string]any{"role": "assistant", "content": "I'll now edit foo.go",
+				"tool_calls": []any{map[string]any{"id": "c1", "function": map[string]any{"name": "grep", "arguments": "{}"}}}},
+			map[string]any{"role": "tool", "tool_call_id": "c1", "content": "hit"},
+		},
+		"tools": workTools(),
+	})
+	if _, _, err := Rewrite(body, host.Grok, client); err != nil {
+		t.Fatal(err)
+	}
+	if got != "I'll now edit foo.go" {
+		t.Fatalf("assistant_plan=%q", got)
 	}
 }
 
@@ -69,7 +182,7 @@ func TestSelectionAcceptsOfficialNoulWithoutConfidence(t *testing.T) {
 				}})
 			})
 			decision, reason, err := askNextTool(context.Background(), client, "Find the function definition", nil,
-				[]plan.Spec{{Name: "exec", Desc: "Run shell commands to search and read files"}})
+				[]plan.Spec{{Name: "exec", Desc: "Run shell commands to search and read files"}}, "")
 			if err != nil || reason != tc.wantReason || decision.Tool != tc.wantTool || decision.Confidence != tc.confidence || decision.Done != tc.probability {
 				t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
 			}

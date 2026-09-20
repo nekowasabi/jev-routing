@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,8 @@ const (
 	reasonLegacyFunctions    = "legacy_functions"
 	reasonBaseline           = "baseline"
 	reasonUncertainJev       = "uncertain_jev"
+	reasonTopSetJev          = "top_set_jev"
+	reasonPhaseJev           = "phase_jev"
 	reasonInvalidJev         = "invalid_jev"
 	reasonJevError           = "jev_error"
 	reasonLocalPassthrough   = "local_passthrough"
@@ -49,6 +52,11 @@ const (
 	adoptConfidence = 0.85
 	needsToolYes    = 0.8
 	needsToolNo     = 0.2
+	// topPairMass is the probability the top two options must carry together
+	// before an uncertain pick is narrowed to a shortlist instead of passed through.
+	topPairMass = 0.90
+
+	assistantPlanRunes = 1500
 )
 
 type RewriteStats struct {
@@ -72,6 +80,7 @@ type RewriteStats struct {
 	Reason           string  `json:"reason,omitempty"`
 	Confidence       float64 `json:"confidence,omitempty"`
 	NeedsTool        float64 `json:"needsTool,omitempty"`
+	LastActionFailed float64 `json:"lastActionFailed,omitempty"`
 	Changed          bool    `json:"changed"`
 	Apply            string  `json:"apply,omitempty"`
 	OriginalModel    string  `json:"originalModel,omitempty"`
@@ -222,7 +231,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 
 	usedJev := false
 	if client != nil && client.Live() && len(names) > 0 && decision.Confidence < adoptConfidence {
-		live, verr, err := askNextTool(ctx, client, user, actions, toolSpecs)
+		live, verr, err := askNextTool(ctx, client, user, actions, toolSpecs, lastAssistantText(msgs))
 		if err != nil {
 			stats.Reason = reasonJevError
 			stats.Chosen = "passthrough:" + reasonJevError
@@ -231,7 +240,11 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.Source = sourceJev
 		stats.Confidence = live.Confidence
 		stats.NeedsTool = live.Done
-		if verr != "" {
+		stats.LastActionFailed = live.LastFailed
+		// Why: An uncertain single pick may still carry a confident shortlist.
+		// Forced mode needs exactly one tool, so it keeps the passthrough.
+		shortlist := verr != "" && len(live.Set) > 0 && opt.Mode != ModeForced
+		if verr != "" && !shortlist {
 			stats.Reason = verr
 			stats.Chosen = "passthrough:" + verr
 			return withoutSelection()
@@ -241,6 +254,9 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.Source = sourceJev
 		stats.Confidence = decision.Confidence
 		stats.NeedsTool = decision.Done
+		if shortlist {
+			stats.Reason = verr
+		}
 	}
 
 	if decision.Passthrough || decision.Tool == plan.Respond || (usedJev && decision.Done <= needsToolNo) {
@@ -265,7 +281,11 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		return withoutSelection()
 	}
 
-	kept := filterTools(tools, decision.Tool, toolReferences(msgs))
+	keep := decision.Set
+	if len(keep) == 0 {
+		keep = []string{decision.Tool}
+	}
+	kept := filterTools(tools, keep, toolReferences(msgs))
 	if plan.SequentialLocate(user) {
 		kept = keepLocatePair(tools, kept)
 	}
@@ -1196,7 +1216,7 @@ func encodePromptMessages(msgs []any, asString bool) []any {
 	return out
 }
 
-func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan.Action, specs []plan.Spec) (plan.Decision, string, error) {
+func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan.Action, specs []plan.Spec, assistantPlan string) (plan.Decision, string, error) {
 	criteria := map[string]string{}
 	for _, s := range specs {
 		if plan.HostMeta(s.Name) {
@@ -1212,10 +1232,19 @@ func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan
 	}
 	criteria[plan.Respond] = "stop calling tools and answer the user. Pick this only when no available tool is needed to make progress on the remaining request."
 	qs := map[string]jev.Question{
-		"next_tool":  {Type: "choice", Instructions: "Which single available tool should run next to make progress on the user request, given the actions already taken? Use each candidate's supplied description to determine its capabilities, including any operations it exposes through other tools. Do not assume capabilities from a host or tool name. Pick respond_to_user only when no tool is needed now.", Criteria: criteria},
-		"needs_tool": {Type: "noul", Instructions: "A tool call is needed now to make progress. This is not a judgment that the overall user task is complete."},
+		"next_tool":  {Type: "choice", Instructions: "Given `user_request`, `actions_taken` and the assistant's stated intention in `assistant_plan`, which single available tool should run next to make progress? Use each candidate's supplied description to determine its capabilities, including any operations it exposes through other tools. Do not assume capabilities from a host or tool name. Pick respond_to_user only when no tool is needed now.", Criteria: criteria},
+		"needs_tool": {Type: "noul", Instructions: "A tool call is needed now to make progress on `user_request`. This is not a judgment that the overall user task is complete."},
+		"task_phase": {Type: "choice", Optional: true, Instructions: "Assuming work on `user_request` continues, what kind of step comes next after `actions_taken`?", Criteria: map[string]string{
+			plan.PhaseLocate:  "Finding where something is (search, list, glob)",
+			plan.PhaseRead:    "Reading known files or fetching content",
+			plan.PhaseModify:  "Editing, writing, or creating files",
+			plan.PhaseExecute: "Running commands, tests, builds",
+			plan.PhaseRespond: "No further tool is needed; answer the user",
+		}},
+		"last_action_failed": {Type: "noul", Optional: true, Instructions: "The most recent entry in `actions_taken` failed or returned an error. If `actions_taken` is empty, answer no."},
+		"repeat_same_tool":   {Type: "noul", Optional: true, Instructions: "Assuming a tool is needed next, it is the same tool as the most recent entry in `actions_taken`. If `actions_taken` is empty, answer no."},
 	}
-	state := map[string]any{"user_request": user, "actions_taken": actions}
+	state := map[string]any{"user_request": user, "actions_taken": actions, "assistant_plan": assistantPlan}
 	res, err := c.AskContext(ctx, state, qs)
 	if err != nil {
 		return plan.Decision{}, reasonJevError, err
@@ -1231,28 +1260,122 @@ func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan
 	if _, ok := criteria[choice.Choice]; !ok {
 		return plan.Decision{}, reasonInvalidJev, nil
 	}
+	failed, _ := jev.ParseNoul(res, "last_action_failed")
 	// Why: Noul returns a probability, not a separate confidence field.
 	// Apply its probability thresholds below; only Choice has confidence.
 	if choice.Conf < adoptConfidence {
-		return plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf}, reasonUncertainJev, nil
+		d := plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf, LastFailed: failed.Noul}
+		// Why: An uncertain single pick can still carry a confident shortlist;
+		// filtering to it beats passing the whole catalog back untouched.
+		if need.Noul >= needsToolYes && choice.Choice != plan.Respond {
+			inCatalog := func(n string) bool { _, ok := criteria[n]; return ok && n != plan.Respond }
+			if set := topSet(rankChoices(choice.Probabilities), inCatalog); len(set) > 0 {
+				d.Set = withRepeatedTool(set, res, actions, inCatalog)
+				return d, reasonTopSetJev, nil
+			}
+			if set := phaseSet(res, specs); len(set) > 0 {
+				d.Set = withRepeatedTool(set, res, actions, inCatalog)
+				return d, reasonPhaseJev, nil
+			}
+		}
+		return d, reasonUncertainJev, nil
 	}
 	if plan.HostMeta(choice.Choice) {
-		return plan.Decision{Tool: plan.Respond, Done: need.Noul, Passthrough: true, Confidence: choice.Conf}, "", nil
+		return plan.Decision{Tool: plan.Respond, Done: need.Noul, Passthrough: true, Confidence: choice.Conf, LastFailed: failed.Noul}, "", nil
 	}
 	if choice.Choice == plan.Respond || need.Noul <= needsToolNo {
-		return plan.Decision{Tool: plan.Respond, Done: need.Noul, Passthrough: true, Confidence: choice.Conf}, "", nil
+		return plan.Decision{Tool: plan.Respond, Done: need.Noul, Passthrough: true, Confidence: choice.Conf, LastFailed: failed.Noul}, "", nil
 	}
+	adopted := plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf, LastFailed: failed.Noul}
 	if need.Noul < needsToolYes {
-		return plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf}, reasonUncertainJev, nil
+		return adopted, reasonUncertainJev, nil
 	}
-	return plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf}, "", nil
+	return adopted, "", nil
+}
+
+// rankChoices orders a choice distribution by probability, descending.
+func rankChoices(probs map[string]float64) []plan.Rank {
+	out := make([]plan.Rank, 0, len(probs))
+	for name, p := range probs {
+		out = append(out, plan.Rank{Name: name, P: p})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].P != out[j].P {
+			return out[i].P > out[j].P
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// topSet keeps the leading pair when it carries nearly all the probability
+// mass: the single pick is uncertain, the shortlist is not. respond_to_user
+// counts toward the mass but never joins the catalog, so a pair containing it
+// has no two real tools to keep.
+func topSet(ranked []plan.Rank, inCatalog func(string) bool) []string {
+	if len(ranked) < 2 || ranked[0].P+ranked[1].P < topPairMass {
+		return nil
+	}
+	if !inCatalog(ranked[0].Name) || !inCatalog(ranked[1].Name) {
+		return nil
+	}
+	return []string{ranked[0].Name, ranked[1].Name}
+}
+
+// phaseSet shortlists the catalog by the phase of work coming next. Tools the
+// local classifier does not recognize are kept under every phase.
+func phaseSet(res *jev.Response, specs []plan.Spec) []string {
+	phase, ok := jev.ParseChoice(res, "task_phase")
+	if !ok || phase.Conf < adoptConfidence || phase.Choice == plan.PhaseRespond {
+		return nil
+	}
+	var names []string
+	matched, eligible := 0, 0
+	for _, s := range specs {
+		if plan.HostMeta(s.Name) {
+			names = append(names, s.Name) // a host UX tool is never dropped
+			continue
+		}
+		eligible++
+		if p := plan.PhaseOf(s); p == "" || p == phase.Choice {
+			names = append(names, s.Name)
+			matched++
+		}
+	}
+	if matched == 0 || matched == eligible {
+		return nil // nothing to restrict, or nothing left to run
+	}
+	return names
+}
+
+// withRepeatedTool keeps the last action's tool in a shortlist when Jev expects
+// it to run again.
+func withRepeatedTool(set []string, res *jev.Response, actions []plan.Action, inCatalog func(string) bool) []string {
+	repeat, ok := jev.ParseNoul(res, "repeat_same_tool")
+	if !ok || repeat.Noul < needsToolYes || len(actions) == 0 {
+		return set
+	}
+	last := actions[len(actions)-1].Tool
+	if !inCatalog(last) {
+		return set
+	}
+	for _, n := range set {
+		if n == last {
+			return set
+		}
+	}
+	return append(set, last)
 }
 
 func finite01(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 1
 }
 
-func filterTools(tools []any, name string, referenced map[string]bool) []any {
+func filterTools(tools []any, names []string, referenced map[string]bool) []any {
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
 	var kept, sticky []any
 	for _, t := range tools {
 		m, ok := t.(map[string]any)
@@ -1263,7 +1386,7 @@ func filterTools(tools []any, name string, referenced map[string]bool) []any {
 			sticky = append(sticky, t)
 			continue
 		}
-		if toolNameOf(m) == name {
+		if want[toolNameOf(m)] {
 			kept = append(kept, t)
 		} else if referenced[toolNameOf(m)] {
 			// A surviving tool_reference must still resolve to its definition.
@@ -1468,6 +1591,32 @@ func itemsFromMessages(msgs []any) ([]compact.Item, string) {
 		}
 	}
 	return items, user
+}
+
+// lastAssistantText is the prose of the most recent assistant message, in any
+// host format: the plan it just stated is the best hint at the next tool.
+// Why: Stop at that message even when it is all tool calls — older prose
+// describes a plan the assistant has already moved past.
+func lastAssistantText(msgs []any) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m, ok := msgs[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := m["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+		if typ, _ := m["type"].(string); typ != "" && typ != "message" {
+			continue
+		}
+		text := strings.TrimSpace(textOf(m))
+		if runes := []rune(text); len(runes) > assistantPlanRunes {
+			return string(runes[:assistantPlanRunes])
+		}
+		return text
+	}
+	return ""
 }
 
 func firstString(m map[string]any, keys ...string) string {

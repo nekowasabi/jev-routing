@@ -61,7 +61,7 @@ func TestDiscoveryInfrastructureAndReferences(t *testing.T) {
 			map[string]any{"type": "tool_reference", "tool_name": "Grep"},
 		}},
 	}}})
-	kept := filterTools(tools, "Read", refs)
+	kept := filterTools(tools, []string{"Read"}, refs)
 	if len(kept) != 4 || toolNameOf(kept[0].(map[string]any)) != "Read" {
 		t.Fatalf("selected tool, discovery, or reference lost: %#v", kept)
 	}

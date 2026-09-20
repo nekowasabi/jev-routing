@@ -62,6 +62,9 @@ type Question struct {
 	Type         string            `json:"type"`
 	Instructions string            `json:"instructions"`
 	Criteria     map[string]string `json:"criteria,omitempty"`
+	// Optional marks a speculative question whose answer the caller may not
+	// need. A missing answer for it still leaves the response cacheable.
+	Optional bool `json:"-"`
 }
 
 type Noul struct {
@@ -480,6 +483,9 @@ func answersValidForCache(res *Response, questions map[string]Question) bool {
 		return false
 	}
 	for id, q := range questions {
+		if q.Optional && (res.Answers == nil || len(res.Answers[id]) == 0) {
+			continue
+		}
 		switch q.Type {
 		case "noul":
 			if _, ok := ParseNoul(res, id); !ok {
