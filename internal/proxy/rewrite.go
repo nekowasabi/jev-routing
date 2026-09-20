@@ -106,6 +106,9 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	if opt.Mode == "" {
 		opt = DefaultOptions()
 	}
+	if opt.SelectionMode == "" {
+		opt.SelectionMode = SelectionHybrid
+	}
 	stats := RewriteStats{Host: h, Engine: "local", Apply: applyNone, Source: sourcePassthrough}
 	if client != nil && client.Live() {
 		stats.Engine = "live"
@@ -230,7 +233,16 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 
 	usedJev := false
-	if client != nil && client.Live() && len(names) > 0 && decision.Confidence < adoptConfidence {
+	shouldAskJev := opt.SelectionMode == SelectionJev ||
+		(opt.SelectionMode == SelectionHybrid && decision.Confidence < adoptConfidence)
+	if opt.SelectionMode == SelectionJev && (client == nil || !client.Live()) {
+		// Why: `jev` means delegation, not a silent local fallback; otherwise the
+		// comparison would measure a different selection source.
+		stats.Reason = reasonJevError
+		stats.Chosen = "passthrough:" + reasonJevError
+		return withoutSelection()
+	}
+	if shouldAskJev && client != nil && client.Live() {
 		live, verr, err := askNextTool(ctx, client, user, actions, toolSpecs, lastAssistantText(msgs))
 		if err != nil {
 			stats.Reason = reasonJevError
@@ -243,7 +255,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.LastActionFailed = live.LastFailed
 		// Why: An uncertain single pick may still carry a confident shortlist.
 		// Forced mode needs exactly one tool, so it keeps the passthrough.
-		shortlist := verr != "" && len(live.Set) > 0 && opt.Mode != ModeForced
+		shortlist := verr != "" && len(live.Set) > 0 && opt.Mode != ModeForced && opt.SelectionMode != SelectionJev
 		if verr != "" && !shortlist {
 			stats.Reason = verr
 			stats.Chosen = "passthrough:" + verr
@@ -724,7 +736,10 @@ func historyShape(msgs []any) (types, unsupported, issues []string) {
 		}
 		add(&types, seenTypes, label)
 		switch typ {
-		case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "local_shell_call_output", "message", "reasoning", "item_reference", "":
+		case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "local_shell_call_output",
+			"tool_search_call", "web_search_call", "file_search_call", "computer_call", "computer_call_output",
+			"image_generation_call", "code_interpreter_call", "shell_call", "shell_call_output", "apply_patch_call", "apply_patch_call_output",
+			"mcp_call", "mcp_call_output", "message", "reasoning", "item_reference", "":
 		default:
 			if _, hasRole := m["role"]; !hasRole {
 				add(&unsupported, seenUnsupported, label)
@@ -737,6 +752,7 @@ func historyShape(msgs []any) (types, unsupported, issues []string) {
 		}
 		content(m["content"], i)
 		content(m["output"], i)
+		content(m["input"], i)
 	}
 	return types, unsupported, issues
 }
@@ -745,21 +761,20 @@ func messageReason(m map[string]any) string {
 	typ, _ := m["type"].(string)
 	switch typ {
 	case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "local_shell_call_output",
-		"message", "reasoning", "item_reference", "":
+		"tool_search_call", "web_search_call", "file_search_call", "computer_call", "computer_call_output",
+		"image_generation_call", "code_interpreter_call", "shell_call", "shell_call_output", "apply_patch_call", "apply_patch_call_output",
+		"mcp_call", "mcp_call_output", "message", "reasoning", "item_reference", "":
 		// known Responses / Chat
 	default:
 		if _, hasRole := m["role"]; !hasRole {
 			return reasonUnrecognizedFormat
 		}
 	}
-	if v, ok := m["content"]; ok {
-		if reason := contentReason(v); reason != "" {
-			return reason
-		}
-	}
-	if v, ok := m["output"]; ok {
-		if reason := contentReason(v); reason != "" {
-			return reason
+	for _, key := range []string{"content", "output", "input"} {
+		if v, ok := m[key]; ok {
+			if reason := contentReason(v); reason != "" {
+				return reason
+			}
 		}
 	}
 	return ""
@@ -767,7 +782,7 @@ func messageReason(m map[string]any) string {
 
 func contentReason(v any) string {
 	switch t := v.(type) {
-	case string, nil:
+	case string, nil, map[string]any:
 		return ""
 	case []any:
 		for _, raw := range t {
@@ -1245,7 +1260,7 @@ func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan
 		"repeat_same_tool":   {Type: "noul", Optional: true, Instructions: "Assuming a tool is needed next, it is the same tool as the most recent entry in `actions_taken`. If `actions_taken` is empty, answer no."},
 	}
 	state := map[string]any{"user_request": user, "actions_taken": actions, "assistant_plan": assistantPlan}
-	res, err := c.AskContext(ctx, state, qs)
+	res, err := c.AskSelectionContext(ctx, state, qs)
 	if err != nil {
 		return plan.Decision{}, reasonJevError, err
 	}

@@ -158,6 +158,46 @@ func TestHistoryReasonAcceptsToolResultAndLocalShell(t *testing.T) {
 	}
 }
 
+func TestHistoryReasonAcceptsCodexOfficialToolCall(t *testing.T) {
+	msgs := []any{
+		map[string]any{"type": "custom_tool_call", "name": "functions.exec", "input": map[string]any{"cmd": "pwd"}},
+		map[string]any{"type": "custom_tool_call_output", "name": "functions.exec", "output": "ok"},
+	}
+	if reason := historyReason(msgs); reason != "" {
+		t.Fatalf("reason=%q", reason)
+	}
+}
+
+func TestHistoryReasonAcceptsCodexAndResponsesToolCalls(t *testing.T) {
+	msgs := []any{
+		map[string]any{"type": "tool_search_call", "arguments": map[string]any{"query": "tool"}},
+		map[string]any{"type": "shell_call", "action": map[string]any{"commands": []any{"pwd"}}},
+		map[string]any{"type": "apply_patch_call", "input": "*** Begin Patch"},
+		map[string]any{"type": "web_search_call", "action": map[string]any{"query": "OpenAI"}},
+		map[string]any{"type": "file_search_call", "queries": []any{"notes"}},
+		map[string]any{"type": "computer_call", "action": map[string]any{"type": "click"}},
+		map[string]any{"type": "image_generation_call", "prompt": "cat"},
+		map[string]any{"type": "code_interpreter_call", "code": "print(1)"},
+		map[string]any{"type": "mcp_call", "name": "lookup", "arguments": map[string]any{}},
+	}
+	if reason := historyReason(msgs); reason != "" {
+		t.Fatalf("reason=%q", reason)
+	}
+}
+
+func TestHistoryShapeAcceptsOfficialToolCallItems(t *testing.T) {
+	msgs := []any{
+		map[string]any{"type": "tool_search_call", "arguments": map[string]any{"query": "tool"}},
+		map[string]any{"type": "shell_call", "action": map[string]any{"commands": []any{"pwd"}}},
+		map[string]any{"type": "apply_patch_call", "input": "*** Begin Patch"},
+		map[string]any{"type": "web_search_call", "action": map[string]any{"query": "OpenAI"}},
+	}
+	_, unsupported, issues := historyShape(msgs)
+	if len(unsupported) != 0 || len(issues) != 0 {
+		t.Fatalf("unsupported=%v issues=%v", unsupported, issues)
+	}
+}
+
 func TestFormatStatsIncludesHistoryIssue(t *testing.T) {
 	got := FormatStats(RewriteStats{HistoryIssues: []string{"input[1].item:local_shell_call tool=exec"}})
 	if !strings.Contains(got, "history_issues=input[1].item:local_shell_call tool=exec") {
@@ -446,8 +486,8 @@ func TestRewriteSkipsLiveWhenLocalConfident(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Chosen != "grep" {
-		t.Fatalf("chosen %s; want the local decision", stats.Chosen)
+	if stats.Chosen != "read_file" || len(stats.ToolsAfter) != 1 || stats.ToolsAfter[0] != "read_file" {
+		t.Fatalf("stats=%+v; want local read selection", stats)
 	}
 	if n := atomic.LoadInt64(&calls); n != 0 {
 		t.Fatalf("made %d live Jev requests; want 0", n)
@@ -991,15 +1031,15 @@ func TestGrokMixedHostedToolsStillFiltersFunctions(t *testing.T) {
 	if stats.Reason == reasonProviderExecuted {
 		t.Fatalf("mixed hosted+functions refused: %+v", stats)
 	}
-	if !stats.Changed || stats.Chosen != "grep" {
-		t.Fatalf("want grep filter, got %+v", stats)
+	if !stats.Changed || stats.Chosen != "read_file" {
+		t.Fatalf("want read_file filter, got %+v", stats)
 	}
 	var got map[string]any
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatal(err)
 	}
 	names := toolNames(got)
-	if len(names) != 1 || names[0] != "grep" {
+	if len(names) != 1 || names[0] != "read_file" {
 		t.Fatalf("function tools=%v", names)
 	}
 	hosted := false
@@ -1049,7 +1089,7 @@ func TestGrokLiveMixedCatalogUnknownHostedStillFiltersFunctions(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := toolNames(got)
-	if len(names) != 1 || names[0] != "grep" {
+	if len(names) != 1 || names[0] != "read_file" {
 		t.Fatalf("function tools=%v stats=%+v", names, stats)
 	}
 	hosted := map[string]bool{}

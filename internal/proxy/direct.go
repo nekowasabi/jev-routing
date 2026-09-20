@@ -195,15 +195,15 @@ func directChatJSON(id, name, args, model string) []byte {
 			},
 			"finish_reason": "tool_calls",
 		}},
-		"usage": map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
 	}
 	raw, _ := json.Marshal(body)
 	return raw
 }
 
 func directChatSSE(id, name, args, model string) []byte {
+	responseID := "chatcmpl-direct-" + strings.TrimPrefix(id, "call_")
 	chunk := map[string]any{
-		"id":     "chatcmpl-direct-" + strings.TrimPrefix(id, "call_"),
+		"id":     responseID,
 		"object": "chat.completion.chunk",
 		"model":  model,
 		"choices": []any{map[string]any{

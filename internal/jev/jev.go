@@ -132,6 +132,11 @@ func (c *Client) AskContext(ctx context.Context, state any, questions map[string
 	return c.doAsk(ctx, "ask", state, questions, true)
 }
 
+// AskSelectionContext labels a tool-selection request in request statistics.
+func (c *Client) AskSelectionContext(ctx context.Context, state any, questions map[string]Question) (*Response, error) {
+	return c.doAsk(ctx, "selection", state, questions, true)
+}
+
 func (c *Client) doAsk(ctx context.Context, purpose string, state any, questions map[string]Question, useCache bool) (*Response, error) {
 	if ctx == nil {
 		ctx = context.Background()

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -118,8 +119,11 @@ func TestGatewayDecision(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if stats.Chosen != "grep" || stats.Source != sourceLocal {
+		if stats.Chosen != "read_file" || stats.Source != sourceLocal {
 			t.Fatalf("%+v", stats)
+		}
+		if got := strings.Join(stats.ToolsAfter, ","); got != "read_file" {
+			t.Fatalf("toolsAfter=%q; want read_file", got)
 		}
 		if atomic.LoadInt64(&calls) != 0 {
 			t.Fatal("local confident should skip Jev")
@@ -135,6 +139,49 @@ func TestGatewayDecision(t *testing.T) {
 		out, stats, _ := Rewrite(raw, host.Grok, c)
 		if string(out) != string(raw) || stats.Reason != reasonInvalidJev {
 			t.Fatalf("%+v", stats)
+		}
+	})
+}
+
+func TestSelectionModes(t *testing.T) {
+	unknown := "summarize this repo's architecture for me"
+	tools := workTools()
+	t.Run("local never calls Jev", func(t *testing.T) {
+		var calls int64
+		c := jevAnswers(t, "grep", 0.9, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&calls, 1)
+			http.Error(w, "unexpected", http.StatusInternalServerError)
+		})
+		o := DefaultOptions()
+		o.SelectionMode = SelectionLocal
+		_, stats, err := RewriteWith(nil, chatReq(unknown, tools), host.Grok, c, o)
+		if err != nil || stats.Source != sourceLocal || atomic.LoadInt64(&calls) != 0 {
+			t.Fatalf("stats=%+v calls=%d err=%v", stats, calls, err)
+		}
+	})
+	t.Run("jev delegates despite local confidence", func(t *testing.T) {
+		var calls int64
+		c := jevAnswers(t, "grep", 0.9, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt64(&calls, 1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{
+				"next_tool":  map[string]any{"type": "choice", "choice": "grep", "confidence": 0.9},
+				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
+			}})
+		})
+		o := DefaultOptions()
+		o.SelectionMode = SelectionJev
+		_, stats, err := RewriteWith(nil, chatReq("The auth middleware test is failing. Find it.", tools), host.Grok, c, o)
+		if err != nil || stats.Source != sourceJev || atomic.LoadInt64(&calls) != 1 {
+			t.Fatalf("stats=%+v calls=%d err=%v", stats, calls, err)
+		}
+	})
+	t.Run("jev uncertain passes full catalog", func(t *testing.T) {
+		o := DefaultOptions()
+		o.SelectionMode = SelectionJev
+		raw := chatReq(unknown, tools)
+		out, stats, err := RewriteWith(nil, raw, host.Grok, jevAnswers(t, "grep", 0.849, 0.9, 0.9, nil), o)
+		if err != nil || stats.Changed || string(out) != string(raw) {
+			t.Fatalf("stats=%+v err=%v", stats, err)
 		}
 	})
 }
@@ -344,5 +391,32 @@ func TestGatewayDirectHTTP(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"finish_reason":"tool_calls"`) {
 		t.Fatalf("body %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"usage"`) {
+		t.Fatalf("direct response must not report provider usage: %s", rec.Body.String())
+	}
+	events, _, _, _ := srv.events.Snapshot(0)
+	if len(events) != 1 || events[0].UsageMissing != "not_called" || events[0].SavedTokens == nil || events[0].SavedTokens.DirectInput == 0 {
+		t.Fatalf("dashboard event missing direct savings: %+v", events)
+	}
+}
+
+func TestGatewayDirectSSEUsage(t *testing.T) {
+	opt := DefaultOptions()
+	opt.Mode = ModeForced
+	opt.DirectTools = map[string]bool{"status": true}
+	srv, _ := testProxy(t, host.Grok, jevAnswers(t, "status", 0.9, 0.9, 0.9, nil), opt)
+	schema := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}, "required": []any{}}
+	tools := []any{map[string]any{"type": "function", "function": map[string]any{"name": "status", "parameters": schema}}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(chatReq("find files", tools)))
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), `"usage"`) {
+		t.Fatalf("direct stream must not report provider usage: %s", rec.Body.String())
+	}
+	events, _, _, _ := srv.events.Snapshot(0)
+	if len(events) != 1 || events[0].UsageMissing != "not_called" || events[0].SavedTokens == nil || events[0].SavedTokens.DirectInput == 0 {
+		t.Fatalf("dashboard event missing direct savings: %+v", events)
 	}
 }

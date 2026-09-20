@@ -688,7 +688,7 @@ func TestHandlerConnectDevinRecordsJevAttempt(t *testing.T) {
 	if e.JevCalls != 1 || len(e.JevAttempts) != 1 {
 		t.Fatalf("jevCalls=%d attempts=%d", e.JevCalls, len(e.JevAttempts))
 	}
-	if e.JevAttempts[0].Purpose != "ask" || !e.JevAttempts[0].OK {
+	if e.JevAttempts[0].Purpose != "selection" || !e.JevAttempts[0].OK {
 		t.Fatalf("attempt=%+v", e.JevAttempts[0])
 	}
 	if e.Confidence == nil || e.NeedsTool == nil {

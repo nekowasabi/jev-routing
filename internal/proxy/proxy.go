@@ -109,6 +109,7 @@ func (s *Server) StatsSnapshot() map[string]any {
 		"mode":                s.Options.Mode,
 		"compaction":          s.Options.Compaction,
 		"reasoning":           s.Options.Reasoning,
+		"selectionMode":       s.Options.SelectionMode,
 		"runId":               s.Options.RunID,
 		"reached":             s.Reached,
 		"rewritten":           s.Rewritten,
@@ -139,6 +140,7 @@ func (s *Server) RunStats() map[string]any {
 		"mode":                snap["mode"],
 		"compaction":          snap["compaction"],
 		"reasoning":           snap["reasoning"],
+		"selectionMode":       snap["selectionMode"],
 		"runId":               snap["runId"],
 		"reached":             snap["reached"],
 		"rewritten":           snap["rewritten"],
@@ -156,8 +158,45 @@ func (s *Server) RunStats() map[string]any {
 		"requestRoutes":       snap["requestRoutes"],
 		"requestContentTypes": snap["requestContentTypes"],
 		"events":              events,
+		"selectionJevTokens":  selectionJevTokens(events),
 		"eventsTruncated":     truncated || snap["requests"].(int) > len(events),
 	}
+}
+
+func usageInputTokens(u *jev.Usage) *int {
+	if u == nil {
+		return nil
+	}
+	return u.InputTokens
+}
+
+func usageOutputTokens(u *jev.Usage) *int {
+	if u == nil {
+		return nil
+	}
+	return u.OutputTokens
+}
+
+// selectionJevTokens keeps an unreported service value distinct from zero.
+func selectionJevTokens(events []Event) map[string]any {
+	input, output, calls := 0, 0, 0
+	for _, event := range events {
+		for _, attempt := range event.JevAttempts {
+			if attempt.Purpose != "selection" || attempt.Cached {
+				continue
+			}
+			calls++
+			if attempt.InputTokens == nil || attempt.OutputTokens == nil {
+				return map[string]any{"missing": true, "reason": "not_reported", "calls": calls}
+			}
+			input += *attempt.InputTokens
+			output += *attempt.OutputTokens
+		}
+	}
+	if calls == 0 {
+		return map[string]any{"missing": true, "reason": "no_selection_calls", "calls": 0}
+	}
+	return map[string]any{"missing": false, "inputTokens": input, "outputTokens": output, "calls": calls}
 }
 
 func copyCounts(src map[string]int) map[string]int {
@@ -383,6 +422,7 @@ func (s *Server) Handler() http.Handler {
 				attempts = append(attempts, JevAttempt{
 					Purpose: a.Purpose, Ms: a.Duration.Seconds() * 1000,
 					OK: a.OK, Cached: a.Cached, ErrKind: a.ErrKind, Status: a.Status, Questions: a.Questions,
+					InputTokens: usageInputTokens(a.Usage), OutputTokens: usageOutputTokens(a.Usage),
 				})
 				if a.Cached {
 					jevCache++
@@ -494,8 +534,13 @@ func (s *Server) Handler() http.Handler {
 					e.UpstreamFinish = "direct"
 					zero := 0
 					e.UpstreamStatus = &zero
+					e.UsageMissing = "not_called"
+					e.SavedTokens = savedTokens(raw, stats, true)
 				})
 				return
+			}
+			if saved := savedTokens(raw, stats, false); saved != nil {
+				s.events.Update(ev.Seq, func(e *Event) { e.SavedTokens = saved })
 			}
 			ctx = context.WithValue(ctx, eventSeqKey{}, ev.Seq)
 			ctx = context.WithValue(ctx, reqStartKey{}, time.Now())
@@ -548,6 +593,27 @@ func (s *Server) writeDirect(w http.ResponseWriter, r *http.Request, stats Rewri
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(directChatJSON(id, stats.DirectName, stats.DirectArgs, stats.SentModel))
+}
+
+func savedTokens(request []byte, stats RewriteStats, direct bool) *SavedTokens {
+	saved := &SavedTokens{}
+	if direct {
+		saved.DirectInput = estimateTokens(string(request))
+	}
+	if stats.CompactApplied && stats.CharsBefore > stats.CharsAfter {
+		saved.CompactionInput = estimateTokens(strings.Repeat("x", stats.CharsBefore-stats.CharsAfter))
+	}
+	if saved.DirectInput == 0 && saved.CompactionInput == 0 {
+		return nil
+	}
+	return saved
+}
+
+func estimateTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	return (len([]rune(text)) + 3) / 4
 }
 
 func wantsSSE(r *http.Request) bool {

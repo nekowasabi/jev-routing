@@ -17,26 +17,32 @@ const (
 
 	ReasoningPreserve = "preserve"
 	ReasoningLegacy   = "legacy"
+
+	SelectionLocal  = "local"
+	SelectionJev    = "jev"
+	SelectionHybrid = "hybrid"
 )
 
 // Options are resolved once at process start. Invalid values fail startup.
 type Options struct {
-	Mode        string
-	Compaction  string
-	Reasoning   string
-	RunID       string
-	ArgsModel   string
-	ArgsTools   map[string]bool
-	DirectTools map[string]bool
+	Mode          string
+	Compaction    string
+	Reasoning     string
+	SelectionMode string
+	RunID         string
+	ArgsModel     string
+	ArgsTools     map[string]bool
+	DirectTools   map[string]bool
 }
 
 func DefaultOptions() Options {
 	return Options{
-		Mode:        ModeFilter,
-		Compaction:  CompactionOn,
-		Reasoning:   ReasoningLegacy,
-		ArgsTools:   map[string]bool{},
-		DirectTools: map[string]bool{},
+		Mode:          ModeFilter,
+		Compaction:    CompactionOn,
+		Reasoning:     ReasoningLegacy,
+		SelectionMode: SelectionHybrid,
+		ArgsTools:     map[string]bool{},
+		DirectTools:   map[string]bool{},
 	}
 }
 
@@ -64,6 +70,14 @@ func OptionsFromEnv() (Options, error) {
 			o.Reasoning = v
 		default:
 			return o, fmt.Errorf("invalid JEV_REASONING %q (preserve|legacy)", v)
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_SELECTION_MODE")); v != "" {
+		switch v {
+		case SelectionLocal, SelectionJev, SelectionHybrid:
+			o.SelectionMode = v
+		default:
+			return o, fmt.Errorf("invalid JEV_SELECTION_MODE %q (local|jev|hybrid)", v)
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("JEV_RUN_ID")); v != "" {

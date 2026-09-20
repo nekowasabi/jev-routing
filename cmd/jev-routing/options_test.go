@@ -20,9 +20,14 @@ func TestGatewayOptions(t *testing.T) {
 	t.Setenv("JEV_ROUTING_MODE", "filter")
 	t.Setenv("JEV_COMPACTION", "on")
 	t.Setenv("JEV_REASONING", "legacy")
+	t.Setenv("JEV_SELECTION_MODE", "jev")
 	o, err := proxy.OptionsFromEnv()
-	if err != nil || o.Mode != proxy.ModeFilter {
+	if err != nil || o.Mode != proxy.ModeFilter || o.SelectionMode != proxy.SelectionJev {
 		t.Fatalf("%+v %v", o, err)
+	}
+	t.Setenv("JEV_SELECTION_MODE", "bad")
+	if _, err := proxy.OptionsFromEnv(); err == nil {
+		t.Fatal("invalid selection mode must fail")
 	}
 }
 

@@ -29,9 +29,20 @@
     return { text: parts.join(" · "), missing: false };
   }
 
+  function formatSavings(saved) {
+    if (!saved) return "";
+    const parts = [];
+    if (saved.directInput) parts.push("直通回避 in " + saved.directInput + "（推定）");
+    if (saved.compactionInput) parts.push("圧縮削減 in " + saved.compactionInput + "（推定）");
+    return parts.join(" · ");
+  }
+
   function usageTotals(events) {
-    const totals = { input: 0, output: 0, cached: 0, cacheWrite: 0, reasoning: 0, known: 0 };
+    const totals = { input: 0, output: 0, cached: 0, cacheWrite: 0, reasoning: 0, known: 0, directSaved: 0, compactionSaved: 0 };
     for (const e of events || []) {
+	  const saved = e.savedTokens || {};
+	  totals.directSaved += Number(saved.directInput) || 0;
+	  totals.compactionSaved += Number(saved.compactionInput) || 0;
       const u = e.usage;
       if (!u) continue;
       totals.known++;
@@ -63,17 +74,12 @@
     return value == null ? "—" : (Number(value) * 100).toFixed(0) + "%";
   }
 
-  function jevSkipReason(e) {
-    if ((e.selectionJevCalls || 0) > 0) return "ツール選定でJev実行";
-    if (e.source === "local") return "ローカル分類で採用";
-    if ((e.otherJevCalls || 0) > 0) return "選定外でJev実行";
-    return e.reason ? "安全側: " + e.reason : "未記録";
-  }
-
   function routeOutcome(e) {
     if (e.reason === "no_tool_needed") return "Jev がツール不要と判断";
     if (e.source === "jev" && e.changed) return "Jev 分類で採用";
-    if (e.source === "local" && e.changed) return "ローカル分類で採用";
+    if (e.source === "local" && e.changed) {
+      return (e.selectionJevCalls || 0) > 0 ? "Jev を使ったがローカル分類を採用" : "ローカル分類で採用";
+    }
     if (e.reason === "unrecognized_format") return "履歴形式が未対応のため通過";
     if (e.reason === "uncertain_jev") return "Jev 判定が不確実のため通過";
     if (e.reason) return "安全側通過: " + e.reason;
@@ -180,7 +186,7 @@
         countsEl.append(dt, dd);
       }
       if (usageEl) {
-        const metrics = [["入力", totals.input, "input"], ["出力", totals.output, "output"], ["キャッシュ読取", totals.cached, "cached"], ["キャッシュ書込", totals.cacheWrite, "cached"], ["推論", totals.reasoning, "reasoning"]];
+        const metrics = [["入力", totals.input, "input"], ["出力", totals.output, "output"], ["キャッシュ読取", totals.cached, "cached"], ["キャッシュ書込", totals.cacheWrite, "cached"], ["推論", totals.reasoning, "reasoning"], ["直通で回避した入力（推定）", totals.directSaved, "cached"], ["コンパクションで削減した入力（推定）", totals.compactionSaved, "cached"]];
         const max = Math.max(...metrics.map(([, value]) => value), 1);
         usageEl.replaceChildren();
         for (const [label, value, kind] of metrics) {
@@ -196,7 +202,7 @@
           usageEl.appendChild(item);
         }
         const note = document.createElement("small");
-        text(note, totals.known + " 件の上流レスポンスから集計");
+        text(note, totals.known + " 件の上流レスポンスから実測。回避・削減は送信前の推定値。");
         usageEl.appendChild(note);
       }
       if (historyEl) {
@@ -243,6 +249,7 @@
       for (const e of shown) {
         const tr = document.createElement("tr");
         const usage = formatUsage(e.usage, e.usageMissing, e.usagePartial);
+        const savings = formatSavings(e.savedTokens);
         const vals = [
           e.seq,
           e.source,
@@ -251,17 +258,15 @@
           e.chosen,
           e.reason,
           formatConfidence(e.confidence),
-          jevSkipReason(e),
           e.changed ? "yes" : "no",
           toolReplacement(e),
-          e.jevCalls != null ? e.jevCalls : "",
-          usage.text,
+          savings ? usage.text + " · " + savings : usage.text,
           e.headerMs != null ? e.headerMs + "ms" : e.bodyMs != null ? e.bodyMs + "ms" : "missing",
         ];
         for (const v of vals) {
           const td = document.createElement("td");
           text(td, v);
-          if (usage.missing && v === usage.text) td.className = "missing";
+          if (usage.missing && !savings && v === usage.text) td.className = "missing";
           tr.appendChild(td);
         }
         rows.appendChild(tr);
@@ -299,5 +304,5 @@
     setInterval(poll, 2000);
   }
 
-  return { clip, formatUsage, usageTotals, toolReplacement, summarizeUnsupportedHistory, formatConfidence, jevSkipReason, routeOutcome, skippedTools, summarizeEvents, formatComparison, mergeEvents, start };
+  return { clip, formatUsage, formatSavings, usageTotals, toolReplacement, summarizeUnsupportedHistory, formatConfidence, routeOutcome, skippedTools, summarizeEvents, formatComparison, mergeEvents, start };
 });

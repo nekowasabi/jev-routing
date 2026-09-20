@@ -54,19 +54,29 @@ type Event struct {
 	Usage              *NormalizedUsage `json:"usage"`
 	UsagePartial       bool             `json:"usagePartial,omitempty"`
 	UsageMissing       string           `json:"usageMissing,omitempty"`
+	SavedTokens        *SavedTokens     `json:"savedTokens,omitempty"`
 	Canceled           bool             `json:"canceled,omitempty"`
 	Protocol           string           `json:"protocol,omitempty"`
 	ConnectFrames      int              `json:"connectFrames,omitempty"`
 }
 
+// SavedTokens is an estimate of input tokens avoided before an upstream call.
+// It is intentionally separate from Usage, which represents provider-reported consumption.
+type SavedTokens struct {
+	DirectInput     int `json:"directInput,omitempty"`
+	CompactionInput int `json:"compactionInput,omitempty"`
+}
+
 type JevAttempt struct {
-	Purpose   string  `json:"purpose"`
-	Ms        float64 `json:"ms"`
-	OK        bool    `json:"ok"`
-	Cached    bool    `json:"cached"`
-	ErrKind   string  `json:"errKind,omitempty"`
-	Status    int     `json:"status,omitempty"`
-	Questions int     `json:"questions,omitempty"`
+	Purpose      string  `json:"purpose"`
+	Ms           float64 `json:"ms"`
+	OK           bool    `json:"ok"`
+	Cached       bool    `json:"cached"`
+	ErrKind      string  `json:"errKind,omitempty"`
+	Status       int     `json:"status,omitempty"`
+	Questions    int     `json:"questions,omitempty"`
+	InputTokens  *int    `json:"inputTokens,omitempty"`
+	OutputTokens *int    `json:"outputTokens,omitempty"`
 }
 
 func selectionJevCalls(attempts []JevAttempt) int {
