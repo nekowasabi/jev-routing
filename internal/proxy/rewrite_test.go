@@ -168,6 +168,35 @@ func TestHistoryReasonAcceptsCodexOfficialToolCall(t *testing.T) {
 	}
 }
 
+func TestHistoryReasonAcceptsCodexAgentMessage(t *testing.T) {
+	msgs := []any{
+		map[string]any{"role": "user", "content": "調べて"},
+		map[string]any{"type": "agent_message", "text": "次は検索します"},
+	}
+	if reason := historyReason(msgs); reason != "" {
+		t.Fatalf("reason=%q", reason)
+	}
+	_, unsupported, issues := historyShape(msgs)
+	if len(unsupported) != 0 || len(issues) != 0 {
+		t.Fatalf("unsupported=%v issues=%v", unsupported, issues)
+	}
+	items, _ := itemsFromMessages(msgs)
+	if len(items) != 2 || items[1].Body != "次は検索します" {
+		t.Fatalf("items=%+v", items)
+	}
+	if got := lastAssistantText(msgs); got != "次は検索します" {
+		t.Fatalf("last assistant=%q", got)
+	}
+	before, _ := json.Marshal(msgs)
+	after, _ := json.Marshal(applyCompactToMessages(msgs, compact.Result{}))
+	if string(after) != string(before) {
+		t.Fatalf("agent message mutated: %s", after)
+	}
+	if reason := historyReason([]any{map[string]any{"type": "agent_message", "text": 1}}); reason != reasonUnknownHistory {
+		t.Fatalf("reason=%q", reason)
+	}
+}
+
 func TestHistoryReasonAcceptsCodexAndResponsesToolCalls(t *testing.T) {
 	msgs := []any{
 		map[string]any{"type": "tool_search_call", "arguments": map[string]any{"query": "tool"}},

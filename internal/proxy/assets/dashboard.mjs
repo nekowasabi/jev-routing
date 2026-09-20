@@ -7,7 +7,6 @@ export const usageTotals = api.usageTotals;
 export const toolReplacement = api.toolReplacement;
 export const summarizeUnsupportedHistory = api.summarizeUnsupportedHistory;
 export const formatConfidence = api.formatConfidence;
-export const jevSkipReason = api.jevSkipReason;
 export const routeOutcome = api.routeOutcome;
 export const skippedTools = api.skippedTools;
 export const summarizeEvents = api.summarizeEvents;

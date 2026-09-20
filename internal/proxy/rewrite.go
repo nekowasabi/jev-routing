@@ -736,6 +736,11 @@ func historyShape(msgs []any) (types, unsupported, issues []string) {
 		}
 		add(&types, seenTypes, label)
 		switch typ {
+		case "agent_message":
+			if _, ok := m["text"].(string); !ok {
+				add(&unsupported, seenUnsupported, label)
+				add(&issues, seenUnsupported, fmt.Sprintf("input[%d].%s", i, label))
+			}
 		case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "local_shell_call_output",
 			"tool_search_call", "web_search_call", "file_search_call", "computer_call", "computer_call_output",
 			"image_generation_call", "code_interpreter_call", "shell_call", "shell_call_output", "apply_patch_call", "apply_patch_call_output",
@@ -760,6 +765,10 @@ func historyShape(msgs []any) (types, unsupported, issues []string) {
 func messageReason(m map[string]any) string {
 	typ, _ := m["type"].(string)
 	switch typ {
+	case "agent_message":
+		if _, ok := m["text"].(string); !ok {
+			return reasonUnknownHistory
+		}
 	case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "local_shell_call_output",
 		"tool_search_call", "web_search_call", "file_search_call", "computer_call", "computer_call_output",
 		"image_generation_call", "code_interpreter_call", "shell_call", "shell_call_output", "apply_patch_call", "apply_patch_call_output",
@@ -1566,6 +1575,11 @@ func itemsFromMessages(msgs []any) ([]compact.Item, string) {
 				ID: cid + "_r", Kind: compact.KindResult, PairID: cid, Chars: len(body),
 				Preview: clip(body, 200), Body: body, Tool: str(m["name"]),
 			})
+		case typ == "agent_message":
+			text, _ := m["text"].(string)
+			if text != "" {
+				items = append(items, compact.Item{ID: id(), Kind: compact.KindText, Chars: len(text), Preview: clip(text, 200), Body: text})
+			}
 		case role == "user":
 			text := textOf(m)
 			if request := plan.WorkRequest(text); strings.TrimSpace(request) != "" {
@@ -1617,6 +1631,14 @@ func lastAssistantText(msgs []any) string {
 		m, ok := msgs[i].(map[string]any)
 		if !ok {
 			continue
+		}
+		if typ, _ := m["type"].(string); typ == "agent_message" {
+			text, _ := m["text"].(string)
+			text = strings.TrimSpace(text)
+			if runes := []rune(text); len(runes) > assistantPlanRunes {
+				return string(runes[:assistantPlanRunes])
+			}
+			return text
 		}
 		role, _ := m["role"].(string)
 		if role != "assistant" {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatUsage, usageTotals, toolReplacement, summarizeUnsupportedHistory, formatConfidence, jevSkipReason, routeOutcome, skippedTools, summarizeEvents, formatComparison, mergeEvents } from "./dashboard.mjs";
+import { formatUsage, usageTotals, toolReplacement, summarizeUnsupportedHistory, formatConfidence, routeOutcome, skippedTools, summarizeEvents, formatComparison, mergeEvents } from "./dashboard.mjs";
 
 test("formatUsage distinguishes missing from zero", () => {
   assert.equal(formatUsage(null, "no_usage", false).missing, true);
@@ -8,8 +8,8 @@ test("formatUsage distinguishes missing from zero", () => {
   assert.match(formatUsage({ inputTokens: 0, outputTokens: 1 }, "", false).text, /in 0/);
 });
 
-test("usageTotals adds every reported token category", () => {
-  assert.deepEqual(usageTotals([{ usage: { inputTokens: 3, outputTokens: 2, cachedTokens: 1, reasoningTokens: 4 } }, { usage: { inputTokens: 5 } }]), { input: 8, output: 2, cached: 1, cacheWrite: 0, reasoning: 4, known: 2 });
+test("usageTotals adds reported and saved token categories", () => {
+  assert.deepEqual(usageTotals([{ usage: { inputTokens: 3, outputTokens: 2, cachedTokens: 1, reasoningTokens: 4 }, savedTokens: { directInput: 6 } }, { usage: { inputTokens: 5 }, savedTokens: { compactionInput: 7 } }]), { input: 8, output: 2, cached: 1, cacheWrite: 0, reasoning: 4, known: 2, directSaved: 6, compactionSaved: 7 });
 });
 
 test("toolReplacement identifies removed and selected tools", () => {
@@ -21,12 +21,9 @@ test("summarizeUnsupportedHistory counts only recorded shapes", () => {
   assert.deepEqual(summarizeUnsupportedHistory([{ unsupportedHistory: ["item:local_shell_call"] }, { unsupportedHistory: ["item:local_shell_call", "content:refusal"] }, {}]), { "item:local_shell_call": 2, "content:refusal": 1 });
 });
 
-test("Jev status distinguishes selection from other Jev calls", () => {
+test("routeOutcome distinguishes routing outcomes", () => {
   assert.equal(formatConfidence(0.82), "82%");
-  assert.equal(jevSkipReason({ source: "local", jevCalls: 0 }), "ローカル分類で採用");
-  assert.equal(jevSkipReason({ source: "local", otherJevCalls: 1 }), "ローカル分類で採用");
-  assert.equal(jevSkipReason({ selectionJevCalls: 1 }), "ツール選定でJev実行");
-  assert.equal(jevSkipReason({ source: "passthrough", reason: "unrecognized_format", jevCalls: 0 }), "安全側: unrecognized_format");
+  assert.equal(routeOutcome({ source: "local", changed: true, selectionJevCalls: 1 }), "Jev を使ったがローカル分類を採用");
   assert.equal(routeOutcome({ source: "passthrough", reason: "unrecognized_format" }), "履歴形式が未対応のため通過");
   assert.deepEqual(skippedTools([{ changed: true, toolsBefore: ["Read", "Grep"], toolsAfter: ["Grep"] }]), { Read: 1 });
 });
