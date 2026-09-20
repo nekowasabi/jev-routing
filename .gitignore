@@ -5,6 +5,8 @@
 !.env.example
 .serena/
 .agent-checkpoints/
+.agents/checkpoints/
+.claude/checkpoints/
 .tgrep/
 bin/
 artifacts/
