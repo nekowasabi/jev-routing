@@ -34,7 +34,8 @@ export TYPESAFE_API_KEY=ts_...    # https://console.typesafe.ai/settings/keys
 ## 起動
 
 ```bash
-jev-routing run grok              # GROK_CLI_CHAT_PROXY_BASE_URL をプロキシへ
+  jev-routing run grok
+	jev-routing route --json < request.json              # GROK_CLI_CHAT_PROXY_BASE_URL をプロキシへ
 jev-routing run claude            # ANTHROPIC_BASE_URL をプロキシへ
 jev-routing run codex             # OpenAI ログインでプロキシへ接続
 jev-routing run cursor            # CURSOR_API_ENDPOINT と --endpoint をプロキシへ
@@ -149,10 +150,11 @@ jev-routing run --dashboard grok
 
 - ルーティング概要（判定元・適用の件数）
 - 上流レスポンスから集計したトークン消費（入力・出力・キャッシュ・推論）
-- 直近のリクエスト（連番、判定元、適用、採用ツール、理由、変更、ツール置換、jev、トークン、時間）
+- 直近のリクエスト（連番、ホスト、判定元、適用、採用ツール、理由、変更、ツール置換、jev、トークン、時間）
+- ホスト／判定元／適用の絞込みと行の詳細（判断ID・操作ID）。j/k で行移動、Enter で詳細、r で再接続
 - Comparison JSON の貼り付け（ローカル表示のみ。送信しません）
 
-ブラウザー側は最大 1000 件を保持し、表は直近 200 件です。
+ブラウザー側は最大 1000 件を保持し、表は直近 200 件です。通信が切れたときは最終更新時刻と「接続切れ」を出し、再接続で履歴を取り直します。`?sample=1` は表示確認用の模擬値で、画面にサンプルと出します。
 
 ## 比較実験（既定では無効）
 
@@ -167,10 +169,15 @@ jev-routing run --dashboard grok
 | `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | モデル識別子とカンマ区切りの完全一致名 | 空（無効） |
 | `JEV_DIRECT_TOOLS` | 無引数/定数引数 Chat function の許可名 | 空（無効） |
 | `JEV_RUN_ID` | 比較用 ID | 自動生成 |
+| `JEV_AUTO_APPLY` | `on` / `off` | `off`（導入例の `examples/*.sh` は `on`） |
+| `JEV_APPLICATION_POLICY` | `required` / `fallback` | 自動適用を新規に有効にしたときだけ `required` |
+| `JEV_KIND_MODES` | `skill=apply,mcp_tool=observe` など | 新種類は `observe`、ateam は `fixed` |
 
 `forced` は、検証済みの実 Jev 回答がある要求だけ `tool_choice` を固定します。ローカル採点だけでは強制しません。`JEV_ARGS_MODEL` は `forced` 専用で、許可ツールの送信モデルだけを透過的に差し替えます。価格や互換性は推測しません。`JEV_DIRECT_TOOLS` は `forced` と同時だけ有効で、ARGS_MODEL とは併用できません。対象外・不正スキーマは上流へ戻します。実ツール実行と承認はホストに残します。上流拒否の自動再送はありません。
 
-`JEV_SELECTION_MODE=local` はローカル規則だけを使い、Jev へ選定を問い合わせません。`jev` は適格な選定を Jev に委譲し、Jev が未設定・不正・不確実・失敗なら候補を絞りません。`hybrid` は高確信のローカル選定を使い、その他だけ Jev に委譲します。
+`JEV_SELECTION_MODE=local` はローカル規則だけを使い、Jev へ選定を問い合わせません。`jev` は適格な選定を Jev に委譲し、Jev が未設定・不正・不確実・失敗なら候補を絞りません。`hybrid` は確定したローカル規則だけを使い、語一致などの保留は Jev に渡します。Jev 未接続なら候補を絞りません。
+
+通常のプロキシ要求では同じ判断関数が自動で呼ばれ、選定したスキル本文の供給・MCP/CLI 呼出し・結果照合まで進みます。`JEV_AUTO_APPLY=on` のとき種類別モードが `apply` の対象だけを起動し、`required` では未配達・未対応・選定不消費を成功終了にしません。`fallback` は明示指定時だけ従来設定へ戻します。`jev-routing route --json` は ateam と診断用の同じ入口であり、LLM が自発的に呼ぶことは前提にしません。選定ログや候補絞込みだけでは適用完了にしません。不明な実行は自動再送しません。ダッシュボードは可動個所・未適用理由・比較効果を日本語で示します。欠測と比較なしは欠測／比較なしのまま残し、模擬値はサンプルと表示します。
 
 模擬試験は実ホストの承認互換や実サービスの高速化・費用改善の証拠ではありません。読取/検索と自由記述のコマンド・差分は別課題で評価してください。
 

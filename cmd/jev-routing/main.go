@@ -47,6 +47,8 @@ func main() {
 		os.Exit(cmdRun(os.Args[2:]))
 	case "serve":
 		os.Exit(cmdServe(os.Args[2:]))
+	case "route":
+		os.Exit(cmdRoute(os.Args[2:], os.Stdin, os.Stdout))
 	case "compact":
 		os.Exit(cmdCompact(os.Args[2:]))
 	case "bench":
@@ -66,6 +68,7 @@ func usage() {
 Commands:
   jev-routing run [--dashboard] [--tmux] claude|codex|grok|cursor|devin [-- host-args...]
   jev-routing serve --host claude|codex|grok|cursor|devin [--listen 127.0.0.1:8787]
+  jev-routing route --json < request.json
   jev-routing compact < transcript.json
   jev-routing bench --host grok
 
@@ -79,6 +82,10 @@ Environment:
   JEV_DIRECT_TOOLS                 optional forced-only constant-arg Chat tools
   JEV_RUN_ID                       optional comparison id
   JEV_RUN_STATS                    path for process-end JSON stats
+  JEV_AUTO_APPLY                   on to apply selected skills on the run path
+  JEV_APPLICATION_POLICY           required | fallback
+  JEV_SKILL_DIR                    directory of <name>/SKILL.md loaded into the catalog
+  JEV_CATALOG                      optional JSON capability catalog
 `)
 }
 
@@ -263,7 +270,37 @@ func cmdRun(args []string) int {
 		return 1
 	}
 	writeRunStats(srv)
+	if leftover := requiredLeftover(srv); leftover != "" {
+		fmt.Fprintln(os.Stderr, leftover)
+		return 1
+	}
 	return 0
+}
+
+func requiredLeftover(srv *proxy.Server) string {
+	if srv == nil || srv.Options.ApplicationPolicy != proxy.PolicyRequired {
+		return ""
+	}
+	if srv.ApplyErr != "" {
+		return "required application: " + srv.ApplyErr
+	}
+	if srv.Apps == nil {
+		return ""
+	}
+	var parts []string
+	for _, app := range srv.Apps.Snapshot() {
+		if proxy.Success(app) {
+			continue
+		}
+		switch app.State {
+		case proxy.AppStarted, proxy.AppResultReceived, proxy.AppSelected, proxy.AppFailed, proxy.AppUnknown:
+			parts = append(parts, app.DecisionID+":"+app.State)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "required application leftover: " + strings.Join(parts, ", ")
 }
 
 var openDashboard = startDashboard

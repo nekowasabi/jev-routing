@@ -30,6 +30,17 @@ func TestGatewayOptions(t *testing.T) {
 	if _, err := proxy.OptionsFromEnv(); err == nil {
 		t.Fatal("invalid selection mode must fail")
 	}
+	t.Setenv("JEV_SELECTION_MODE", "hybrid")
+	t.Setenv("JEV_AUTO_APPLY", "1")
+	o, err = proxy.OptionsFromEnv()
+	if err != nil || !o.AutoApply || o.ApplicationPolicy != proxy.PolicyRequired {
+		t.Fatalf("auto apply should default required: %+v %v", o, err)
+	}
+	t.Setenv("JEV_APPLICATION_POLICY", "fallback")
+	o, err = proxy.OptionsFromEnv()
+	if err != nil || o.ApplicationPolicy != proxy.PolicyFallback {
+		t.Fatalf("explicit fallback: %+v %v", o, err)
+	}
 }
 
 func TestGatewayRunStats(t *testing.T) {
