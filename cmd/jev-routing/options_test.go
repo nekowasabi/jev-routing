@@ -170,15 +170,17 @@ func TestRunTmuxInsideTmuxUsesCurrentPane(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "tmux-argv")
 	codexPath := filepath.Join(dir, "codex-ran")
-	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nif [ \"$1\" = display-message ]; then printf '%s\\n' \"$@\" >\"$TEST_TMUX_ARGV\"; exit 0; fi\nexit 1\n"), 0o755); err != nil {
+	tmuxEnvPath := filepath.Join(dir, "tmux-env")
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nfor arg in \"$@\"; do if [ \"$arg\" = display-message ]; then printf '%s\\n' \"$@\" >\"$TEST_TMUX_ARGV\"; printf '%%0\\n'; exit 0; fi; done\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\n: >\"$TEST_CODEX_RAN\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nprintf '%s' \"$TMUX_PANE\" >\"$TEST_CODEX_RAN\"\nprintf '%s' \"$TMUX\" >\"$TEST_TMUX_ENV\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TEST_TMUX_ARGV", argsPath)
 	t.Setenv("TEST_CODEX_RAN", codexPath)
+	t.Setenv("TEST_TMUX_ENV", tmuxEnvPath)
 	t.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
 	t.Setenv("XDG_CACHE_HOME", dir)
 	t.Setenv("JEV_LISTEN", "127.0.0.1:0")
@@ -190,7 +192,13 @@ func TestRunTmuxInsideTmuxUsesCurrentPane(t *testing.T) {
 		t.Fatalf("codex was not run in the current pane: %v", err)
 	}
 	raw, err := os.ReadFile(argsPath)
-	if err != nil || strings.TrimSpace(string(raw)) != "display-message\n-p\n#S" {
+	if err != nil || !strings.Contains(string(raw), "display-message") {
 		t.Fatalf("tmux probe = %q, %v", raw, err)
+	}
+	if raw, err := os.ReadFile(codexPath); err != nil || strings.TrimSpace(string(raw)) != "%0" {
+		t.Fatalf("child TMUX_PANE = %q, %v", raw, err)
+	}
+	if raw, err := os.ReadFile(tmuxEnvPath); err != nil || strings.TrimSpace(string(raw)) != "/tmp/tmux-1000/default,1,0" {
+		t.Fatalf("child TMUX = %q, %v", raw, err)
 	}
 }

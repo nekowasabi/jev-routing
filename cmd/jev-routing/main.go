@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -81,9 +82,39 @@ Environment:
 `)
 }
 
+func tmuxPane() string {
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		if out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#{pane_id}").Output(); err == nil && strings.TrimSpace(string(out)) == pane {
+			return pane
+		}
+	}
+	args := []string{"display-message", "-p", "#{pane_id}"}
+	if tmux := os.Getenv("TMUX"); tmux != "" {
+		parts := strings.Split(tmux, ",")
+		if len(parts) >= 3 {
+			args = append([]string{"-S", parts[0]}, args...)
+		}
+	}
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func inTmux() bool {
-	// Why: Instead of trusting TMUX alone, verify its client. Reason: stale values outlive the server.
-	return os.Getenv("TMUX") != "" && exec.Command("tmux", "display-message", "-p", "#S").Run() == nil
+	return tmuxPane() != ""
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
 
 func cmdServe(args []string) int {
@@ -133,7 +164,11 @@ func serve(h host.ID, listen string) int {
 }
 
 func newHTTPServer(handler http.Handler) *http.Server {
-	return &http.Server{Handler: h2c.NewHandler(handler, &http2.Server{})}
+	return &http.Server{
+		Handler:           h2c.NewHandler(handler, &http2.Server{}),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 }
 
 func cmdRun(args []string) int {
@@ -212,6 +247,12 @@ func cmdRun(args []string) int {
 	}
 	cmd := exec.Command(path, commandArgs...)
 	cmd.Env = host.ChildEnv(h, listen)
+	if tmux := os.Getenv("TMUX"); tmux != "" {
+		cmd.Env = setEnv(cmd.Env, "TMUX", tmux)
+	}
+	if pane := tmuxPane(); pane != "" {
+		cmd.Env = setEnv(cmd.Env, "TMUX_PANE", pane)
+	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		writeRunStats(srv)
