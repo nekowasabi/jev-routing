@@ -326,7 +326,7 @@ func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Deci
 				}
 				return Decision{Tool: n, Confidence: 0.86, Done: 0.08, Top: ranks(g)}
 			}
-			if alias := aliasIn(set, n); alias != "" {
+			if alias := AliasIn(set, n); alias != "" {
 				if sequentialLocate(request) && isAgent(alias) {
 					if alt := preferLocateTool(specs); alt != "" {
 						return Decision{Tool: alt, Confidence: 0.8, Done: 0.08, Top: ranks(g)}
@@ -352,7 +352,7 @@ func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Deci
 	return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.2}
 }
 
-func aliasIn(set map[string]bool, want string) string {
+func AliasIn(set map[string]bool, want string) string {
 	if set[want] {
 		return want
 	}

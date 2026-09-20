@@ -39,6 +39,7 @@ const (
 	reasonHostMeta           = "host_meta"
 	reasonForcedUnavailable  = "forced_unavailable"
 	reasonIneligibleForced   = "ineligible_forced"
+	reasonAliasUnresolved    = "alias_unresolved"
 
 	sourceLocal       = "local"
 	sourceJev         = "jev"
@@ -297,7 +298,25 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	if len(keep) == 0 {
 		keep = []string{decision.Tool}
 	}
-	kept := filterTools(tools, keep, toolReferences(msgs))
+	available := map[string]bool{}
+	for _, t := range tools {
+		if m, ok := t.(map[string]any); ok {
+			available[toolNameOf(m)] = true
+		}
+	}
+	if catalogAliasIn(available, decision.Tool) == "" {
+		stats.Chosen = "passthrough:" + reasonAliasUnresolved
+		stats.Reason = reasonAliasUnresolved
+		stats.ToolAfter = stats.ToolBefore
+		return withoutSelection()
+	}
+	kept, aliasesResolved := filterTools(tools, keep, toolReferences(msgs))
+	if !aliasesResolved {
+		stats.Chosen = "passthrough:" + reasonAliasUnresolved
+		stats.Reason = reasonAliasUnresolved
+		stats.ToolAfter = stats.ToolBefore
+		return withoutSelection()
+	}
 	if plan.SequentialLocate(user) {
 		kept = keepLocatePair(tools, kept)
 	}
@@ -1395,10 +1414,22 @@ func finite01(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 1
 }
 
-func filterTools(tools []any, names []string, referenced map[string]bool) []any {
+func filterTools(tools []any, names []string, referenced map[string]bool) ([]any, bool) {
+	available := map[string]bool{}
+	for _, t := range tools {
+		if m, ok := t.(map[string]any); ok {
+			available[toolNameOf(m)] = true
+		}
+	}
 	want := make(map[string]bool, len(names))
 	for _, n := range names {
-		want[n] = true
+		resolved := catalogAliasIn(available, n)
+		if resolved != "" {
+			want[resolved] = true
+		}
+	}
+	if len(want) == 0 {
+		return tools, false
 	}
 	var kept, sticky []any
 	for _, t := range tools {
@@ -1418,14 +1449,28 @@ func filterTools(tools []any, names []string, referenced map[string]bool) []any 
 		}
 	}
 	if len(kept) == 0 {
-		return tools[:0]
+		return tools[:0], true
 	}
-	return append(kept, sticky...)
+	return append(kept, sticky...), true
+}
+
+func catalogAliasIn(available map[string]bool, want string) string {
+	if alias := plan.AliasIn(available, want); alias != "" {
+		return alias
+	}
+	switch want {
+	case "grep_search":
+		return plan.AliasIn(available, "Grep")
+	case "task":
+		return plan.AliasIn(available, "Agent")
+	default:
+		return ""
+	}
 }
 
 func locatePairName(n string) bool {
 	switch strings.ToLower(n) {
-	case "grep", "grep_files", "read", "read_file":
+	case "grep", "grep_search", "grep_files", "read", "read_file":
 		return true
 	default:
 		return false

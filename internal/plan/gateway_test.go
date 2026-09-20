@@ -14,11 +14,11 @@ func TestGatewayGrokNames(t *testing.T) {
 		t.Fatalf("canonical agent=%s", Native(host.Grok, "Agent"))
 	}
 	legacy := map[string]bool{"run_terminal_command": true, "spawn_subagent": true, "read_file": true, "grep": true}
-	if aliasIn(legacy, "run_terminal_cmd") != "run_terminal_command" {
-		t.Fatalf("legacy bash alias=%q", aliasIn(legacy, "run_terminal_cmd"))
+	if AliasIn(legacy, "run_terminal_cmd") != "run_terminal_command" {
+		t.Fatalf("legacy bash alias=%q", AliasIn(legacy, "run_terminal_cmd"))
 	}
-	if aliasIn(legacy, "task") != "spawn_subagent" && aliasIn(legacy, "Agent") != "spawn_subagent" {
-		t.Fatalf("legacy agent alias=%q / %q", aliasIn(legacy, "task"), aliasIn(legacy, "Agent"))
+	if AliasIn(legacy, "Agent") != "spawn_subagent" {
+		t.Fatalf("legacy agent alias=%q", AliasIn(legacy, "Agent"))
 	}
 	p := "Please run the tests"
 	d := DecideSpecs(p, nil, []Spec{

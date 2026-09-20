@@ -61,7 +61,10 @@ func TestDiscoveryInfrastructureAndReferences(t *testing.T) {
 			map[string]any{"type": "tool_reference", "tool_name": "Grep"},
 		}},
 	}}})
-	kept := filterTools(tools, []string{"Read"}, refs)
+	kept, resolved := filterTools(tools, []string{"Read"}, refs)
+	if !resolved {
+		t.Fatal("Read alias did not resolve")
+	}
 	if len(kept) != 4 || toolNameOf(kept[0].(map[string]any)) != "Read" {
 		t.Fatalf("selected tool, discovery, or reference lost: %#v", kept)
 	}

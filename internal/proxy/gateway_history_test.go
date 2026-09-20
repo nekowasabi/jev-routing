@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/compact"
@@ -267,5 +268,35 @@ func TestGatewayGrokNames(t *testing.T) {
 	}
 	if stats.Chosen != "run_terminal_cmd" {
 		t.Fatalf("legacy chosen=%s", stats.Chosen)
+	}
+}
+
+func TestGrokCanonicalNamesResolveAtFilterBoundary(t *testing.T) {
+	tools := []any{
+		grokFn("read_file", "read"),
+		grokFn("grep", "search"),
+		grokFn("run_terminal_command", "shell"),
+		grokFn("spawn_subagent", "agent"),
+	}
+	kept, resolved := filterTools(tools, []string{"run_terminal_cmd", "task"}, nil)
+	if !resolved {
+		t.Fatal("canonical Grok names did not resolve against live catalog")
+	}
+	names := plan.ToolNames(asMaps(filterableTools(kept)))
+	if strings.Join(names, ",") != "run_terminal_command,spawn_subagent" {
+		t.Fatalf("resolved names=%v", names)
+	}
+	all, resolved := filterTools(tools, []string{"unknown_tool"}, nil)
+	if resolved || len(all) != len(tools) {
+		t.Fatalf("unresolved alias must fail open: resolved=%v tools=%v", resolved, all)
+	}
+}
+
+func TestLocatePairRecognizesOfficialGrokSearchName(t *testing.T) {
+	tools := []any{grokFn("grep_search", "search"), grokFn("read_file", "read"), grokFn("write", "write")}
+	kept := keepLocatePair(tools, nil)
+	names := plan.ToolNames(asMaps(filterableTools(kept)))
+	if strings.Join(names, ",") != "grep_search,read_file" {
+		t.Fatalf("locate pair=%v", names)
 	}
 }
