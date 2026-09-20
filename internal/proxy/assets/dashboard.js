@@ -70,6 +70,18 @@
     return out;
   }
 
+  function unknownHistoryDetails(events) {
+    const out = {};
+    for (const e of events || []) {
+      for (const issue of e.historyIssues || e.unsupportedHistory || []) {
+        const detail = out[issue] || (out[issue] = { count: 0, requests: [] });
+        detail.count++;
+        if (e.seq != null && !detail.requests.includes(e.seq)) detail.requests.push(e.seq);
+      }
+    }
+    return out;
+  }
+
   function formatConfidence(value) {
     return value == null ? "—" : (Number(value) * 100).toFixed(0) + "%";
   }
@@ -166,7 +178,7 @@
       if (store.length) since = store[store.length - 1].seq;
       const summary = summarizeEvents(store, r.counts);
       const totals = usageTotals(store);
-      const unsupported = summarizeUnsupportedHistory(store);
+      const unsupported = unknownHistoryDetails(store);
       const skipped = skippedTools(store);
       text(
         status,
@@ -207,14 +219,18 @@
       }
       if (historyEl) {
         historyEl.replaceChildren();
-        const entries = Object.entries(unsupported).sort((a, b) => b[1] - a[1]);
+        const entries = Object.entries(unsupported).sort((a, b) => b[1].count - a[1].count);
         if (!entries.length) {
           text(historyEl, "未対応の履歴形式はまだ観測されていません");
         } else {
-          for (const [shape, count] of entries) {
-            const item = document.createElement("span");
+          for (const [shape, detail] of entries) {
+            const item = document.createElement("details");
             item.className = "history-chip";
-            text(item, shape + " · " + count + " 件");
+            const summary = document.createElement("summary");
+            text(summary, shape + " · " + detail.count + " 件");
+            const requests = document.createElement("div");
+            text(requests, "該当リクエスト: " + detail.requests.join(", "));
+            item.append(summary, requests);
             historyEl.appendChild(item);
           }
         }
@@ -304,5 +320,5 @@
     setInterval(poll, 2000);
   }
 
-  return { clip, formatUsage, formatSavings, usageTotals, toolReplacement, summarizeUnsupportedHistory, formatConfidence, routeOutcome, skippedTools, summarizeEvents, formatComparison, mergeEvents, start };
+  return { clip, formatUsage, formatSavings, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, formatComparison, mergeEvents, start };
 });

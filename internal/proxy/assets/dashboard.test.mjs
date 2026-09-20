@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatUsage, usageTotals, toolReplacement, summarizeUnsupportedHistory, formatConfidence, routeOutcome, skippedTools, summarizeEvents, formatComparison, mergeEvents } from "./dashboard.mjs";
+import { formatUsage, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, formatComparison, mergeEvents } from "./dashboard.mjs";
 
 test("formatUsage distinguishes missing from zero", () => {
   assert.equal(formatUsage(null, "no_usage", false).missing, true);
@@ -10,6 +10,13 @@ test("formatUsage distinguishes missing from zero", () => {
 
 test("usageTotals adds reported and saved token categories", () => {
   assert.deepEqual(usageTotals([{ usage: { inputTokens: 3, outputTokens: 2, cachedTokens: 1, reasoningTokens: 4 }, savedTokens: { directInput: 6 } }, { usage: { inputTokens: 5 }, savedTokens: { compactionInput: 7 } }]), { input: 8, output: 2, cached: 1, cacheWrite: 0, reasoning: 4, known: 2, directSaved: 6, compactionSaved: 7 });
+});
+
+test("unknownHistoryDetails keeps the issue and affected request numbers", () => {
+  assert.deepEqual(unknownHistoryDetails([{ seq: 3, historyIssues: ["item:tool_addition"] }, { seq: 7, historyIssues: ["item:tool_addition", "message:<missing>"] }]), {
+    "item:tool_addition": { count: 2, requests: [3, 7] },
+    "message:<missing>": { count: 1, requests: [7] }
+  });
 });
 
 test("toolReplacement identifies removed and selected tools", () => {

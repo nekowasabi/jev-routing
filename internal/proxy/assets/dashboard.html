@@ -29,7 +29,8 @@
     .usage-bar b { text-align: right; font-variant-numeric: tabular-nums; }
     #usage-summary small { color: var(--muted); }
     #history-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; color: var(--muted); font-size: 0.85rem; }
-    .history-chip { border-radius: 999px; padding: 0.35rem 0.65rem; background: #fff3e0; color: #8a4b00; font-family: ui-monospace, monospace; }
+    .history-chip { border-radius: 0.5rem; padding: 0.35rem 0.65rem; background: #fff3e0; color: #8a4b00; font-family: ui-monospace, monospace; }
+    .history-chip summary { cursor: pointer; }.history-chip div { margin-top: 0.45rem; color: var(--muted); }
     #tool-summary { display: flex; align-items: center; gap: 1.25rem; }
     #tool-chart { width: 9rem; height: 9rem; border-radius: 50%; flex: 0 0 auto; }
     #tool-legend { display: flex; flex-wrap: wrap; gap: 0.5rem; color: var(--muted); font-size: 0.85rem; }
@@ -51,7 +52,7 @@
     </section>
   </div>
   <section aria-labelledby="history-h">
-    <h2 id="history-h">安全側へ通過した履歴形式</h2>
+    <h2 id="history-h">安全側へ通過した履歴（不明な箇所）</h2>
     <div id="history-summary"></div>
   </section>
   <section aria-labelledby="tool-chart-h">

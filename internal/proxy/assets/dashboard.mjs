@@ -6,6 +6,7 @@ export const formatUsage = api.formatUsage;
 export const usageTotals = api.usageTotals;
 export const toolReplacement = api.toolReplacement;
 export const summarizeUnsupportedHistory = api.summarizeUnsupportedHistory;
+export const unknownHistoryDetails = api.unknownHistoryDetails;
 export const formatConfidence = api.formatConfidence;
 export const routeOutcome = api.routeOutcome;
 export const skippedTools = api.skippedTools;
