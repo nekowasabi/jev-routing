@@ -1119,6 +1119,11 @@ func (s *Server) observeResponseJSON(raw []byte) {
 		enc, _ := json.Marshal(map[string]any{"messages": []any{map[string]any{"role": "assistant", "content": root["content"]}}})
 		s.observeJSONCalls(enc)
 	}
+	if cb, ok := root["content_block"].(map[string]any); ok {
+		enc, _ := json.Marshal(map[string]any{"messages": []any{map[string]any{"role": "assistant", "content": []any{cb}}}})
+		s.observeJSONCalls(enc)
+		s.observeCallObject(cb)
+	}
 	s.observeCallObject(root)
 	if item, ok := root["item"].(map[string]any); ok {
 		s.observeCallObject(item)
@@ -1137,7 +1142,7 @@ func (s *Server) observeCallObject(obj map[string]any) {
 		return
 	}
 	switch firstString(obj, "type") {
-	case "function_call", "custom_tool_call", "local_shell_call":
+	case "function_call", "custom_tool_call", "local_shell_call", "tool_use":
 		s.startObservedCall(firstString(obj, "call_id", "id"), firstString(obj, "name"))
 	case "function_call_output", "custom_tool_call_output", "local_shell_call_output":
 		if s.Apps == nil {

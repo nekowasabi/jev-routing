@@ -199,6 +199,37 @@ func TestHandlerObservesResponseToolCallAndResult(t *testing.T) {
 	}
 }
 
+func TestHandlerObservesClaudeSSEContentBlockToolUse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bash\",\"name\":\"Bash\"}}\n\n"))
+	}))
+	defer upstream.Close()
+	t.Setenv("ANTHROPIC_UPSTREAM", upstream.URL)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Claude, nil, io.Discard, localOpt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude","messages":[{"role":"user","content":"echo hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	got := srv.Apps.Get("toolu_bash")
+	if got == nil || got.State != AppStarted {
+		t.Fatalf("sse content_block tool_use not started: %+v", got)
+	}
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_bash","content":"jev-live-cli-ok"}]}]}`))
+	req2.Header.Set("Content-Type", "application/json")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req2)
+	got = srv.Apps.Get("toolu_bash")
+	if got == nil || got.State != AppVerified || !strings.Contains(got.Result, "jev-live-cli-ok") {
+		t.Fatalf("sse tool result not verified: %+v", got)
+	}
+}
+
 func TestHandlerObservesResponsesFunctionCallAndResult(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

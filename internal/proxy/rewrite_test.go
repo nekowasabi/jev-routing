@@ -152,6 +152,22 @@ func TestHistoryShapeRecordsOnlyTypes(t *testing.T) {
 	}
 }
 
+func TestHistoryReasonAcceptsClaudeToolAddition(t *testing.T) {
+	msgs := []any{
+		map[string]any{"role": "user", "content": "run this exact exec tool: echo jev-live-cli-ok"},
+		map[string]any{"role": "system", "content": []any{
+			map[string]any{"type": "tool_addition", "tool": map[string]any{"type": "tool_reference", "name": "Bash"}},
+		}},
+	}
+	if reason := historyReason(msgs); reason != "" {
+		t.Fatalf("reason=%q", reason)
+	}
+	_, unsupported, issues := historyShape(msgs)
+	if len(unsupported) != 0 || len(issues) != 0 {
+		t.Fatalf("unsupported=%v issues=%v", unsupported, issues)
+	}
+}
+
 func TestHistoryReasonAcceptsToolResultAndLocalShell(t *testing.T) {
 	msgs := []any{
 		map[string]any{"type": "function_call", "name": "grep"},
@@ -267,6 +283,43 @@ func TestGrokRewriteDoesNotSendReasoningNone(t *testing.T) {
 	}
 	if got["reasoning_effort"] != "high" {
 		t.Fatalf("reasoning_effort=%v", got["reasoning_effort"])
+	}
+}
+
+func TestClaudeFilterKeepsAdaptiveThinking(t *testing.T) {
+	req := map[string]any{
+		"model": "claude-opus-4-6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "run this exact exec tool: echo jev-live-cli-ok"},
+			map[string]any{"role": "system", "content": []any{
+				map[string]any{"type": "tool_addition", "tool": map[string]any{"type": "tool_reference", "name": "Bash"}},
+			}},
+		},
+		"tools": []any{
+			map[string]any{"name": "Read", "description": "Read a file"},
+			map[string]any{"name": "Bash", "description": "Run a shell command"},
+			map[string]any{"name": "Grep", "description": "Search file contents"},
+		},
+		"thinking": map[string]any{"type": "adaptive"},
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, stats, err := RewriteWith(t.Context(), raw, host.Claude, nil, localOpt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Chosen != "Bash" || stats.ToolAfter != 1 {
+		t.Fatalf("want Bash filter, got %+v", stats)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	th, _ := got["thinking"].(map[string]any)
+	if firstString(th, "type") != "adaptive" {
+		t.Fatalf("thinking mutated: %#v", got["thinking"])
 	}
 }
 

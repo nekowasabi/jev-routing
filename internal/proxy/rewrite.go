@@ -736,7 +736,7 @@ func historyShape(msgs []any) (types, unsupported, issues []string) {
 			}
 			add(&types, seenTypes, label)
 			switch typ {
-			case "text", "output_text", "input_text", "tool_use", "tool_result", "thinking", "redacted_thinking", "tool_reference", "":
+			case "text", "output_text", "input_text", "tool_use", "tool_result", "thinking", "redacted_thinking", "tool_reference", "tool_addition", "tool_removal", "":
 			case "image", "image_url", "input_image", "image_file":
 				add(&unsupported, seenUnsupported, label)
 				add(&issues, seenUnsupported, fmt.Sprintf("input[%d].%s", item, label))
@@ -829,7 +829,7 @@ func contentReason(v any) string {
 			}
 			typ, _ := p["type"].(string)
 			switch typ {
-			case "text", "output_text", "input_text", "tool_use", "tool_result", "thinking", "redacted_thinking", "tool_reference", "":
+			case "text", "output_text", "input_text", "tool_use", "tool_result", "thinking", "redacted_thinking", "tool_reference", "tool_addition", "tool_removal", "":
 			case "image", "image_url", "input_image", "image_file":
 				return reasonImages
 			default:
@@ -1538,8 +1538,10 @@ func disableThinking(root map[string]any, h host.ID, model string) {
 	if h == host.Codex && isAstra(model) {
 		return
 	}
-	if _, ok := root["thinking"]; ok {
-		root["thinking"] = map[string]any{"type": "disabled"}
+	if h != host.Claude {
+		if _, ok := root["thinking"]; ok {
+			root["thinking"] = map[string]any{"type": "disabled"}
+		}
 	}
 	effort := reasoningOff(h, model)
 	if h == host.Codex {
