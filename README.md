@@ -49,7 +49,7 @@ jev-routing run devin             # DEVIN_API_URL をプロキシへ
 jev-routing run --tmux codex
 ```
 
-すでに tmux 内なら、現在の pane でホストを起動するため、tmux をネストせず pane border は一重のままです。tmux 外からは、実行ごとに独立した tmux セッションを作成します。
+接続中の tmux 内なら、現在の pane でホストを起動するため、tmux をネストせず pane border は一重のままです。tmux 外、または古い `TMUX` 環境変数だけが残った状態からは、実行ごとに独立した tmux セッションを作成します。
 
 既存の `grok login` / `claude login` / `codex login` / `cursor-agent login` / `devin auth` はそのままです。
 

@@ -138,10 +138,10 @@ func TestRunDashboardOpensAfterStartup(t *testing.T) {
 	}
 }
 
-func TestRunTmuxCreatesIndependentSession(t *testing.T) {
+func TestRunTmuxCreatesIndependentSessionWhenTMUXIsStale(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "argv")
-	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >\"$TEST_TMUX_ARGV\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nif [ \"$1\" = display-message ]; then exit 1; fi\nprintf '%s\\n' \"$@\" >\"$TEST_TMUX_ARGV\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
@@ -149,7 +149,7 @@ func TestRunTmuxCreatesIndependentSession(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TEST_TMUX_ARGV", argsPath)
-	t.Setenv("TMUX", "")
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
 	t.Setenv("XDG_CACHE_HOME", dir)
 	t.Setenv("JEV_LISTEN", "127.0.0.1:0")
 	t.Setenv("JEV_RUN_STATS", "")
@@ -170,7 +170,7 @@ func TestRunTmuxInsideTmuxUsesCurrentPane(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "tmux-argv")
 	codexPath := filepath.Join(dir, "codex-ran")
-	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >\"$TEST_TMUX_ARGV\"\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nif [ \"$1\" = display-message ]; then printf '%s\\n' \"$@\" >\"$TEST_TMUX_ARGV\"; exit 0; fi\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\n: >\"$TEST_CODEX_RAN\"\n"), 0o755); err != nil {
@@ -189,7 +189,8 @@ func TestRunTmuxInsideTmuxUsesCurrentPane(t *testing.T) {
 	if _, err := os.Stat(codexPath); err != nil {
 		t.Fatalf("codex was not run in the current pane: %v", err)
 	}
-	if _, err := os.Stat(argsPath); !os.IsNotExist(err) {
-		t.Fatalf("tmux was invoked inside tmux: %v", err)
+	raw, err := os.ReadFile(argsPath)
+	if err != nil || strings.TrimSpace(string(raw)) != "display-message\n-p\n#S" {
+		t.Fatalf("tmux probe = %q, %v", raw, err)
 	}
 }

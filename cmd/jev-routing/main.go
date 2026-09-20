@@ -63,7 +63,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `jev-routing — Jev harness (Go). No npx. No MCP.
 
 Commands:
-  jev-routing run [--dashboard] claude|codex|grok|cursor|devin [-- host-args...]
+  jev-routing run [--dashboard] [--tmux] claude|codex|grok|cursor|devin [-- host-args...]
   jev-routing serve --host claude|codex|grok|cursor|devin [--listen 127.0.0.1:8787]
   jev-routing compact < transcript.json
   jev-routing bench --host grok
@@ -79,6 +79,11 @@ Environment:
   JEV_RUN_ID                       optional comparison id
   JEV_RUN_STATS                    path for process-end JSON stats
 `)
+}
+
+func inTmux() bool {
+	// Why: Instead of trusting TMUX alone, verify its client. Reason: stale values outlive the server.
+	return os.Getenv("TMUX") != "" && exec.Command("tmux", "display-message", "-p", "#S").Run() == nil
 }
 
 func cmdServe(args []string) int {
@@ -200,7 +205,7 @@ func cmdRun(args []string) int {
 		<-make(chan struct{})
 	}
 	commandArgs := host.CommandArgs(h, listen, rest)
-	if *tmux && os.Getenv("TMUX") == "" {
+	if *tmux && !inTmux() {
 		// Why: a live parent pane already satisfies ateam; a nested client draws a second border.
 		commandArgs = append([]string{"new-session", "-s", fmt.Sprintf("jev-routing-%d", os.Getpid()), path}, commandArgs...)
 		path = "tmux"
