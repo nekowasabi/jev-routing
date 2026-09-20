@@ -473,6 +473,8 @@ func (s *Server) Handler() http.Handler {
 				Catalog:            shape,
 				JevAttempts:        attempts,
 				JevCalls:           jevHTTP,
+				SelectionJevCalls:  selectionJevCalls(attempts),
+				OtherJevCalls:      jevHTTP - selectionJevCalls(attempts),
 				JevCached:          jevCache,
 				JevFailed:          jevFail,
 				Protocol:           stats.Protocol,

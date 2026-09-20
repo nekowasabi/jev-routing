@@ -55,8 +55,8 @@ func TestGatewayDecision(t *testing.T) {
 	unknown := "summarize this repo's architecture for me"
 	tools := workTools()
 
-	t.Run("adopt-boundary-0.8", func(t *testing.T) {
-		c := jevAnswers(t, "grep", 0.8, 0.8, 0.8, nil)
+	t.Run("adopt-boundary-0.85", func(t *testing.T) {
+		c := jevAnswers(t, "grep", 0.85, 0.8, 0.8, nil)
 		_, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
@@ -66,7 +66,7 @@ func TestGatewayDecision(t *testing.T) {
 		}
 	})
 	t.Run("just-below", func(t *testing.T) {
-		c := jevAnswers(t, "grep", 0.799, 0.8, 0.8, nil)
+		c := jevAnswers(t, "grep", 0.849, 0.8, 0.8, nil)
 		out, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)

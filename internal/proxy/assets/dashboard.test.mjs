@@ -21,9 +21,11 @@ test("summarizeUnsupportedHistory counts only recorded shapes", () => {
   assert.deepEqual(summarizeUnsupportedHistory([{ unsupportedHistory: ["item:local_shell_call"] }, { unsupportedHistory: ["item:local_shell_call", "content:refusal"] }, {}]), { "item:local_shell_call": 2, "content:refusal": 1 });
 });
 
-test("Jev status distinguishes local decisions from safe passthrough", () => {
+test("Jev status distinguishes selection from other Jev calls", () => {
   assert.equal(formatConfidence(0.82), "82%");
-  assert.equal(jevSkipReason({ source: "local", jevCalls: 0 }), "ローカル判定");
+  assert.equal(jevSkipReason({ source: "local", jevCalls: 0 }), "ローカル分類で採用");
+  assert.equal(jevSkipReason({ source: "local", otherJevCalls: 1 }), "ローカル分類で採用");
+  assert.equal(jevSkipReason({ selectionJevCalls: 1 }), "ツール選定でJev実行");
   assert.equal(jevSkipReason({ source: "passthrough", reason: "unrecognized_format", jevCalls: 0 }), "安全側: unrecognized_format");
   assert.equal(routeOutcome({ source: "passthrough", reason: "unrecognized_format" }), "履歴形式が未対応のため通過");
   assert.deepEqual(skippedTools([{ changed: true, toolsBefore: ["Read", "Grep"], toolsAfter: ["Grep"] }]), { Read: 1 });

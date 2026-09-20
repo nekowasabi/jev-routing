@@ -430,6 +430,10 @@ func scoreCatalog(request string, actions []Action, specs []Spec) (string, float
 			if hasAny(requestText, "fix", "edit", "patch", "replace", "直") {
 				score += 2
 			}
+		default:
+			if isExec(name) && (hasAny(requestText, "find", "search", "grep", "where", "探", "検索", "read", "open", "show", "見て", "読")) {
+				score -= 4
+			}
 		}
 		if usageCount[name] > 0 && !isRead(name) {
 			score -= 3
@@ -459,6 +463,11 @@ func isRead(n string) bool {
 func isEdit(n string) bool {
 	n = strings.ToLower(n)
 	return n == "edit" || n == "search_replace" || n == "apply_patch"
+}
+
+func isExec(n string) bool {
+	n = strings.ToLower(n)
+	return n == "exec" || n == "exec_command" || n == "bash" || strings.Contains(n, "terminal") || strings.Contains(n, "shell")
 }
 
 func hasAny(t string, needles ...string) bool {
