@@ -279,14 +279,16 @@ func (s *Server) Handler() http.Handler {
 				})
 			})
 		}
-		res.Body = wrapUsage(res.Body, ct, func(u *NormalizedUsage, partial bool, missing string) {
+		res.Body = wrapUsage(res.Body, ct, func(u *NormalizedUsage, partial bool, missing, finish string) {
 			bodyMs := time.Since(started).Seconds() * 1000
 			s.events.Update(seq, func(e *Event) {
 				e.Usage = u
 				e.UsagePartial = partial
 				e.UsageMissing = missing
 				e.BodyMs = &bodyMs
-				if e.UpstreamFinish == "" {
+				if finish != "" {
+					e.UpstreamFinish = finish
+				} else if e.UpstreamFinish == "" {
 					e.UpstreamFinish = "complete"
 				}
 			})
@@ -342,6 +344,7 @@ func (s *Server) Handler() http.Handler {
 			})
 			ctx := context.WithValue(r.Context(), eventSeqKey{}, ev.Seq)
 			ctx = context.WithValue(ctx, reqStartKey{}, time.Now())
+			ctx = jev.WithAttemptHook(ctx, s.connectJevAttemptHook(ev.Seq))
 			r = r.WithContext(ctx)
 			if looksStreamingAgent(r.URL.Path) && s.Host == host.Cursor && connectCursorContentType(ct) {
 				r.Body = wrapConnectCursorBody(r.Body, s, ev.Seq, r.Context())
@@ -444,30 +447,35 @@ func (s *Server) Handler() http.Handler {
 				s.mu.Unlock()
 			}
 			ev := Event{
-				Host:           string(s.Host),
-				Source:         stats.Source,
-				Reason:         stats.Reason,
-				Apply:          stats.Apply,
-				Chosen:         stats.Chosen,
-				Changed:        stats.Changed,
-				OriginalModel:  stats.OriginalModel,
-				SentModel:      stats.SentModel,
-				ToolBefore:     stats.ToolBefore,
-				ToolAfter:      stats.ToolAfter,
-				CompactDropped: stats.CompactDropped,
-				CompactApplied: stats.CompactApplied,
-				RequestPath:    r.URL.Path,
-				Method:         r.Method,
-				ContentType:    ct,
-				BodyBytes:      origBytes,
-				JsonValid:      &origJSON,
-				URLHosts:       urlHosts,
-				Catalog:        shape,
-				JevAttempts:    attempts,
-				JevCalls:       jevHTTP,
-				JevCached:      jevCache,
-				JevFailed:      jevFail,
-				Protocol:       stats.Protocol,
+				Host:               string(s.Host),
+				Source:             stats.Source,
+				Reason:             stats.Reason,
+				Apply:              stats.Apply,
+				Chosen:             stats.Chosen,
+				Changed:            stats.Changed,
+				OriginalModel:      stats.OriginalModel,
+				SentModel:          stats.SentModel,
+				ToolBefore:         stats.ToolBefore,
+				ToolAfter:          stats.ToolAfter,
+				ToolsBefore:        stats.ToolsBefore,
+				ToolsAfter:         stats.ToolsAfter,
+				HistoryTypes:       stats.HistoryTypes,
+				UnsupportedHistory: stats.UnsupportedHistory,
+				HistoryIssues:      stats.HistoryIssues,
+				CompactDropped:     stats.CompactDropped,
+				CompactApplied:     stats.CompactApplied,
+				RequestPath:        r.URL.Path,
+				Method:             r.Method,
+				ContentType:        ct,
+				BodyBytes:          origBytes,
+				JsonValid:          &origJSON,
+				URLHosts:           urlHosts,
+				Catalog:            shape,
+				JevAttempts:        attempts,
+				JevCalls:           jevHTTP,
+				JevCached:          jevCache,
+				JevFailed:          jevFail,
+				Protocol:           stats.Protocol,
 			}
 			if stats.Source != "" {
 				c := stats.Confidence
@@ -542,6 +550,41 @@ func (s *Server) writeDirect(w http.ResponseWriter, r *http.Request, stats Rewri
 
 func wantsSSE(r *http.Request) bool {
 	return strings.Contains(strings.ToLower(r.Header.Get("accept")), "text/event-stream")
+}
+
+// connectJevAttemptHook records Jev calls made while Connect frames stream.
+// The JSON path collects attempts before Add; Connect rewrites lazily inside
+// the body copy goroutine, so attempts append to the existing event.
+func (s *Server) connectJevAttemptHook(seq int64) func(jev.Attempt) {
+	return func(a jev.Attempt) {
+		ja := JevAttempt{
+			Purpose: a.Purpose, Ms: a.Duration.Seconds() * 1000,
+			OK: a.OK, Cached: a.Cached, ErrKind: a.ErrKind, Status: a.Status, Questions: a.Questions,
+		}
+		s.mu.Lock()
+		if a.Cached {
+			s.JevCacheHits++
+		} else {
+			s.JevHTTP++
+			if a.OK {
+				s.JevOK++
+			} else {
+				s.JevFail++
+			}
+		}
+		s.mu.Unlock()
+		s.events.Update(seq, func(e *Event) {
+			e.JevAttempts = append(e.JevAttempts, ja)
+			if a.Cached {
+				e.JevCached++
+				return
+			}
+			e.JevCalls++
+			if !a.OK {
+				e.JevFailed++
+			}
+		})
+	}
 }
 
 const reasonNotLLMPath = "not_llm_path"

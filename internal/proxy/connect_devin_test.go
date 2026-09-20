@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
 )
 
 func devinPromptToolsJSON(t *testing.T) []byte {
@@ -624,6 +625,121 @@ func TestWritebackDevinHistoryMatchesTruncatedUserByIdx(t *testing.T) {
 	}
 	if !bytes.Contains(out, []byte("jev-compaction truncated: find the failing test")) {
 		t.Fatal("truncated user text was not written back")
+	}
+}
+
+func devinChatJSONWithModel(t *testing.T, prompt string) []byte {
+	t.Helper()
+	req := map[string]any{
+		"model":  "devstral-test",
+		"prompt": prompt + strings.Repeat(" x", 1200),
+		"tools": []any{
+			map[string]any{"name": "read", "description": "Read a file"},
+			map[string]any{"name": "grep", "description": "Search files"},
+			map[string]any{"name": "edit", "description": "Edit a file"},
+			map[string]any{"name": "exec", "description": "Run a command"},
+		},
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestHandlerConnectDevinRecordsJevAttempt(t *testing.T) {
+	jevSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "fake",
+			"answers": map[string]any{
+				"next_tool":  map[string]any{"type": "choice", "choice": "grep", "confidence": 0.9},
+				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
+			},
+		})
+	}))
+	defer jevSrv.Close()
+	client := &jev.Client{APIKey: "test", BaseURL: jevSrv.URL, Model: "fake", HTTP: jevSrv.Client()}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
+
+	srv, err := New("127.0.0.1:0", host.Devin, client, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := connectFrame(0, protoString(1, string(devinChatJSONWithModel(t, "zzz qwerty unmatched words no known task pattern"))))
+	req := httptest.NewRequest(http.MethodPost, "/exa.api_server_pb.ApiServerService/GetChatMessage", strings.NewReader(string(frame)))
+	req.Header.Set("Content-Type", "application/connect+proto")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	snap := srv.RunStats()
+	events, _ := snap["events"].([]Event)
+	if len(events) != 1 {
+		t.Fatalf("events=%d", len(events))
+	}
+	e := events[0]
+	if e.JevCalls != 1 || len(e.JevAttempts) != 1 {
+		t.Fatalf("jevCalls=%d attempts=%d", e.JevCalls, len(e.JevAttempts))
+	}
+	if e.JevAttempts[0].Purpose != "ask" || !e.JevAttempts[0].OK {
+		t.Fatalf("attempt=%+v", e.JevAttempts[0])
+	}
+	if e.Confidence == nil || e.NeedsTool == nil {
+		t.Fatalf("confidence=%v needsTool=%v", e.Confidence, e.NeedsTool)
+	}
+	if e.Source != "jev" || e.Chosen != "grep" {
+		t.Fatalf("source=%q chosen=%q", e.Source, e.Chosen)
+	}
+	if e.OriginalModel != "devstral-test" || e.SentModel != "devstral-test" {
+		t.Fatalf("models=%q/%q", e.OriginalModel, e.SentModel)
+	}
+	if n, _ := snap["jevHTTP"].(int); n != 1 {
+		t.Fatalf("jevHTTP=%v", snap["jevHTTP"])
+	}
+	if n, _ := snap["jevOK"].(int); n != 1 {
+		t.Fatalf("jevOK=%v", snap["jevOK"])
+	}
+}
+
+func TestHandlerConnectDevinEndStreamErrorMarksFinish(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("content-type", "application/connect+proto")
+		w.WriteHeader(http.StatusOK)
+		var body []byte
+		body = append(body, connectFrame(0, protoString(1, `{"delta":"ok"}`))...)
+		body = append(body, connectFrame(connectFlagEndStream, []byte(`{"error":{"code":"internal","message":"boom"}}`))...)
+		_, _ = w.Write(body)
+	}))
+	defer upstream.Close()
+	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
+
+	srv, err := New("127.0.0.1:0", host.Devin, nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := connectFrame(0, protoString(1, string(devinPromptToolsJSON(t))))
+	req := httptest.NewRequest(http.MethodPost, "/exa.api_server_pb.ApiServerService/GetChatMessage", strings.NewReader(string(frame)))
+	req.Header.Set("Content-Type", "application/connect+proto")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	snap := srv.RunStats()
+	events, _ := snap["events"].([]Event)
+	if len(events) != 1 {
+		t.Fatalf("events=%d", len(events))
+	}
+	if events[0].UpstreamFinish != "error" {
+		t.Fatalf("upstreamFinish=%q", events[0].UpstreamFinish)
 	}
 }
 

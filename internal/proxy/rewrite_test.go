@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -114,6 +115,9 @@ func TestGrokRewriteStripsCatalog(t *testing.T) {
 	if stats.Chosen != "grep" {
 		t.Fatalf("chosen %s", stats.Chosen)
 	}
+	if !reflect.DeepEqual(stats.ToolsBefore, []string{"read_file", "grep", "search_replace", "run_terminal_cmd", "mcp_edit_file"}) || !reflect.DeepEqual(stats.ToolsAfter, []string{"grep"}) {
+		t.Fatalf("tool names before=%v after=%v", stats.ToolsBefore, stats.ToolsAfter)
+	}
 	var got map[string]any
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatal(err)
@@ -121,6 +125,43 @@ func TestGrokRewriteStripsCatalog(t *testing.T) {
 	tools := got["tools"].([]any)
 	if len(tools) != 1 {
 		t.Fatalf("kept %d tools", len(tools))
+	}
+}
+
+func TestHistoryShapeRecordsOnlyTypes(t *testing.T) {
+	msgs := []any{
+		map[string]any{"type": "message", "content": []any{map[string]any{"type": "input_text"}}},
+		map[string]any{"type": "local_shell_call"},
+		map[string]any{"type": "message", "content": []any{map[string]any{"type": "refusal"}}},
+	}
+	types, unsupported, issues := historyShape(msgs)
+	if !reflect.DeepEqual(types, []string{"item:message", "content:input_text", "item:local_shell_call", "content:refusal"}) {
+		t.Fatalf("types=%v", types)
+	}
+	if !reflect.DeepEqual(unsupported, []string{"content:refusal"}) {
+		t.Fatalf("unsupported=%v", unsupported)
+	}
+	if !reflect.DeepEqual(issues, []string{"input[2].content:refusal"}) {
+		t.Fatalf("issues=%v", issues)
+	}
+}
+
+func TestHistoryReasonAcceptsToolResultAndLocalShell(t *testing.T) {
+	msgs := []any{
+		map[string]any{"type": "function_call", "name": "grep"},
+		map[string]any{"type": "function_call_output", "name": "grep", "output": "ok"},
+		map[string]any{"type": "local_shell_call", "name": "exec"},
+		map[string]any{"type": "local_shell_call_output", "name": "exec", "output": "ok"},
+	}
+	if reason := historyReason(msgs); reason != "" {
+		t.Fatalf("reason=%q", reason)
+	}
+}
+
+func TestFormatStatsIncludesHistoryIssue(t *testing.T) {
+	got := FormatStats(RewriteStats{HistoryIssues: []string{"input[1].item:local_shell_call tool=exec"}})
+	if !strings.Contains(got, "history_issues=input[1].item:local_shell_call tool=exec") {
+		t.Fatalf("stats=%q", got)
 	}
 }
 

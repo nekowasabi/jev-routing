@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -62,7 +63,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `jev-routing — Jev harness (Go). No npx. No MCP.
 
 Commands:
-  jev-routing run claude|codex|grok|cursor|devin [-- host-args...]
+  jev-routing run [--dashboard] claude|codex|grok|cursor|devin [-- host-args...]
   jev-routing serve --host claude|codex|grok|cursor|devin [--listen 127.0.0.1:8787]
   jev-routing compact < transcript.json
   jev-routing bench --host grok
@@ -131,10 +132,14 @@ func newHTTPServer(handler http.Handler) *http.Server {
 }
 
 func cmdRun(args []string) int {
-	if len(args) == 0 {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dashboard := fs.Bool("dashboard", false, "open the local dashboard after startup")
+	if err := fs.Parse(args); err != nil || len(fs.Args()) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: jev-routing run claude|codex|grok|cursor|devin")
 		return 2
 	}
+	args = fs.Args()
 	h, err := host.Parse(args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -180,6 +185,11 @@ func cmdRun(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if *dashboard {
+		if err := openDashboard("http://" + listen + "/dashboard"); err != nil {
+			fmt.Fprintf(os.Stderr, "jev-routing: failed to open dashboard: %v\n", err)
+		}
+	}
 	bin := h.Binary()
 	path, err := exec.LookPath(bin)
 	if err != nil {
@@ -201,6 +211,27 @@ func cmdRun(args []string) int {
 	}
 	writeRunStats(srv)
 	return 0
+}
+
+var openDashboard = startDashboard
+
+func startDashboard(url string) error {
+	var command string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		command, args = "open", []string{url}
+	case "windows":
+		command, args = "rundll32.exe", []string{"url.dll,FileProtocolHandler", url}
+	default:
+		command, args = "xdg-open", []string{url}
+	}
+	cmd := exec.Command(command, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 func writeRunStats(srv *proxy.Server) {

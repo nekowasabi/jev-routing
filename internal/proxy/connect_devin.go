@@ -52,7 +52,21 @@ func (l *lazyConnectDevin) record(frame, out []byte, stats RewriteStats, catalog
 		if stats.Reason != "" {
 			e.Reason = stats.Reason
 		}
-		e.Source = stats.Source
+		if stats.Source != "" {
+			e.Source = stats.Source
+			c := stats.Confidence
+			e.Confidence = &c
+		}
+		if stats.NeedsTool != 0 || stats.Source == sourceJev {
+			n := stats.NeedsTool
+			e.NeedsTool = &n
+		}
+		if stats.OriginalModel != "" {
+			e.OriginalModel = stats.OriginalModel
+		}
+		if stats.SentModel != "" {
+			e.SentModel = stats.SentModel
+		}
 		e.Apply = stats.Apply
 		e.Chosen = stats.Chosen
 		e.Changed = stats.Changed

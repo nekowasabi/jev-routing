@@ -1,44 +1,81 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>jev-routing dashboard</title>
   <style>
-    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
-    body { margin: 1rem; }
-    h1 { font-size: 1.2rem; }
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; --ink: #20243a; --muted: #65708a; --panel: #fff; --line: #e5e8f0; --blue: #4b6fff; --violet: #8b5cf6; --teal: #12b8a6; --orange: #f59e0b; }
+    body { max-width: 1400px; margin: 2rem auto; padding: 0 1rem; background: #f6f8fc; color: var(--ink); }
+    h1 { font-size: 1.7rem; margin-bottom: 0.2rem; }
+    h2 { font-size: 1rem; margin: 0 0 0.8rem; }
+    section { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 1rem; box-shadow: 0 5px 18px #17233a08; }
     table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
-    th, td { border-bottom: 1px solid #8884; text-align: left; padding: 0.25rem 0.4rem; }
-    th { position: sticky; top: 0; }
+    th, td { border-bottom: 1px solid var(--line); text-align: left; padding: 0.55rem 0.5rem; }
+    th { position: sticky; top: 0; background: var(--panel); color: var(--muted); }
     .missing { opacity: 0.7; font-style: italic; }
     .err { color: #b00020; }
     label { display: block; margin: 0.5rem 0; }
     textarea { width: 100%; min-height: 8rem; }
-    #status { margin: 0.5rem 0; }
+    #status { margin: 0.5rem 0 1.25rem; color: var(--muted); }
+    #overview { display: grid; grid-template-columns: 1fr 1.5fr; gap: 1rem; margin-bottom: 1rem; }
+    #counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.65rem; margin: 0; }
+    #counts dt { color: var(--muted); font-size: 0.75rem; }
+    #counts dd { margin: 0.15rem 0 0; font-size: 1.45rem; font-weight: 700; }
+    #usage-summary { display: grid; gap: 0.6rem; }
+    .usage-bar { display: grid; grid-template-columns: 5rem 1fr 7rem; align-items: center; gap: 0.65rem; font-size: 0.8rem; }
+    .usage-bar i { display: block; min-width: 2px; height: 0.7rem; border-radius: 999px; background: var(--blue); }
+    .usage-bar.output i { background: var(--violet); }.usage-bar.cached i { background: var(--teal); }.usage-bar.reasoning i { background: var(--orange); }
+    .usage-bar b { text-align: right; font-variant-numeric: tabular-nums; }
+    #usage-summary small { color: var(--muted); }
+    #history-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; color: var(--muted); font-size: 0.85rem; }
+    .history-chip { border-radius: 999px; padding: 0.35rem 0.65rem; background: #fff3e0; color: #8a4b00; font-family: ui-monospace, monospace; }
+    #tool-summary { display: flex; align-items: center; gap: 1.25rem; }
+    #tool-chart { width: 9rem; height: 9rem; border-radius: 50%; flex: 0 0 auto; }
+    #tool-legend { display: flex; flex-wrap: wrap; gap: 0.5rem; color: var(--muted); font-size: 0.85rem; }
+    .tool-legend-item::before { content: ""; display: inline-block; width: 0.65rem; height: 0.65rem; margin-right: 0.35rem; border-radius: 50%; background: var(--swatch); }
+    @media (max-width: 760px) { #overview { grid-template-columns: 1fr; } #counts { grid-template-columns: repeat(2, 1fr); } table { min-width: 980px; } section { overflow-x: auto; } }
   </style>
 </head>
 <body>
   <h1>jev-routing</h1>
-  <p id="status" role="status">Loading…</p>
-  <section aria-labelledby="counts-h">
-    <h2 id="counts-h">Counts</h2>
-    <dl id="counts"></dl>
+  <p id="status" role="status">読み込み中…</p>
+  <div id="overview">
+    <section aria-labelledby="counts-h">
+      <h2 id="counts-h">ルーティング概要</h2>
+      <dl id="counts"></dl>
+    </section>
+    <section aria-labelledby="usage-h">
+      <h2 id="usage-h">トークン消費</h2>
+      <div id="usage-summary"></div>
+    </section>
+  </div>
+  <section aria-labelledby="history-h">
+    <h2 id="history-h">安全側へ通過した履歴形式</h2>
+    <div id="history-summary"></div>
+  </section>
+  <section aria-labelledby="tool-chart-h">
+    <h2 id="tool-chart-h">カタログから除外したツール</h2>
+    <div id="tool-summary"><div id="tool-chart" role="img" aria-label="除外したツールの内訳"></div><div id="tool-legend"></div></div>
   </section>
   <section aria-labelledby="events-h">
-    <h2 id="events-h">Recent requests</h2>
+    <h2 id="events-h">直近のリクエスト</h2>
     <table>
       <thead>
         <tr>
-          <th scope="col">seq</th>
-          <th scope="col">source</th>
-          <th scope="col">apply</th>
-          <th scope="col">chosen</th>
-          <th scope="col">reason</th>
-          <th scope="col">changed</th>
+          <th scope="col">連番</th>
+          <th scope="col">判定元</th>
+          <th scope="col">適用</th>
+          <th scope="col">判定結果</th>
+          <th scope="col">採用ツール</th>
+          <th scope="col">理由</th>
+          <th scope="col">確信度</th>
+          <th scope="col">Jev 非呼出理由</th>
+          <th scope="col">変更</th>
+          <th scope="col">ツール置換</th>
           <th scope="col">jev</th>
-          <th scope="col">usage</th>
-          <th scope="col">time</th>
+          <th scope="col">トークン</th>
+          <th scope="col">時間</th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>

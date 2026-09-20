@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"bytes"
+	"compress/gzip"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"strings"
@@ -32,6 +34,10 @@ type usageCollector struct {
 	sseHint  bool
 	jsonDone bool
 	limitHit bool
+	connect  bool
+	connBuf  []byte
+	connErr  string
+	finish   string
 }
 
 func newUsageCollector(contentType string) *usageCollector {
@@ -39,12 +45,25 @@ func newUsageCollector(contentType string) *usageCollector {
 	return &usageCollector{
 		sseHint: strings.Contains(ct, "text/event-stream"),
 		isSSE:   strings.Contains(ct, "text/event-stream"),
+		connect: strings.Contains(ct, "connect"),
 	}
 }
 
 func (c *usageCollector) Write(p []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.connect {
+		if len(c.connBuf)+len(p) > usageParseLimit {
+			if !c.limitHit {
+				c.limitHit = true
+				c.partial = true
+				c.missing = "connect_limit"
+			}
+			return
+		}
+		c.connBuf = append(c.connBuf, p...)
+		return
+	}
 	if c.isSSE || c.sseHint || looksSSE(p) {
 		c.isSSE = true
 		c.feedSSE(p)
@@ -137,9 +156,15 @@ func (c *usageCollector) flushSSEEvent() {
 	c.eventBuf = nil
 }
 
-func (c *usageCollector) Finish() (*NormalizedUsage, bool, string) {
+// finish returns usage, partial, missing, and a protocol-level finish hint
+// ("" | "error" | "incomplete") for streams that carry their own status.
+func (c *usageCollector) Finish() (*NormalizedUsage, bool, string, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.connect {
+		c.finishConnect()
+		return c.usage, c.partial, c.missing, c.finish
+	}
 	if c.isSSE {
 		if len(c.sseBuf) > 0 {
 			c.feedSSE([]byte("\n\n"))
@@ -159,7 +184,67 @@ func (c *usageCollector) Finish() (*NormalizedUsage, bool, string) {
 	} else if c.usage == nil && c.missing == "" {
 		c.missing = "no_usage"
 	}
-	return c.usage, c.partial, c.missing
+	return c.usage, c.partial, c.missing, ""
+}
+
+// finishConnect scans Connect envelopes: end-stream trailers carry the
+// protocol result, message frames may embed usage JSON.
+func (c *usageCollector) finishConnect() {
+	i := 0
+	frames := 0
+	for i+5 <= len(c.connBuf) {
+		flags := c.connBuf[i]
+		ln := int(binary.BigEndian.Uint32(c.connBuf[i+1 : i+5]))
+		if i+5+ln > len(c.connBuf) {
+			break
+		}
+		payload := c.connBuf[i+5 : i+5+ln]
+		i += 5 + ln
+		frames++
+		if flags&connectFlagEndStream != 0 {
+			var obj map[string]any
+			if json.Unmarshal(payload, &obj) != nil {
+				continue
+			}
+			if u := extractUsage(obj); u != nil {
+				c.usage = u
+			}
+			if errObj, ok := obj["error"].(map[string]any); ok && errObj != nil {
+				code, _ := errObj["code"].(string)
+				msg, _ := errObj["message"].(string)
+				c.connErr = clipEvent(strings.TrimSpace(code + " " + msg))
+			}
+			continue
+		}
+		raw := payload
+		if flags&connectFlagCompressed != 0 {
+			gr, err := gzip.NewReader(bytes.NewReader(raw))
+			if err == nil {
+				if dec, derr := io.ReadAll(gr); derr == nil {
+					raw = dec
+				}
+				_ = gr.Close()
+			}
+		}
+		for _, pj := range collectProtoJSON(raw) {
+			if u := extractUsage(pj.obj); u != nil {
+				c.usage = u
+			}
+		}
+	}
+	switch {
+	case c.connErr != "":
+		c.finish = "error"
+	case i < len(c.connBuf):
+		c.finish = "incomplete"
+	}
+	if c.usage == nil && c.missing == "" {
+		if frames == 0 && len(c.connBuf) > 0 {
+			c.missing = "connect_no_frames"
+		} else {
+			c.missing = "no_usage"
+		}
+	}
 }
 
 func extractUsage(obj map[string]any) *NormalizedUsage {
@@ -241,10 +326,10 @@ type usageReadCloser struct {
 	rc     io.ReadCloser
 	col    *usageCollector
 	once   sync.Once
-	onDone func(*NormalizedUsage, bool, string)
+	onDone func(*NormalizedUsage, bool, string, string)
 }
 
-func wrapUsage(rc io.ReadCloser, contentType string, onDone func(*NormalizedUsage, bool, string)) io.ReadCloser {
+func wrapUsage(rc io.ReadCloser, contentType string, onDone func(*NormalizedUsage, bool, string, string)) io.ReadCloser {
 	if rc == nil {
 		return rc
 	}
@@ -269,9 +354,9 @@ func (w *usageReadCloser) Close() error {
 
 func (w *usageReadCloser) finish() {
 	w.once.Do(func() {
-		u, partial, missing := w.col.Finish()
+		u, partial, missing, finish := w.col.Finish()
 		if w.onDone != nil {
-			w.onDone(u, partial, missing)
+			w.onDone(u, partial, missing, finish)
 		}
 	})
 }
