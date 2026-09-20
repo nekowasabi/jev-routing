@@ -144,8 +144,11 @@ func listenIsPublic(addr string) bool {
 	if err != nil {
 		h = addr
 	}
-	if h == "" || h == "localhost" {
+	if h == "localhost" {
 		return false
+	}
+	if h == "" {
+		return true
 	}
 	ip := net.ParseIP(h)
 	if ip == nil {

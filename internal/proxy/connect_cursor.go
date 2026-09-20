@@ -185,6 +185,9 @@ func readConnectFrame(r io.Reader) ([]byte, bool) {
 		return hdr[:n], false
 	}
 	ln := binary.BigEndian.Uint32(hdr[1:5])
+	if ln > maxRequestBodyBytes {
+		return hdr, false
+	}
 	if ln == 0 {
 		return hdr, true
 	}

@@ -19,6 +19,8 @@ import (
 	"github.com/nekowasabi/jev-routing/internal/jev"
 )
 
+const maxRequestBodyBytes = 16 << 20
+
 type Server struct {
 	Listen      string
 	Host        host.ID
@@ -275,6 +277,10 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, _ *http.Request) {
+		if s.publicBind {
+			http.Error(w, "stats are available only on loopback", http.StatusForbidden)
+			return
+		}
 		w.Header().Set("content-type", "application/json")
 		_ = json.NewEncoder(w).Encode(s.StatsSnapshot())
 	})
@@ -404,8 +410,12 @@ func (s *Server) Handler() http.Handler {
 			}
 			s.RequestContentTypes[r.Method+" "+r.URL.Path+" "+ct]++
 			s.mu.Unlock()
-			raw, err := io.ReadAll(r.Body)
+			raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes))
 			_ = r.Body.Close()
+			if err != nil {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			origBytes := len(raw)
 			origJSON := json.Valid(raw)
 			shape := catalogShape(raw)
