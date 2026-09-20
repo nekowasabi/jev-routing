@@ -19,6 +19,13 @@ if ((${#hosts[@]} == 0)); then
   hosts=(claude codex grok cursor devin)
 fi
 
+# The ordinary x-cell remains the historical baseline-vs-Jev smoke check.
+# The selection benchmark asks the same host to run all four fixed conditions.
+modes=(baseline jev)
+if [[ "${JEV_SELECTION_BENCHMARK:-}" == "1" ]]; then
+  modes=(baseline local jev hybrid)
+fi
+
 if ! command -v jq >/dev/null; then
   echo "jq が必要です" >&2
   exit 2
@@ -64,29 +71,29 @@ PY
   case "$host:$mode" in
     claude:baseline)
       (cd "$worktree" && claude -p --output-format json --no-session-persistence --permission-mode bypassPermissions --disallowed-tools Agent -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
-    claude:jev)
-      (cd "$worktree" && JEV_RUN_STATS="$proxy_stats" "$binary" run claude -- -p --output-format json --no-session-persistence --permission-mode bypassPermissions --disallowed-tools Agent -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
+    claude:local|claude:jev|claude:hybrid)
+      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run claude -- -p --output-format json --no-session-persistence --permission-mode bypassPermissions --disallowed-tools Agent -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
     codex:baseline)
       (cd "$worktree" && codex exec --json --ephemeral -s workspace-write --model "$CODEX_MODEL" -c 'model_reasoning_effort="low"' "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
-    codex:jev)
-      (cd "$worktree" && JEV_REASONING=preserve JEV_RUN_STATS="$proxy_stats" "$binary" run codex -- exec --json --ephemeral -s workspace-write --model "$CODEX_MODEL" -c 'model_reasoning_effort="low"' "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
+    codex:local|codex:jev|codex:hybrid)
+      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run codex -- exec --json --ephemeral -s workspace-write --model "$CODEX_MODEL" -c 'model_reasoning_effort="low"' "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
     grok:baseline)
       (cd "$worktree" && grok --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
-    grok:jev)
-      (cd "$worktree" && JEV_RUN_STATS="$proxy_stats" "$binary" run grok -- --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
+    grok:local|grok:jev|grok:hybrid)
+      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run grok -- --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
     cursor:baseline)
       (cd "$worktree" && cursor-agent -p --output-format json --trust --force --sandbox disabled -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
-    cursor:jev)
-      (cd "$worktree" && JEV_RUN_STATS="$proxy_stats" "$binary" run cursor -- -p --output-format json --trust --force --sandbox disabled -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
+    cursor:local|cursor:jev|cursor:hybrid)
+      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run cursor -- -p --output-format json --trust --force --sandbox disabled -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
     devin:baseline)
       (cd "$worktree" && devin --permission-mode dangerous --respect-workspace-trust false -p -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
-    devin:jev)
-      (cd "$worktree" && JEV_RUN_STATS="$proxy_stats" "$binary" run devin -- --permission-mode dangerous --respect-workspace-trust false -p -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
+    devin:local|devin:jev|devin:hybrid)
+      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run devin -- --permission-mode dangerous --respect-workspace-trust false -p -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
   esac
   exit_code=$?
   set -e
   ended=$(python3 -c 'import time; print(time.monotonic_ns())')
-  if [[ "$mode" == jev ]]; then
+  if [[ "$mode" != baseline ]]; then
     # `run` writes a final machine-readable aggregate after its child exits.
     # Do not infer proxy use from a shared cache log.
     [[ -f "$proxy_stats" ]] && proxy_requests=$(jq -r '.requests // 0' "$proxy_stats")
@@ -110,11 +117,11 @@ out = {
     "model": codex_model if host == "codex" else data.get("model"),
     "effort": "low" if host == "codex" else None,
     "wall_ms": round((int(ended)-int(started))/1_000_000, 3),
-    "proxy_requests": int(valid) if mode == "jev" else None,
-    "proxy_observed": bool(int(valid)) if mode == "jev" else None,
-    "rewritten": int(rewritten) if mode == "jev" else None,
-    "routing_chars_before": int(chars_before) if mode == "jev" else None,
-    "routing_chars_after": int(chars_after) if mode == "jev" else None,
+    "proxy_requests": int(valid) if mode != "baseline" else None,
+    "proxy_observed": bool(int(valid)) if mode != "baseline" else None,
+    "rewritten": int(rewritten) if mode != "baseline" else None,
+    "routing_chars_before": int(chars_before) if mode != "baseline" else None,
+    "routing_chars_after": int(chars_after) if mode != "baseline" else None,
     "success_marker": "CHECK: PASS" in result and not data.get("is_error", False),
     "usage": {"input_tokens": n("input_tokens", "inputTokens"), "cached_input_tokens": n("cached_input_tokens", "cache_read_input_tokens", "cacheReadTokens"), "cache_creation_input_tokens": n("cache_creation_input_tokens", "cache_write_input_tokens", "cacheWriteTokens"), "output_tokens": n("output_tokens", "outputTokens"), "reasoning_tokens": n("reasoning_tokens", "reasoningTokens")},
     "total_cost_usd": data.get("total_cost_usd", data.get("totalCostUsd")),
@@ -123,7 +130,7 @@ out = {
 }
 out["quality"] = live_quality(out, result, pathlib.Path(worktree), json.loads(pathlib.Path(expected_path).read_text()))
 out["proxy_stats"] = json.loads(pathlib.Path(proxy_path).read_text()) if pathlib.Path(proxy_path).exists() else {}
-out["routing_reasoning"] = out["proxy_stats"].get("reasoning") if mode == "jev" else None
+out["routing_reasoning"] = out["proxy_stats"].get("reasoning") if mode != "baseline" else None
 pathlib.Path(result_path).write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n")
 PY
   git worktree remove --force "$worktree" >/dev/null
@@ -161,9 +168,12 @@ for host in "${hosts[@]}"; do
   case "$host" in claude|codex|grok|cursor|devin) ;; *) echo "対象は claude, codex, grok, cursor, devin です: $host" >&2; exit 2;; esac
   bin=$host; [[ $host == cursor ]] && bin=cursor-agent
   command -v "$bin" >/dev/null || { echo "$bin が PATH にありません" >&2; exit 2; }
-  run_one "$host" baseline
-  run_one "$host" jev
-  summarize "$host" || failed=1
+  for mode in "${modes[@]}"; do run_one "$host" "$mode"; done
+  summarize "$host" || {
+    # An unsupported request shape is an exclusion in the four-condition
+    # experiment, not a harness failure. The JSON retains its exact reason.
+    [[ "${JEV_SELECTION_BENCHMARK:-}" == "1" ]] || failed=1
+  }
 done
 echo "結果: $out_dir"
 exit "$failed"

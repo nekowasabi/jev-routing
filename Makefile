@@ -5,7 +5,7 @@ ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test test-jev-live test-x-cell clean
+.PHONY: build install test test-jev-live test-x-cell test-selection-benchmark clean
 
 build:
 	go build -o bin/$(BINARY) ./cmd/jev-routing
@@ -25,6 +25,9 @@ test-jev-live:
 # Codex は CODEX_MODEL（既定 gpt-5.6-terra）。短名 terra は ChatGPT ログインで 400。
 test-x-cell:
 	./scripts/test-x-cell.sh $(filter claude codex grok cursor devin,$(MAKECMDGOALS))
+
+test-selection-benchmark:
+	JEV_SELECTION_BENCHMARK=1 ./scripts/test-x-cell.sh $(filter claude codex grok cursor devin,$(MAKECMDGOALS))
 
 claude codex grok cursor devin:
 	@:

@@ -173,7 +173,7 @@ env -u TYPESAFE_API_KEY -u JEV_API_KEY go test -race -count=1 ./...
 go vet ./...
 node --test internal/proxy/assets/dashboard.test.mjs
 python3 -m unittest discover -s scripts -p 'test_summarize_x_cell.py'
-python3 -m unittest discover -s scripts -p 'test_summarize_selection_comparison.py'
+python3 -m unittest discover -s scripts -p 'test_summarize_selection_benchmark.py'
 bash scripts/test-x-cell.sh --summarize scripts/testdata/x-cell
 ```
 
@@ -184,15 +184,18 @@ bash scripts/test-x-cell.sh --summarize scripts/testdata/x-cell
 ```bash
 make test-x-cell           # Claude Code → Codex → Grok Build → Cursor → Devin
 make test-x-cell claude    # 1 製品だけ
+make test-selection-benchmark claude # baseline/local/jev/hybrid を1製品で比較
 ```
 
 結果は `artifacts/x-cell/<日時>/<host>/comparison.json` に出ます。`comparable: true`（`valid: true`）の結果だけを比較に使ってください。プロキシ未到達、`rewritten=0`（passthrough のみ）、または完了条件不一致は `comparable: false` で、削減値は出しません。請求トークンは独立セッション間のキャッシュ状態で大きく変わるため、単発結果では比較しません。代わりに `routing_request_chars`（実際にプロキシが受け取り上流へ送った JSON 本文の削減バイト数）と、出力トークン・実行時間の差分を記録します。ChatGPT ログインの Codex は `-m gpt-5.6-terra`（`CODEX_MODEL` で上書き）を使います。短名 `terra` は 400 になります。
+
+`make test-selection-benchmark` は、全プロキシ条件で `JEV_COMPACTION=off` と `JEV_REASONING=preserve` を固定します。履歴に未対応の内容型（例: Claude の `tool_addition`）があると `unknown_history` となり、書換えずに通過します。この結果は正常な安全停止であり、外部品質が合格しても選定比較の採点対象にはなりません。`comparison.json` の `invalid_reason` を確認し、対応済みの履歴形式だけで再実行してください。
 
 保存済み観測の再集計（外部 CLI / ネットワークなし）:
 
 ```bash
 bash scripts/test-x-cell.sh --summarize scripts/testdata/x-cell
-python3 scripts/summarize_selection_comparison.py scripts/testdata/selection-comparison
+python3 scripts/summarize_selection_benchmark.py scripts/testdata/selection-benchmark
 ```
 
 `CHECK: PASS` の自己申告だけでは成功にしません。費用は単価と出典が揃うときだけ出し、欠測は 0 や削減率に変換しません。比較条件（圧縮・推論・課題）が揃わない群は比較不能です。基準リビジョンが無い選択比較は改善率を出しません。
