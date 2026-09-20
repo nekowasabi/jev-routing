@@ -26,9 +26,8 @@ func mergeHosts(dst, src []string) []string {
 }
 
 func cursorAgentHost(host string) bool {
-	h := strings.ToLower(host)
-	return strings.Contains(h, "api5.cursor.sh") ||
-		strings.HasPrefix(h, "agentn.") && strings.HasSuffix(h, ".cursor.sh")
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	return h == "api5.cursor.sh" || strings.HasSuffix(h, ".api5.cursor.sh")
 }
 
 func rewriteCursorAgentHosts(body []byte, listen string) []byte {
