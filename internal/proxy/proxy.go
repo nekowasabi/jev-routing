@@ -143,6 +143,7 @@ func (s *Server) StatsSnapshot() map[string]any {
 func (s *Server) RunStats() map[string]any {
 	snap := s.StatsSnapshot()
 	events, _, _, truncated := s.events.Snapshot(0)
+	apps := withModelRouteApps(s.Apps.Snapshot())
 	// Compatible keys first.
 	return map[string]any{
 		"requests":            snap["requests"],
@@ -174,7 +175,8 @@ func (s *Server) RunStats() map[string]any {
 		"eventsTruncated":     truncated || snap["requests"].(int) > len(events),
 		"lastDelivered":       s.LastDelivered,
 		"applyErr":            s.ApplyErr,
-		"applications":        publicApplications(s.Apps.Snapshot()),
+		"applications":        publicApplications(apps),
+		"class_map":           ClassMap(apps, events, s.Options, string(s.Host)),
 	}
 }
 
@@ -184,7 +186,7 @@ func publicApplications(apps []*Application) []map[string]any {
 		if a == nil {
 			continue
 		}
-		out = append(out, map[string]any{
+		row := map[string]any{
 			"decisionId":    a.DecisionID,
 			"state":         a.State,
 			"kind":          a.Kind,
@@ -193,7 +195,14 @@ func publicApplications(apps []*Application) []map[string]any {
 			"deliveredHash": a.DeliveredHash,
 			"verified":      a.Verified,
 			"hasResult":     a.Result != "",
-		})
+		}
+		if a.Host != "" {
+			row["host"] = a.Host
+		}
+		if a.PluginOf != "" {
+			row["pluginOf"] = a.PluginOf
+		}
+		out = append(out, row)
 	}
 	return out
 }
@@ -236,6 +245,14 @@ func selectionJevTokens(events []Event) map[string]any {
 
 func copyCounts(src map[string]int) map[string]int {
 	out := make(map[string]int, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func copyKindModes(src map[string]string) map[string]string {
+	out := make(map[string]string, len(src))
 	for k, v := range src {
 		out[k] = v
 	}
@@ -643,6 +660,7 @@ func (s *Server) Handler() http.Handler {
 				HistoryIssues:      stats.HistoryIssues,
 				CompactDropped:     stats.CompactDropped,
 				CompactApplied:     stats.CompactApplied,
+				ReasoningChanged:   stats.ReasoningChanged,
 				RequestPath:        r.URL.Path,
 				Method:             r.Method,
 				ContentType:        ct,
@@ -952,6 +970,7 @@ func (s *Server) autoApply(body []byte) {
 			s.ApplyErr = "required application: not delivered"
 		}
 	}
+	s.stampApp(app)
 	if app != nil && app.Kind == plan.KindSkill && app.DeliveredHash != "" {
 		if exec, ok := s.Executor.(*recordingExec); ok {
 			exec.mu.Lock()
@@ -1557,6 +1576,18 @@ func (s *Server) startObservedCall(callID, name string) {
 		app.CallID = callID
 		s.Apps.put(app)
 	}
+	s.stampApp(app)
+}
+
+func (s *Server) stampApp(app *Application) {
+	if s == nil || app == nil || s.Apps == nil {
+		return
+	}
+	if app.Host != "" {
+		return
+	}
+	app.Host = string(s.Host)
+	s.Apps.put(app)
 }
 
 func cursorExecResult(raw []byte) (id, result string) {

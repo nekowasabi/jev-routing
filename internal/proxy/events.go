@@ -34,6 +34,7 @@ type Event struct {
 	HistoryIssues      []string         `json:"historyIssues,omitempty"`
 	CompactDropped     int              `json:"compactDropped"`
 	CompactApplied     bool             `json:"compactApplied"`
+	ReasoningChanged   bool             `json:"reasoningChanged,omitempty"`
 	RequestPath        string           `json:"requestPath,omitempty"`
 	Method             string           `json:"method,omitempty"`
 	ContentType        string           `json:"contentType,omitempty"`

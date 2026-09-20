@@ -16,7 +16,9 @@
       local: "ローカル判定", jev: "Jev 判定", passthrough: "安全側通過", ineligible: "対象外", filter: "絞り込み適用", forced: "強制適用", direct: "そのまま送信", jev_failed: "Jev 呼び出し失敗",
       loading: "読み込み中…", unavailable: "履歴を取得できません", disconnected: "接続切れ", instance: "インスタンス", recorded: "記録", mode: "モード", updated: "最終更新", historyTruncated: "履歴を省略", sample: "サンプル",
       input: "入力", output: "出力", cacheRead: "キャッシュ読取", cacheWrite: "キャッシュ書込", reasoning: "推論", directSaved: "直通で回避した入力（推定）", compactSaved: "コンパクションで削減した入力（推定）", tokens: "トークン", usageNote: "件の上流レスポンスから実測。回避・削減は送信前の推定値。",
-      history: "安全側へ通過した履歴（不明な箇所）", skippedTools: "カタログから除外したツール", application: "可動個所と適用", unapplied: "未適用の理由", effects: "比較効果", funnel: "判断が届いたか", kinds: "Jevが働いた場所", events: "直近のリクエスト", host: "ホスト", source: "判定元", all: "すべて", reconnect: "再接続", sequence: "連番", outcome: "判定結果", chosenTool: "採用ツール", reason: "理由", confidence: "確信度", replacement: "ツール置換", time: "時間",
+      history: "安全側へ通過した履歴（不明な箇所）", skippedTools: "カタログから除外したツール", application: "可動個所と適用", unapplied: "未適用の理由", effects: "比較効果", funnel: "判断が届いたか", kinds: "Jevが働いた場所", kindsHelp: "スキル・MCP・プラグイン・モデルeffortを含む六分類と履歴圧縮。件数0でも「未観測／観察のみ／無効」を出します。", apps: "適用した操作", kind: "分類", appState: "状態", capability: "能力", call: "操作", events: "直近のリクエスト", host: "ホスト", source: "判定元", all: "すべて", reconnect: "再接続", sequence: "連番", outcome: "判定結果", chosenTool: "採用ツール", reason: "理由", confidence: "確信度", replacement: "ツール置換", time: "時間",
+      class_model: "モデルとeffort", class_subagent: "子エージェント", class_skill: "スキル", class_mcp_tool: "MCPツール", class_cli: "CLI", class_plugin: "プラグイン", class_compaction: "履歴圧縮",
+      st_verified: "成果確認", st_delivered: "配達済み", st_started: "開始（結果待ち）", st_rewritten: "リクエストを書き換え", st_failed: "失敗", st_selected: "判断のみ", st_observe: "観察のみ（未適用）", st_off: "無効", st_unsupported: "未対応", st_unobserved: "未観測",
       noTool: "Jev がツール不要と判断", jevSelected: "Jev 分類で採用", localSelected: "ローカル分類で採用", localAfterJev: "Jev を使ったがローカル分類を採用", unsupported: "履歴形式が未対応のため通過", uncertain: "Jev 判定が不確実のため通過", safePass: "安全側通過: ", unrecorded: "未記録", missing: "欠測", changed: "変更", yes: "あり", no: "なし"
     },
     en: {
@@ -25,7 +27,9 @@
       local: "Local decision", jev: "Jev decision", passthrough: "Safe pass-through", ineligible: "Ineligible", filter: "Filtered", forced: "Forced", direct: "Sent unchanged", jev_failed: "Jev call failures",
       loading: "Loading…", unavailable: "Could not load history", disconnected: "Disconnected", instance: "Instance", recorded: "Recorded", mode: "Mode", updated: "Updated", historyTruncated: "History truncated", sample: "Sample",
       input: "Input", output: "Output", cacheRead: "Cache read", cacheWrite: "Cache write", reasoning: "Reasoning", directSaved: "Input avoided directly (estimated)", compactSaved: "Input saved by compaction (estimated)", tokens: "tokens", usageNote: "upstream responses measured. Avoided and saved values are pre-send estimates.",
-      history: "History passed through safely (unknown parts)", skippedTools: "Tools excluded from the catalog", application: "Applications", unapplied: "Why not applied", effects: "Comparison effects", funnel: "Did the decision arrive?", kinds: "Where Jev ran", events: "Recent requests", host: "Host", source: "Decision source", all: "All", reconnect: "Reconnect", sequence: "Sequence", outcome: "Outcome", chosenTool: "Chosen tool", reason: "Reason", confidence: "Confidence", replacement: "Tool replacement", time: "Time",
+      history: "History passed through safely (unknown parts)", skippedTools: "Tools excluded from the catalog", application: "Applications", unapplied: "Why not applied", effects: "Comparison effects", funnel: "Did the decision arrive?", kinds: "Where Jev ran", kindsHelp: "Six classes plus compaction, including skills, MCP, plugins, and model effort. Zero counts still show unobserved / observe-only / off.", apps: "Applied operations", kind: "Class", appState: "State", capability: "Capability", call: "Call", events: "Recent requests", host: "Host", source: "Decision source", all: "All", reconnect: "Reconnect", sequence: "Sequence", outcome: "Outcome", chosenTool: "Chosen tool", reason: "Reason", confidence: "Confidence", replacement: "Tool replacement", time: "Time",
+      class_model: "Model and effort", class_subagent: "Subagents", class_skill: "Skills", class_mcp_tool: "MCP tools", class_cli: "CLIs", class_plugin: "Plugins", class_compaction: "History compaction",
+      st_verified: "Verified", st_delivered: "Delivered", st_started: "Started", st_rewritten: "Request rewritten", st_failed: "Failed", st_selected: "Selected only", st_observe: "Observe only", st_off: "Off", st_unsupported: "Unsupported", st_unobserved: "Unobserved",
       noTool: "Jev determined no tool is needed", jevSelected: "Selected by Jev", localSelected: "Selected locally", localAfterJev: "Jev consulted; local selection used", unsupported: "Passed through: unsupported history format", uncertain: "Passed through: Jev decision uncertain", safePass: "Safe pass-through: ", unrecorded: "Not recorded", missing: "missing", changed: "changed", yes: "yes", no: "no"
     }
   };
@@ -217,6 +221,68 @@
     });
   }
 
+  const CLASS_ORDER = ["model", "subagent", "skill", "mcp_tool", "cli", "plugin", "compaction"];
+
+  function classLabel(kind, lang) {
+    return t("class_" + kind, lang) || kind;
+  }
+
+  function classStatusLabel(status, lang) {
+    return t("st_" + status, lang) || status;
+  }
+
+  function classMapFromPayload(payload, lang) {
+    const metrics = (payload && payload.metrics) || {};
+    if (Array.isArray(metrics.by_class) && metrics.by_class.length) {
+      return metrics.by_class;
+    }
+    const apps = (payload && payload.applications) || [];
+    const events = (payload && payload.events) || [];
+    const modes = (payload && payload.router && payload.router.kindModes) || {};
+    const by = {};
+    CLASS_ORDER.forEach(function (k) { by[k] = { kind: k, label: classLabel(k, lang), status: "unobserved", count: 0, verified: 0, hosts: {}, evidence: "" }; });
+    apps.forEach(function (a) {
+      if (!a) return;
+      const cell = by[a.kind];
+      if (cell) {
+        cell.count++;
+        if (a.host) cell.hosts[a.host] = (cell.hosts[a.host] || 0) + 1;
+        if (a.verified || a.state === "verified") cell.verified++;
+        cell.status = a.state === "verified" ? "verified" : a.state === "delivered" ? "delivered" : a.state === "started" ? "started" : cell.status;
+        cell.evidence = a.capabilityId || cell.evidence;
+      }
+      if (a.pluginOf && by.plugin) {
+        by.plugin.count++;
+        by.plugin.status = a.state === "verified" ? "verified" : by.plugin.status;
+        by.plugin.evidence = a.pluginOf;
+      }
+    });
+    events.forEach(function (e) {
+      if (e.reasoningChanged || (e.originalModel && e.sentModel && e.originalModel !== e.sentModel)) {
+        by.model.count++;
+        by.model.status = "rewritten";
+        by.model.evidence = e.reasoningChanged ? "effort" : e.originalModel + "→" + e.sentModel;
+      }
+      if (e.compactApplied) {
+        by.compaction.count++;
+        by.compaction.status = "rewritten";
+      }
+    });
+    CLASS_ORDER.forEach(function (k) {
+      if (by[k].count) return;
+      const mode = modes[k];
+      if (k === "compaction") return;
+      if (mode === "off") by[k].status = "off";
+      else if (mode === "apply") by[k].status = k === "model" ? "unsupported" : "unobserved";
+      else by[k].status = "observe";
+    });
+    return CLASS_ORDER.map(function (k) { return by[k]; });
+  }
+
+  function filterApplications(apps, kind) {
+    return (apps || []).filter(function (a) { return !kind || a.kind === kind || (kind === "plugin" && a.pluginOf); });
+  }
+
   const SAMPLE_EVENTS = [
     { seq: 1, host: "grok", source: "local", apply: "filter", chosen: "read_file", reason: "local", confidence: 0.2, changed: true, toolsBefore: ["read_file", "exec"], toolsAfter: ["read_file"], usage: { inputTokens: 12, outputTokens: 3 } },
     { seq: 2, host: "codex", source: "jev", apply: "filter", chosen: "exec", reason: "top_set_jev", confidence: 0.7, changed: true, toolsBefore: ["exec", "web"], toolsAfter: ["exec"], usage: { inputTokens: 9, outputTokens: 4 } },
@@ -228,6 +294,15 @@
     failed: 0, unapplied: 1, local_skip: 1, missing_usage: 1,
     unapplied_reason: { selected_not_delivered: 1 },
     by_kind: { skill: 1, cli: 1, mcp_tool: 1 },
+    by_class: [
+      { kind: "model", label: "モデルとeffort", status: "rewritten", count: 1, verified: 0, evidence: "effort" },
+      { kind: "subagent", label: "子エージェント", status: "observe", count: 0, verified: 0 },
+      { kind: "skill", label: "スキル", status: "delivered", count: 1, verified: 0, evidence: "skill:local:review@1" },
+      { kind: "mcp_tool", label: "MCPツール", status: "verified", count: 1, verified: 1, evidence: "mcp_tool:host:lookup@1" },
+      { kind: "cli", label: "CLI", status: "verified", count: 1, verified: 1, evidence: "cli:local:exec@1" },
+      { kind: "plugin", label: "プラグイン", status: "unobserved", count: 0, verified: 0 },
+      { kind: "compaction", label: "履歴圧縮", status: "rewritten", count: 1, verified: 0 }
+    ],
     sample: true
   };
 
@@ -262,6 +337,8 @@
     const detail = document.getElementById("detail");
     const funnelEl = document.getElementById("funnel");
     const kindEl = document.getElementById("kind-map");
+    const appRows = document.getElementById("app-rows");
+    const filterKind = document.getElementById("filter-kind");
     const language = document.getElementById("language");
     if (!status || !rows) return;
     const useSample = typeof location !== "undefined" && /(?:\?|&)sample=1(?:&|$)/.test(location.search || "");
@@ -384,6 +461,89 @@
         text(amount, String(row[1]));
         item.append(name, meter, amount);
         el.appendChild(item);
+      });
+    }
+
+    function renderClassMap(el, payload) {
+      if (!el) return;
+      el.replaceChildren();
+      const cells = classMapFromPayload(payload, lang);
+      const table = document.createElement("table");
+      const head = document.createElement("thead");
+      const hr = document.createElement("tr");
+      ["処理", "状態", "件数", "成果確認", "根拠"].forEach(function (h) {
+        const th = document.createElement("th");
+        th.scope = "col";
+        text(th, h);
+        hr.appendChild(th);
+      });
+      head.appendChild(hr);
+      const body = document.createElement("tbody");
+      cells.forEach(function (c) {
+        const tr = document.createElement("tr");
+        const vals = [
+          c.label || classLabel(c.kind, lang),
+          classStatusLabel(c.status, lang),
+          String(c.count || 0),
+          String(c.verified || 0),
+          c.evidence || "—"
+        ];
+        vals.forEach(function (v, i) {
+          const td = document.createElement("td");
+          text(td, v);
+          if (i === 1) td.className = "status " + (c.status || "unobserved");
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+      table.append(head, body);
+      el.appendChild(table);
+    }
+
+    function fillKindFilter(apps) {
+      if (!filterKind) return;
+      const prev = filterKind.value;
+      const kinds = [];
+      (apps || []).forEach(function (a) {
+        if (a && a.kind && kinds.indexOf(a.kind) < 0) kinds.push(a.kind);
+        if (a && a.pluginOf && kinds.indexOf("plugin") < 0) kinds.push("plugin");
+      });
+      filterKind.replaceChildren();
+      const all = document.createElement("option");
+      all.value = "";
+      text(all, t("all", lang));
+      filterKind.appendChild(all);
+      kinds.sort().forEach(function (k) {
+        const opt = document.createElement("option");
+        opt.value = k;
+        text(opt, classLabel(k, lang));
+        filterKind.appendChild(opt);
+      });
+      if (prev && kinds.indexOf(prev) >= 0) filterKind.value = prev;
+    }
+
+    function renderApps(apps) {
+      if (!appRows) return;
+      fillKindFilter(apps);
+      appRows.replaceChildren();
+      const shown = filterApplications(apps, filterKind && filterKind.value);
+      if (!shown.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 5;
+        text(td, "この実行では適用操作はまだありません。分類の状態は上の表を見てください。");
+        tr.appendChild(td);
+        appRows.appendChild(tr);
+        return;
+      }
+      shown.forEach(function (a) {
+        const tr = document.createElement("tr");
+        [classLabel(a.kind, lang), a.state || "—", a.capabilityId || "—", a.callId || "—", a.host || "—"].forEach(function (v) {
+          const td = document.createElement("td");
+          text(td, v);
+          tr.appendChild(td);
+        });
+        appRows.appendChild(tr);
       });
     }
 
@@ -522,8 +682,8 @@
         ["結果受信", app.result_received],
         ["成果確認", app.verified]
       ]);
-      const kinds = payload.metrics && payload.metrics.by_kind ? payload.metrics.by_kind : {};
-      renderBars(kindEl, Object.keys(kinds).sort().map(function (k) { return [k, kinds[k]]; }).concat(Object.keys(kinds).length ? [] : [["未観測", 0]]));
+      renderClassMap(kindEl, payload);
+      renderApps(payloadApps());
       rows.replaceChildren();
       const shown = filterEvents(store, currentFilters()).slice(-TABLE_ROWS).reverse();
       if (selectedSeq && !shown.some(function (e) { return e.seq === selectedSeq; })) selectedSeq = shown[0] ? shown[0].seq : 0;
@@ -574,6 +734,7 @@
       if (filterHost) filterHost.value = "";
       if (filterSource) filterSource.value = "";
       if (filterApply) filterApply.value = "";
+      if (filterKind) filterKind.value = "";
       if (detail) detail.hidden = true;
       poll();
     }
@@ -585,7 +746,12 @@
           router: { instanceId: "sample", recorded: SAMPLE_EVENTS.length, now: new Date().toISOString(), mode: "sample" },
           events: SAMPLE_EVENTS,
           metrics: SAMPLE_METRICS,
-          applications: [{ decisionId: "dec-sample", state: "verified", kind: "cli", capabilityId: "cli:local:exec@1", callId: "call_sample", verified: true }],
+          applications: [
+            { decisionId: "dec-sample", state: "verified", kind: "cli", capabilityId: "cli:local:exec@1", callId: "call_sample", verified: true, host: "codex" },
+            { decisionId: "dec-skill", state: "delivered", kind: "skill", capabilityId: "skill:local:review@1", deliveredHash: "abc", host: "grok" },
+            { decisionId: "dec-mcp", state: "verified", kind: "mcp_tool", capabilityId: "mcp_tool:host:lookup@1", callId: "call_mcp", verified: true, host: "grok" },
+            { decisionId: "dec-model", state: "verified", kind: "model", capabilityId: "model:claude:claude-opus-5@medium", callId: "jev", verified: true, host: "claude" }
+          ],
           historyTruncated: false
         });
         return;
@@ -619,7 +785,7 @@
         text(cmpOut, JSON.stringify(got.data, null, 2));
       });
     }
-    [filterHost, filterSource, filterApply].forEach(function (el) {
+    [filterHost, filterSource, filterApply, filterKind].forEach(function (el) {
       if (!el) return;
       el.addEventListener("change", function () {
         if (lastPayload) render(Object.assign({}, lastPayload, { events: [] }));
@@ -663,5 +829,5 @@
     setInterval(poll, 2000);
   }
 
-  return { clip, formatUsage, formatSavings, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, SAMPLE_EVENTS, start };
+  return { clip, formatUsage, formatSavings, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS, start };
 });

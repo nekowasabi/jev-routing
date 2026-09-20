@@ -1,6 +1,12 @@
 package proxy
 
-import "testing"
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/nekowasabi/jev-routing/internal/plan"
+)
 
 func TestDashboardMetrics(t *testing.T) {
 	apps := []*Application{
@@ -40,4 +46,102 @@ func TestDashboardMetrics(t *testing.T) {
 	if merged.LocalSkip != 1 || merged.Unapplied < 4 || merged.Verified != 1 {
 		t.Fatalf("merge %+v", merged)
 	}
+}
+
+func TestClassMapAlwaysListsSixKinds(t *testing.T) {
+	opt := DefaultOptions()
+	cells := ClassMap(nil, nil, opt, "grok")
+	if len(cells) != 7 {
+		t.Fatalf("len=%d", len(cells))
+	}
+	got := map[string]string{}
+	for _, c := range cells {
+		got[c.Kind] = c.Status
+		if c.Label == "" {
+			t.Fatalf("empty label %+v", c)
+		}
+	}
+	if got["model"] != ClassObserve || got["skill"] != ClassObserve || got["mcp_tool"] != ClassObserve || got["plugin"] != ClassObserve {
+		t.Fatalf("default observe %+v", got)
+	}
+	if got["compaction"] != ClassUnobserved {
+		t.Fatalf("compaction %+v", got)
+	}
+	opt.KindModes["skill"] = KindApply
+	opt.KindModes["mcp_tool"] = KindApply
+	opt.KindModes["plugin"] = KindApply
+	opt.KindModes["model"] = KindApply
+	opt.KindModes["cli"] = KindOff
+	apply := ClassMap(nil, nil, opt, "grok")
+	st := map[string]string{}
+	for _, c := range apply {
+		st[c.Kind] = c.Status
+	}
+	if st["skill"] != ClassUnobserved || st["mcp_tool"] != ClassUnobserved || st["plugin"] != ClassUnobserved {
+		t.Fatalf("apply unused %+v", st)
+	}
+	if st["model"] != ClassUnsupported || st["cli"] != ClassOff {
+		t.Fatalf("model/cli %+v", st)
+	}
+}
+
+func TestClassMapRecordsSkillMCPPluginAndEffort(t *testing.T) {
+	apps := []*Application{
+		{Kind: "skill", State: AppDelivered, CapabilityID: "skill:host:review@1", Host: "claude"},
+		{Kind: "mcp_tool", State: AppVerified, CapabilityID: "mcp_tool:host:lookup@1", Host: "grok", PluginOf: "plugin:test:devtools@1", Verified: true},
+	}
+	events := []Event{
+		{Host: "codex", ReasoningChanged: true, OriginalModel: "gpt-x", SentModel: "gpt-x"},
+		{Host: "cursor", CompactApplied: true},
+	}
+	cells := ClassMap(apps, events, DefaultOptions(), "")
+	st := map[string]ClassCell{}
+	for _, c := range cells {
+		st[c.Kind] = c
+	}
+	if st["skill"].Status != ClassDelivered || st["skill"].Count != 1 || st["skill"].Hosts["claude"] != 1 {
+		t.Fatalf("skill %+v", st["skill"])
+	}
+	if st["mcp_tool"].Status != ClassVerified || st["mcp_tool"].Verified != 1 {
+		t.Fatalf("mcp %+v", st["mcp_tool"])
+	}
+	if st["plugin"].Status != ClassVerified || st["plugin"].Count != 1 {
+		t.Fatalf("plugin %+v", st["plugin"])
+	}
+	if st["model"].Status != ClassRewritten || st["model"].Evidence != "effort" {
+		t.Fatalf("model %+v", st["model"])
+	}
+	if st["compaction"].Status != ClassRewritten {
+		t.Fatalf("compaction %+v", st["compaction"])
+	}
+}
+
+func TestAppsFromModelLog(t *testing.T) {
+	t.Setenv("JEV_MODEL_LOG", filepath.Join(t.TempDir(), "model-routes.jsonl"))
+	plan.RecordModelDecision(plan.ModelDecision{
+		Host: "claude", Source: "jev", ReasonCode: "jev",
+		AppliedModel: "gpt-x", AppliedEffort: "high", PairID: "p1",
+	})
+	apps := withModelRouteApps(nil)
+	var model *Application
+	for _, a := range apps {
+		if a != nil && a.Kind == plan.KindModel {
+			model = a
+			break
+		}
+	}
+	if model == nil || !strings.Contains(model.CapabilityID, "gpt-x") || model.State != AppVerified {
+		t.Fatalf("%+v", model)
+	}
+	cells := ClassMap(apps, nil, DefaultOptions(), "")
+	for _, c := range cells {
+		if c.Kind != plan.KindModel {
+			continue
+		}
+		if c.Status != ClassVerified || !strings.Contains(c.Evidence, "gpt-x") {
+			t.Fatalf("model cell %+v", c)
+		}
+		return
+	}
+	t.Fatal("missing model cell")
 }

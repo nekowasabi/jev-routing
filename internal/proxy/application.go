@@ -46,6 +46,8 @@ type Application struct {
 	Result        string
 	Command       []string
 	Verified      bool
+	Host          string
+	PluginOf      string
 }
 
 type AppStore struct {
@@ -117,8 +119,14 @@ func Apply(store *AppStore, route plan.RouteResult, cat plan.Catalog, bodies map
 			store.put(app)
 			return app, fmt.Errorf("plugin has no children")
 		}
+		parent := item.ID
 		route.CapabilityID = item.Target.PluginChildren[0]
-		return Apply(store, route, cat, bodies, generated, exec)
+		child, err := Apply(store, route, cat, bodies, generated, exec)
+		if child != nil {
+			child.PluginOf = parent
+			store.put(child)
+		}
+		return child, err
 	}
 	switch item.Kind {
 	case plan.KindSkill:

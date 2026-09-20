@@ -133,6 +133,7 @@ func (l *lazyConnectCursor) record(frame, out []byte, stats RewriteStats, catalo
 			e.ToolAfter = stats.ToolAfter
 		}
 		e.CompactApplied = e.CompactApplied || stats.CompactApplied
+		e.ReasoningChanged = e.ReasoningChanged || stats.ReasoningChanged
 		if stats.CompactDropped > e.CompactDropped {
 			e.CompactDropped = stats.CompactDropped
 		}

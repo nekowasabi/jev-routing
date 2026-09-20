@@ -69,7 +69,9 @@ func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	counts := s.events.Counts()
 	s.mu.Unlock()
-	metrics := MergeMetrics(MetricsFromEvents(all), MetricsFromApps(s.Apps.Snapshot()))
+	apps := withModelRouteApps(s.Apps.Snapshot())
+	metrics := MergeMetrics(MetricsFromEvents(all), MetricsFromApps(apps))
+	metrics.ByClass = ClassMap(apps, all, s.Options, string(s.Host))
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -82,10 +84,13 @@ func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
 			"counts":     counts,
 			"mode":       s.Options.Mode,
 			"runId":      s.Options.RunID,
+			"kindModes":  copyKindModes(s.Options.KindModes),
+			"reasoning":  s.Options.Reasoning,
+			"compaction": s.Options.Compaction,
 		},
 		"events":           events,
 		"metrics":          metrics,
-		"applications":     publicApplications(s.Apps.Snapshot()),
+		"applications":     publicApplications(apps),
 		"historyTruncated": truncated,
 	})
 }

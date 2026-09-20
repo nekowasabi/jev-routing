@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatUsage, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, SAMPLE_EVENTS } from "./dashboard.mjs";
+import { formatUsage, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS } from "./dashboard.mjs";
 
 test("formatUsage distinguishes missing from zero", () => {
   assert.equal(formatUsage(null, "no_usage", false).missing, true);
@@ -96,4 +96,44 @@ test("filterEvents keeps host source and apply axes", () => {
   assert.equal(got[0].seq, 1);
   assert.equal(filterEvents(SAMPLE_EVENTS, { source: "jev" }).length, 1);
   assert.equal(filterEvents(SAMPLE_EVENTS, { apply: "none" })[0].host, "cursor");
+});
+
+test("classMap always lists six classes plus compaction", () => {
+  const cells = classMapFromPayload({
+    metrics: {
+      by_class: [
+        { kind: "model", status: "rewritten", count: 1 },
+        { kind: "subagent", status: "observe", count: 0 },
+        { kind: "skill", status: "delivered", count: 1 },
+        { kind: "mcp_tool", status: "verified", count: 1 },
+        { kind: "cli", status: "unobserved", count: 0 },
+        { kind: "plugin", status: "unobserved", count: 0 },
+        { kind: "compaction", status: "rewritten", count: 1 }
+      ]
+    }
+  }, "ja");
+  assert.equal(cells.length, 7);
+  assert.equal(classLabel("mcp_tool", "ja"), "MCPツール");
+  assert.equal(classStatusLabel("rewritten", "ja"), "リクエストを書き換え");
+  assert.equal(classStatusLabel("unobserved", "ja"), "未観測");
+  const skill = cells.find((c) => c.kind === "skill");
+  assert.equal(skill.status, "delivered");
+});
+
+test("classMap fallback uses applications and effort rewrite", () => {
+  const cells = classMapFromPayload({
+    applications: [
+      { kind: "skill", state: "delivered", capabilityId: "skill:host:review@1" },
+      { kind: "mcp_tool", state: "verified", pluginOf: "plugin:test:devtools@1", verified: true }
+    ],
+    events: [{ reasoningChanged: true }],
+    router: { kindModes: { cli: "off", plugin: "apply" } }
+  }, "ja");
+  const by = Object.fromEntries(cells.map((c) => [c.kind, c]));
+  assert.equal(by.skill.status, "delivered");
+  assert.equal(by.mcp_tool.status, "verified");
+  assert.equal(by.plugin.status, "verified");
+  assert.equal(by.model.status, "rewritten");
+  assert.equal(by.cli.status, "off");
+  assert.equal(filterApplications([{ kind: "cli" }, { kind: "skill" }], "skill").length, 1);
 });

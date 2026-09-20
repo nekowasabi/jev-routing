@@ -45,7 +45,7 @@
     #apply-counts dt { color: var(--muted); font-size: 0.75rem; }
     #apply-counts dd { margin: 0; font-size: 1.2rem; font-weight: 700; }
     #unapplied-chart span, #effect-list li { display: block; margin: 0.35rem 0; }
-    #faq { color: var(--muted); }
+    #faq, .kind-help { color: var(--muted); }
     #filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
     #filters label { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; }
     #detail { border: 1px solid var(--line); border-radius: 8px; padding: 0.75rem; margin: 0.75rem 0; background: #f6f8fc; white-space: pre-wrap; }
@@ -53,9 +53,16 @@
     tr.selected { outline: 2px solid var(--blue); background: #eef2ff; }
     tr[data-seq] { cursor: pointer; }
     #kbd-help { color: var(--muted); font-size: 0.8rem; }
-    #funnel, #kind-map { display: grid; gap: 0.45rem; }
+    #funnel { display: grid; gap: 0.45rem; }
     .funnel-row, .kind-row { display: grid; grid-template-columns: 8rem 1fr 3rem; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
     .funnel-row i, .kind-row i { display: block; min-width: 2px; height: 0.65rem; border-radius: 999px; background: var(--blue); }
+    #kind-map { overflow-x: auto; }
+    #kind-map table, #apps { min-width: 640px; }
+    .status { font-weight: 700; }
+    .status.verified, .status.delivered, .status.rewritten { color: #0f7b4c; }
+    .status.started, .status.selected, .status.observe { color: #b45309; }
+    .status.failed { color: #b00020; }
+    .status.unobserved, .status.off, .status.unsupported { color: #65708a; }
     #updated.disconnected { color: #b00020; }
     @media (max-width: 760px) { #overview, #overview-apply { grid-template-columns: 1fr; } #counts { grid-template-columns: repeat(2, 1fr); } table { min-width: 980px; } section { overflow-x: auto; } }
   </style>
@@ -76,6 +83,29 @@
       <div id="usage-summary"></div>
     </section>
   </div>
+  <section aria-labelledby="kind-h">
+    <h2 id="kind-h" data-i18n="kinds">Jevが働いた場所</h2>
+    <p class="kind-help" data-i18n="kindsHelp">スキル・MCP・プラグイン・モデルeffortを含む六分類と履歴圧縮。件数0でも「未観測／観察のみ／無効」を出します。</p>
+    <div id="kind-map" role="region" aria-label="処理分類ごとの稼働状態"></div>
+  </section>
+  <section aria-labelledby="apps-h">
+    <h2 id="apps-h" data-i18n="apps">適用した操作</h2>
+    <p id="filters-kind">
+      <label><span data-i18n="kind">分類</span> <select id="filter-kind" aria-label="分類で絞込み"><option value="" data-i18n="all">すべて</option></select></label>
+    </p>
+    <table id="apps">
+      <thead>
+        <tr>
+          <th scope="col" data-i18n="kind">分類</th>
+          <th scope="col" data-i18n="appState">状態</th>
+          <th scope="col" data-i18n="capability">能力</th>
+          <th scope="col" data-i18n="call">操作</th>
+          <th scope="col" data-i18n="host">ホスト</th>
+        </tr>
+      </thead>
+      <tbody id="app-rows"></tbody>
+    </table>
+  </section>
   <section aria-labelledby="history-h">
     <h2 id="history-h" data-i18n="history">安全側へ通過した履歴（不明な箇所）</h2>
     <div id="history-summary"></div>
@@ -104,19 +134,15 @@
       <h2 id="funnel-h" data-i18n="funnel">判断が届いたか</h2>
       <div id="funnel" role="img" aria-label="選定から成果確認までの件数"></div>
     </section>
-    <section aria-labelledby="kind-h">
-      <h2 id="kind-h" data-i18n="kinds">Jevが働いた場所</h2>
-      <div id="kind-map" role="img" aria-label="処理分類ごとの件数"></div>
-    </section>
   </div>
   <section aria-labelledby="faq-h">
     <h2 id="faq-h">この画面だけで分かること</h2>
     <ol id="faq">
+      <li>スキル・MCP・プラグイン・モデルeffortは動きましたか？（Jevが働いた場所）</li>
       <li>Jev は今動いていますか？（概要の jev / local / passthrough）</li>
       <li>選定した能力は実際に適用されましたか？（可動個所と適用）</li>
       <li>適用されなかった理由は何ですか？（未適用の理由）</li>
       <li>トークンは増えたのか減ったのか、欠測なのか？（比較効果とトークン消費）</li>
-      <li>ローカル判断で Jev を呼ばなかったのは正常ですか？（正常なローカル省略）</li>
     </ol>
   </section>
   <section aria-labelledby="events-h">

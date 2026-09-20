@@ -171,6 +171,11 @@ func TestGatewayDashboard(t *testing.T) {
 	if _, ok := payload["router"]; !ok {
 		t.Fatalf("%v", payload)
 	}
+	metrics, _ := payload["metrics"].(map[string]any)
+	byClass, _ := metrics["by_class"].([]any)
+	if len(byClass) != 7 {
+		t.Fatalf("by_class=%v", metrics["by_class"])
+	}
 
 	bad := httptest.NewRequest(http.MethodGet, "/dashboard/events?since=-1", nil)
 	bad.RemoteAddr = "127.0.0.1:9"

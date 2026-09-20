@@ -382,7 +382,7 @@ func TestAutomaticApplicationLifecycle(t *testing.T) {
 		store, exec := NewAppStore(), &fakeExec{nextID: "mcp-1"}
 		route := plan.Route(plan.RouteRequest{RequestID: "plug-1", Text: "lookup", Host: host.Claude, Catalog: cat, Explicit: []string{pluginID}}, nil)
 		app, err := Apply(store, route, cat, bodies, nil, exec)
-		if err != nil || app.State != AppStarted || app.CallID != "mcp-1" || len(exec.calls) != 1 || exec.calls[0].Name != "lookup" {
+		if err != nil || app.State != AppStarted || app.CallID != "mcp-1" || app.PluginOf != pluginID || len(exec.calls) != 1 || exec.calls[0].Name != "lookup" {
 			t.Fatalf("plugin %+v err=%v calls=%+v", app, err, exec.calls)
 		}
 		zero := 0

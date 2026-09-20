@@ -74,6 +74,7 @@ func (l *lazyConnectDevin) record(frame, out []byte, stats RewriteStats, catalog
 		e.ToolBefore = stats.ToolBefore
 		e.ToolAfter = stats.ToolAfter
 		e.CompactApplied = stats.CompactApplied
+		e.ReasoningChanged = e.ReasoningChanged || stats.ReasoningChanged
 		e.CompactDropped = stats.CompactDropped
 		e.Catalog = mergeDevinCatalog(e.Catalog, catalog)
 		e.Protocol = stats.Protocol
