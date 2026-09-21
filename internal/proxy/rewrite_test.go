@@ -300,7 +300,7 @@ func TestRewriteSplitsJevConnectStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.ConnectStatus != jev.StatusCallFailed || stats.Reason != reasonCallFailed {
+	if stats.ConnectStatus != jev.StatusCallFailed || stats.Reason != reasonCallFailed+"_local" || !stats.Changed || stats.Source != sourceLocal {
 		t.Fatalf("api fail connect=%s reason=%s", stats.ConnectStatus, stats.Reason)
 	}
 

@@ -163,7 +163,7 @@ class SummarizeXCell(unittest.TestCase):
                 "go": "#!/bin/sh\nmkdir -p \"$(dirname \"$3\")\"\nprintf '%s\\n' '#!/bin/sh' 'shift; cli=$1; shift; shift; exec \"$cli\" \"$@\"' >\"$3\"\nchmod +x \"$3\"\n",
                 "codex": f"#!{sys.executable}\n" + "import json, os, sys\nfrom pathlib import Path\n"
                     + "with open(os.environ['ARGV_LOG'], 'a') as out: out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-                    + "if os.environ.get('JEV_RUN_STATS'): assert os.environ.get('JEV_REASONING') == 'preserve'\n"
+                    + "if os.environ.get('JEV_RUN_STATS'): assert os.environ.get('JEV_REASONING') == 'legacy'\n"
                     + "stats = {'reasoning': os.environ.get('JEV_REASONING'), 'selectionApplied': 1, 'compactionApplied': 1, 'compaction': 'on', 'events': [{'apply': 'filter', 'compactApplied': True, 'upstreamStatus': 200, 'upstreamFinish': 'complete'}]}\n"
                     + "if os.environ.get('JEV_RUN_STATS'): Path(os.environ['JEV_RUN_STATS']).write_text(json.dumps(stats))\n"
                     + "print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': " + repr(json.dumps(expected)) + "}}))\n"
@@ -177,20 +177,22 @@ class SummarizeXCell(unittest.TestCase):
                 proc = subprocess.run(["bash", str(scripts / "test-x-cell.sh"), host], cwd=root,
                                       env={**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
                                            "FAKE_EXIT": str(exit_code), "CODEX_MODEL": "gpt-5.6-terra",
-                                           "JEV_REASONING": "legacy",
+                    "JEV_REASONING": "legacy",
                                            "ARGV_LOG": str(root / "codex-argv.jsonl")}, capture_output=True, text=True)
                 self.assertEqual(proc.returncode, int(exit_code != 0), proc.stdout + proc.stderr)
+                self.assertIn("結果: ", proc.stdout, proc.stdout + proc.stderr)
                 run_path = Path(proc.stdout.split("結果: ", 1)[1].strip())
                 data = json.loads((run_path / host / "comparison.json").read_text())
                 self.assertEqual(data["valid"], exit_code == 0)
                 self.assertEqual(data["baseline"]["exit_code"], exit_code)
+                self.assertEqual(data["jev"]["events"], [{"apply": "filter", "compactApplied": True, "upstreamStatus": 200, "upstreamFinish": "complete"}])
                 if exit_code:
                     self.assertIsNone(data["reduction"])
                 if host == "codex":
                     for mode in ("baseline", "jev"):
                         self.assertEqual(data[mode]["model"], "gpt-5.6-terra")
                         self.assertEqual(data[mode]["effort"], "low")
-                        self.assertEqual(data[mode]["routing_reasoning"], "preserve" if mode == "jev" else None)
+                        self.assertEqual(data[mode]["routing_reasoning"], "legacy" if mode == "jev" else None)
             calls = [json.loads(line) for line in (root / "codex-argv.jsonl").read_text().splitlines()]
             self.assertEqual(len(calls), 4)
             for args in calls:

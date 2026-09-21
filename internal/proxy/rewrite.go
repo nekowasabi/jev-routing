@@ -264,6 +264,24 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.Changed = true
 		return out, stats, nil
 	}
+	localFallback := func() bool {
+		if opt.SelectionMode != SelectionJev || decision.Passthrough || decision.Tool == plan.Respond {
+			return false
+		}
+		available := map[string]bool{}
+		for _, tool := range tools {
+			if item, ok := tool.(map[string]any); ok {
+				available[toolNameOf(item)] = true
+			}
+		}
+		resolved := catalogAliasIn(available, decision.Tool)
+		if resolved == "" {
+			return false
+		}
+		decision.Tool = resolved
+		decision.Set = []string{resolved}
+		return true
+	}
 	if len(names) == 0 {
 		stats.Chosen = "passthrough:" + reasonNoCatalog
 		stats.Reason = reasonNoCatalog
@@ -301,9 +319,14 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 			stats.Chosen = "passthrough"
 			return withoutSelection()
 		}
-		stats.Reason = reasonKeyMissing
-		stats.Chosen = "passthrough:" + reasonKeyMissing
-		return withoutSelection()
+		if localFallback() {
+			// Why: A validated local decision keeps the catalog useful when JEV is unavailable.
+			stats.Reason = reasonKeyMissing + "_local"
+		} else {
+			stats.Reason = reasonKeyMissing
+			stats.Chosen = "passthrough:" + reasonKeyMissing
+			return withoutSelection()
+		}
 	}
 	if shouldAskJev && client != nil && client.Live() {
 		asked = true
@@ -314,21 +337,66 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		}())
 		if err != nil {
 			callErr = err
-			stats.Reason = reasonCallFailed
-			stats.Chosen = "passthrough:" + reasonCallFailed
-			return withoutSelection()
+			if localFallback() {
+				// Why: A failed remote selection must not discard a safe local choice.
+				stats.Reason = reasonCallFailed + "_local"
+			} else {
+				stats.Reason = reasonCallFailed
+				stats.Chosen = "passthrough:" + reasonCallFailed
+				return withoutSelection()
+			}
 		}
-		stats.Source = sourceJev
-		stats.Confidence = live.Confidence
-		stats.NeedsTool = live.Done
-		stats.LastActionFailed = live.LastFailed
-		decision = live
-		usedJev = true
-		if verr != "" {
-			stats.Reason = verr
+		if err == nil {
+			stats.Source = sourceJev
+			stats.Confidence = live.Confidence
+			stats.NeedsTool = live.Done
+			stats.LastActionFailed = live.LastFailed
+			decision = live
+			usedJev = true
+			if verr != "" {
+				stats.Reason = verr
+			}
+			if decision.Passthrough {
+				stats.Chosen = "passthrough:" + stats.Reason
+				stats.ToolAfter = stats.ToolBefore
+				stats.Done = decision.Done
+				stats.Gated = decision.Gated
+				return withoutSelection()
+			}
 		}
-		if decision.Passthrough {
-			stats.Chosen = "passthrough:" + stats.Reason
+	}
+
+	if decision.Passthrough || decision.Tool == plan.Respond {
+		if h == host.Claude && stats.Reason == reasonNoToolNeeded {
+			available := map[string]bool{}
+			for _, t := range tools {
+				if m, ok := t.(map[string]any); ok {
+					available[toolNameOf(m)] = true
+				}
+			}
+			var keep []string
+			for name := range toolReferences(msgs) {
+				if resolved := catalogAliasIn(available, name); resolved != "" {
+					keep = append(keep, resolved)
+				}
+			}
+			sort.Strings(keep)
+			if len(keep) > 0 {
+				// Why: Keep the already-referenced Claude tools after a final answer so the
+				// next turn retains the same reduced cache prefix instead of rebuilding it.
+				decision = plan.Decision{Tool: keep[0], Set: keep, Confidence: decision.Confidence}
+			} else {
+				stats.Chosen = "passthrough"
+				stats.ToolAfter = stats.ToolBefore
+				stats.Done = decision.Done
+				stats.Gated = decision.Gated
+				return withoutSelection()
+			}
+		} else {
+			if stats.Reason == "" {
+				stats.Reason = reasonLocalPassthrough
+			}
+			stats.Chosen = "passthrough"
 			stats.ToolAfter = stats.ToolBefore
 			stats.Done = decision.Done
 			stats.Gated = decision.Gated
@@ -336,20 +404,14 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		}
 	}
 
-	if decision.Passthrough || decision.Tool == plan.Respond {
-		if stats.Reason == "" {
-			stats.Reason = reasonLocalPassthrough
-		}
-		stats.Chosen = "passthrough"
-		stats.ToolAfter = stats.ToolBefore
-		stats.Done = decision.Done
-		stats.Gated = decision.Gated
-		return withoutSelection()
-	}
-
 	keep := decision.Set
 	if len(keep) == 0 {
 		keep = []string{decision.Tool}
+	}
+	if h == host.Claude && plan.SequentialLocate(user) {
+		// Why: Sequential Claude tasks alternate reads and shell searches. Keeping Bash
+		// from the first filtered request avoids changing the tool cache prefix mid-run.
+		keep = append(keep, "Bash")
 	}
 	available := map[string]bool{}
 	for _, t := range tools {

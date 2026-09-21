@@ -169,7 +169,7 @@ func sequentialAskStart(s string) int {
 }
 
 func preferLocateTool(specs []Spec) string {
-	var grep, read string
+	var grep, read, exec string
 	for _, s := range specs {
 		n := strings.ToLower(s.Name)
 		switch {
@@ -181,12 +181,19 @@ func preferLocateTool(specs []Spec) string {
 			if read == "" {
 				read = s.Name
 			}
+		case isExec(s.Name):
+			if exec == "" {
+				exec = s.Name
+			}
 		}
 	}
 	if grep != "" {
 		return grep
 	}
-	return read
+	if read != "" {
+		return read
+	}
+	return exec
 }
 
 func Native(h host.ID, claude string) string { return host.Native(h, claude) }
@@ -348,6 +355,25 @@ func decideFromGoals(request string, specs []Spec, set map[string]bool, goals []
 	return Decision{}, false
 }
 
+func goalAvailable(goals [][]string, set map[string]bool) bool {
+	for _, g := range goals {
+		for _, n := range g {
+			if AliasIn(set, n) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func actionUsed(actions []Action, name string) bool {
+	used := map[string]bool{}
+	for _, action := range actions {
+		used[action.Tool] = true
+	}
+	return AliasIn(used, name) != ""
+}
+
 func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Decision {
 	if pendingAgent(actions) {
 		return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.9, Outcome: OutcomeSelected, ReasonCode: ReasonPendingAgent}
@@ -392,6 +418,13 @@ func DecideSpecs(request string, actions []Action, specs []Spec, h host.ID) Deci
 		if d, ok := decideFromGoals(request, specs, set, goals, OutcomeSelected, ReasonSequentialLocate); ok {
 			d.Excluded = excluded
 			return d
+		}
+		if !goalAvailable(goals, set) {
+			if alt := preferLocateTool(specs); alt != "" && !actionUsed(actions, alt) {
+				return Decision{Tool: alt, Confidence: 0.86, Done: 0.08, Outcome: OutcomeSelected, ReasonCode: ReasonSequentialLocate, Excluded: excluded}
+			}
+			// Why: A completed locate step must not force its only remaining tool again.
+			return Decision{Tool: Respond, Done: 0, Passthrough: true, Confidence: 0.2, Outcome: OutcomeDefer, ReasonCode: ReasonUnknown, Excluded: excluded}
 		}
 		if alt := preferLocateTool(specs); alt != "" {
 			return Decision{Tool: alt, Confidence: 0.86, Done: 0.08, Outcome: OutcomeSelected, ReasonCode: ReasonSequentialLocate, Excluded: excluded}

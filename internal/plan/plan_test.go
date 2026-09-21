@@ -84,6 +84,21 @@ func TestDecideSpecsXCellAfterGrepPicksRead(t *testing.T) {
 	}
 }
 
+func TestDecideSpecsXCellUsesExecWhenItIsTheOnlyLocateTool(t *testing.T) {
+	d := DecideSpecs(xcellLocatePrompt, nil, []Spec{{Name: "exec", Desc: "Run a command"}, {Name: "wait"}, {Name: "request_user_input"}}, host.Codex)
+	if d.Tool != "exec" || d.Outcome != OutcomeSelected {
+		t.Fatalf("only shell-backed locate tool must be selected: %+v", d)
+	}
+}
+
+func TestDecideSpecsXCellDoesNotRepeatReadWhenGrepIsUnavailable(t *testing.T) {
+	specs := []Spec{{Name: "ToolSearch", Desc: "Find a tool"}, {Name: "Read", Desc: "Read a file"}}
+	d := DecideSpecs(xcellLocatePrompt, []Action{{Tool: "ToolSearch"}, {Tool: "Read"}}, specs, host.Claude)
+	if !d.Passthrough || d.Tool != Respond {
+		t.Fatalf("completed Read must not be forced again without a Grep candidate: %+v", d)
+	}
+}
+
 func TestDecideSpecsXCellJapaneseWithPreambleDoesNotPickRunSubagent(t *testing.T) {
 	preamble := strings.Repeat("You are Devin. Search the codebase thoroughly, explore relevant files, and delegate multi-step work with run_subagent. ", 20)
 	d := DecideSpecs(preamble+"\n"+xcellLocatePrompt, nil, xcellDevinSpecs(), host.Devin)

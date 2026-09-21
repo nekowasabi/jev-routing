@@ -19,9 +19,10 @@ if ((${#hosts[@]} == 0)); then
   hosts=(claude codex grok devin)
 fi
 
-# The ordinary x-cell remains the historical baseline-vs-Jev smoke check.
+# The ordinary x-cell exercises the production hybrid route, which is the default
+# used by every supported agent. The selection benchmark adds the other modes.
 # The selection benchmark asks the same host to run all four fixed conditions.
-modes=(baseline jev)
+modes=(baseline hybrid)
 if [[ "${JEV_SELECTION_BENCHMARK:-}" == "1" ]]; then
   modes=(baseline local jev hybrid)
 fi
@@ -72,19 +73,19 @@ PY
     claude:baseline)
       (cd "$worktree" && claude -p --output-format json --no-session-persistence --permission-mode bypassPermissions --disallowed-tools Agent -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
     claude:local|claude:jev|claude:hybrid)
-      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run claude -- -p --output-format json --no-session-persistence --permission-mode bypassPermissions --disallowed-tools Agent -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
+      (cd "$worktree" && JEV_COMPACTION=on JEV_REASONING=legacy JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run claude -- -p --output-format json --no-session-persistence --permission-mode bypassPermissions --disallowed-tools Agent -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
     codex:baseline)
       (cd "$worktree" && codex exec --json --ephemeral -s workspace-write --model "$CODEX_MODEL" -c 'model_reasoning_effort="low"' "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
     codex:local|codex:jev|codex:hybrid)
-      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run codex -- exec --json --ephemeral -s workspace-write --model "$CODEX_MODEL" -c 'model_reasoning_effort="low"' "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
+      (cd "$worktree" && JEV_COMPACTION=on JEV_REASONING=legacy JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run codex -- exec --json --ephemeral -s workspace-write --model "$CODEX_MODEL" -c 'model_reasoning_effort="low"' "$prompt" </dev/null) >"$raw" 2>"$case_dir/stderr.log" ;;
     grok:baseline)
       (cd "$worktree" && grok --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
     grok:local|grok:jev|grok:hybrid)
-      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run grok -- --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
+      (cd "$worktree" && JEV_COMPACTION=on JEV_REASONING=legacy JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run grok -- --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
     devin:baseline)
       (cd "$worktree" && devin --permission-mode dangerous --respect-workspace-trust false -p -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
     devin:local|devin:jev|devin:hybrid)
-      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run devin -- --permission-mode dangerous --respect-workspace-trust false -p -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
+      (cd "$worktree" && JEV_COMPACTION=on JEV_REASONING=legacy JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run devin -- --permission-mode dangerous --respect-workspace-trust false -p -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
   esac
   exit_code=$?
   set -e
@@ -126,14 +127,15 @@ out = {
 }
 out["quality"] = live_quality(out, result, pathlib.Path(worktree), json.loads(pathlib.Path(expected_path).read_text()))
 out["proxy_stats"] = json.loads(pathlib.Path(proxy_path).read_text()) if pathlib.Path(proxy_path).exists() else {}
-out["routing_reasoning"] = out["proxy_stats"].get("reasoning") if mode != "baseline" else None
+out["events"] = out["proxy_stats"].get("events", []) if out["mode"] != "baseline" else []
+out["routing_reasoning"] = out["proxy_stats"].get("reasoning") if out["mode"] != "baseline" else None
 pathlib.Path(result_path).write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n")
 PY
   git worktree remove --force "$worktree" >/dev/null
 }
 
 summarize() {
-  local host=$1 baseline="$out_dir/$host/baseline/result.json" jev="$out_dir/$host/jev/result.json"
+  local host=$1 baseline="$out_dir/$host/baseline/result.json" jev="$out_dir/$host/hybrid/result.json"
   local acceptance
   acceptance=$(PYTHONPATH="$root/scripts" python3 - "$baseline" "$jev" <<'PY'
 import json, pathlib, sys
