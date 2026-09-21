@@ -4,7 +4,7 @@
 
 ## これは何か
 
-jev-routing は、コーディングエージェント CLI（Claude Code / Codex / Grok Build / Cursor Agent CLI / Devin CLI）と上流 LLM API の間に挟むローカルプロキシです。エージェントを置き換えるのではなく、エージェントが送るリクエストをそのまま受け取り、送信直前に整えてから上流へ渡します。
+jev-routing は、コーディングエージェント CLI（Claude Code / Codex / Grok Build / Devin CLI）と上流 LLM API の間に挟むローカルプロキシです。エージェントを置き換えるのではなく、エージェントが送るリクエストをそのまま受け取り、送信直前に整えてから上流へ渡します。
 
 エージェントの CLI は、ターンが進むほど「全ツールのスキーマ」「肥大した tool 実行履歴」「前ステップの thinking」を毎回そのまま送り続けます。この積み上がりが、遅さ・トークン消費・ツール誤選択の主因です。jev-routing はそこに次の 4 つを入れます。
 
@@ -24,7 +24,7 @@ jev-routing は、コーディングエージェント CLI（Claude Code / Codex
 
 ---
 
-Claude Code / Codex / **Grok Build** / **Cursor Agent CLI** / **Devin CLI** 向けの Jev ハーネス。単一の Go バイナリです。
+Claude Code / Codex / **Grok Build** / **Devin CLI** 向けの Jev ハーネス。単一の Go バイナリです。
 
 このバイナリはリクエスト前に:
 
@@ -61,7 +61,6 @@ export TYPESAFE_API_KEY=ts_...    # https://console.typesafe.ai/settings/keys
 jev-routing run grok              # GROK_CLI_CHAT_PROXY_BASE_URL をプロキシへ
 jev-routing run claude            # ANTHROPIC_BASE_URL をプロキシへ
 jev-routing run codex             # OpenAI ログインでプロキシへ接続
-jev-routing run cursor            # CURSOR_API_ENDPOINT と --endpoint をプロキシへ
 jev-routing run devin             # DEVIN_API_URL をプロキシへ
 jev-routing route --json < request.json   # ateam / 診断。モデル選定を JSON で返す
 ```
@@ -80,7 +79,7 @@ jev-routing run --tmux codex
 
 接続中の tmux 内なら、現在の pane でホストを起動するため、tmux をネストせず pane border は一重のままです。tmux 外、または古い `TMUX` 環境変数だけが残った状態からは、実行ごとに独立した tmux セッションを作成します。
 
-既存の `grok login` / `claude login` / `codex login` / `cursor-agent login` / `devin auth` はそのままです。
+既存の `grok login` / `claude login` / `codex login` / `devin auth` はそのままです。
 
 手で環境を書く場合:
 
@@ -96,11 +95,6 @@ unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 jev-routing serve --host claude &
 claude
-
-# Cursor Agent CLI
-export CURSOR_API_ENDPOINT=http://127.0.0.1:8787
-jev-routing serve --host cursor &
-cursor-agent
 
 # Devin CLI
 export DEVIN_API_URL=http://127.0.0.1:8787
@@ -121,7 +115,7 @@ requires_openai_auth = true
 ```
 
 
-Cursor Agent CLI は既定で `https://api2.cursor.sh` の Connect RPC（`/aiserver` / `/agent.v1`）に送ります。JSON の `tools[]` または `mcpTools` を含む POST を書き換え、protobuf 本体はそのまま上流へ渡します。Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`・`/sessions` および `prompt`/`message` + `tools[]` JSON を想定しています。Codex ChatGPT ログインは Responses Lite の `input` 内にある `additional_tools` から `functions` 名前空間を展開し、元の位置を保ってローカルツールを絞ります。外部名前空間と提供側の実行ツールは残します。
+Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`・`/sessions` および `prompt`/`message` + `tools[]` JSON を想定しています。Codex ChatGPT ログインは Responses Lite の `input` 内にある `additional_tools` から `functions` 名前空間を展開し、元の位置を保ってローカルツールを絞ります。外部名前空間と提供側の実行ツールは残します。
 
 ## Compaction
 
@@ -144,24 +138,23 @@ jev-routing compact < transcript.json
 
 プロキシはリクエストに含まれる実行時カタログを正本にし、未知のツールを生成しません。下表は選択ロジックが役割を対応付ける組み込み名です。MCP・Skills・Pluginsが追加するツールは、実行時カタログの名前をそのまま扱います。
 
-| 役割 | Claude Code | Codex | Grok Build | Cursor Agent | Devin CLI |
-|---|---|---|---|---|---|
-| 読み取り | Read | read_file | read_file | Read File | read |
-| 編集 | Edit | apply_patch | search_replace | Edit & Reapply | edit |
-| 書き込み | Write | add_file | write | Edit & Reapply | write |
-| シェル | Bash | exec_command | run_terminal_cmd | Terminal | exec |
-| 検索 | Grep / Glob | grep_files / list_dir | grep_search / list_dir | Grep / Search Files / Codebase | grep / glob |
-| Web | WebSearch / WebFetch | web_search / web_fetch | web_search / web_fetch | Web | web_search / webfetch |
-| サブエージェント | Agent | spawn_agent | task | — | run_subagent / read_subagent |
-| タスク管理 | TodoWrite | update_plan | todo_write / get_task_output / kill_task | — | todo_write |
-| MCP | ToolSearch / MCPツール | `mcp__<server>__<tool>` | search_tool / use_tool | 設定済みMCPツール | mcp_list_tools / mcp_call_tool / mcp_read_resource |
+| 役割 | Claude Code | Codex | Grok Build | Devin CLI |
+|---|---|---|---|---|
+| 読み取り | Read | read_file | read_file | read |
+| 編集 | Edit | apply_patch | search_replace | edit |
+| 書き込み | Write | add_file | write | write |
+| シェル | Bash | exec_command | run_terminal_cmd | exec |
+| 検索 | Grep / Glob | grep_files / list_dir | grep_search / list_dir | grep / glob |
+| Web | WebSearch / WebFetch | web_search / web_fetch | web_search / web_fetch | web_search / webfetch |
+| サブエージェント | Agent | spawn_agent | task | run_subagent / read_subagent |
+| タスク管理 | TodoWrite | update_plan | todo_write / get_task_output / kill_task | todo_write |
+| MCP | ToolSearch / MCPツール | `mcp__<server>__<tool>` | search_tool / use_tool | mcp_list_tools / mcp_call_tool / mcp_read_resource |
 
 ### 製品別の範囲
 
 - [Claude Code](https://code.claude.com/docs/en/tools-reference): `tool_use` / `tool_result` の履歴形式を受理します。組み込み名は実行環境・機能フラグで変化するため、固定の許可リストにはしません。
 - Codex: `functions.*`、`custom_tool_call`、Responsesの組み込みツールおよびMCP呼び出しの履歴形式を受理します。
 - [Grok Build](https://docs.x.ai/build/features/permissions): `read_file`、`search_replace`、`grep_search`、`list_dir`、`run_terminal_cmd`、`web_search`、`web_fetch`、`todo_write`、`task`、`kill_task`、`get_task_output`、`memory_search`、`memory_get`、`search_tool`、`use_tool`、`lsp`、条件付きの`write`を実行時カタログから扱います。
-- [Cursor Agent](https://cursor.com/ja/docs/agent/overview#tools): ファイル・フォルダー検索、Web、ルール取得、読取、編集、ターミナル、ブラウザ、画像生成、質問、MCPを実行時カタログから扱います。CLIの`stream-json`は観測出力であり、会話履歴には混在させません。
 - [Devin CLI](https://docs.devin.ai/cli/reference/permissions#tool-based-permissions): `read`、`write`、`edit`、`apply_patch`、ノートブック、検索、シェル、`webfetch`、タスク、Skills、サブエージェント、権限、MCP管理ツールを実行時カタログから扱います。ATIFエクスポート形式は公開スキーマが確認できるまで履歴判定へ推測追加しません。
 
 履歴形式は、Claudeの`tool_use` / `tool_result`、Codex・Responsesの`*_call`、MCPの`mcp_call`を明示的に受理します。画像を含む履歴は安全側で通過します。
@@ -227,7 +220,7 @@ bash scripts/test-x-cell.sh --summarize scripts/testdata/x-cell
 通常テストには含めません。各対象を同じコミットから作る別 worktree で 1 回ずつ実行し、素の CLI と `jev-routing` 経由のトークン使用量・経過時間を JSON で保存します。
 
 ```bash
-make test-x-cell           # Claude Code → Codex → Grok Build → Cursor → Devin
+make test-x-cell           # Claude Code → Codex → Grok Build → Devin
 make test-x-cell claude    # 1 製品だけ
 make test-selection-benchmark claude # baseline/local/jev/hybrid を1製品で比較
 ```

@@ -4,7 +4,7 @@
 
 ## What this is
 
-jev-routing is a local proxy that sits between a coding-agent CLI (Claude Code / Codex / Grok Build / Cursor Agent CLI / Devin CLI) and the upstream LLM API. It does not replace the agent: it accepts the requests the agent already sends, reshapes them right before they go out, and forwards them upstream.
+jev-routing is a local proxy that sits between a coding-agent CLI (Claude Code / Codex / Grok Build / Devin CLI) and the upstream LLM API. It does not replace the agent: it accepts the requests the agent already sends, reshapes them right before they go out, and forwards them upstream.
 
 Agent CLIs keep resending the same growing payload every turn: the full tool schema catalog, a swollen history of tool calls and results, and the previous step's thinking. That accumulation is the main source of latency, token spend, and wrong tool picks. jev-routing inserts four things at that point.
 
@@ -24,7 +24,7 @@ What you get from adopting it:
 
 ---
 
-A Jev harness for Claude Code / Codex / **Grok Build** / **Cursor Agent CLI** / **Devin CLI**. A single Go binary.
+A Jev harness for Claude Code / Codex / **Grok Build** / **Devin CLI**. A single Go binary.
 
 Before each request, the binary:
 
@@ -61,7 +61,6 @@ export TYPESAFE_API_KEY=ts_...    # https://console.typesafe.ai/settings/keys
 jev-routing run grok              # GROK_CLI_CHAT_PROXY_BASE_URL をプロキシへ
 jev-routing run claude            # ANTHROPIC_BASE_URL をプロキシへ
 jev-routing run codex             # OpenAI ログインでプロキシへ接続
-jev-routing run cursor            # CURSOR_API_ENDPOINT と --endpoint をプロキシへ
 jev-routing run devin             # DEVIN_API_URL をプロキシへ
 jev-routing route --json < request.json   # ateam / 診断。モデル選定を JSON で返す
 ```
@@ -80,7 +79,7 @@ jev-routing run --tmux codex
 
 Inside an attached tmux session it launches the host in the current pane, so tmux is not nested and the pane border stays single. From outside tmux, or from a state where only a stale `TMUX` environment variable remains, it creates an independent tmux session per run.
 
-Your existing `grok login` / `claude login` / `codex login` / `cursor-agent login` / `devin auth` keep working as they are.
+Your existing `grok login` / `claude login` / `codex login` / `devin auth` keep working as they are.
 
 To set the environment by hand:
 
@@ -96,11 +95,6 @@ unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 jev-routing serve --host claude &
 claude
-
-# Cursor Agent CLI
-export CURSOR_API_ENDPOINT=http://127.0.0.1:8787
-jev-routing serve --host cursor &
-cursor-agent
 
 # Devin CLI
 export DEVIN_API_URL=http://127.0.0.1:8787
@@ -121,7 +115,7 @@ requires_openai_auth = true
 ```
 
 
-By default Cursor Agent CLI sends to the Connect RPC endpoints (`/aiserver` / `/agent.v1`) at `https://api2.cursor.sh`. POSTs whose JSON contains `tools[]` or `mcpTools` are rewritten; protobuf bodies are forwarded upstream untouched. Devin CLI is assumed to use `/messages` and `/sessions` under `DEVIN_API_URL` (default `https://api.devin.ai`), with `prompt`/`message` + `tools[]` JSON. For Codex ChatGPT login, the `functions` namespace is expanded from `additional_tools` inside the Responses Lite `input`, and local tools are narrowed while keeping their original position. External namespaces and provider-side execution tools are left in place.
+Devin CLI is assumed to use `/messages` and `/sessions` under `DEVIN_API_URL` (default `https://api.devin.ai`), with `prompt`/`message` + `tools[]` JSON. For Codex ChatGPT login, the `functions` namespace is expanded from `additional_tools` inside the Responses Lite `input`, and local tools are narrowed while keeping their original position. External namespaces and provider-side execution tools are left in place.
 
 ## Compaction
 
@@ -144,24 +138,23 @@ jev-routing compact < transcript.json
 
 The proxy treats the runtime catalog included in the request as the source of truth and never invents unknown tools. The table below lists the built-in names the selection logic maps to roles. Tools added by MCP, Skills, and Plugins are handled under the names given in the runtime catalog.
 
-| Role | Claude Code | Codex | Grok Build | Cursor Agent | Devin CLI |
-|---|---|---|---|---|---|
-| Read | Read | read_file | read_file | Read File | read |
-| Edit | Edit | apply_patch | search_replace | Edit & Reapply | edit |
-| Write | Write | add_file | write | Edit & Reapply | write |
-| Shell | Bash | exec_command | run_terminal_cmd | Terminal | exec |
-| Search | Grep / Glob | grep_files / list_dir | grep_search / list_dir | Grep / Search Files / Codebase | grep / glob |
-| Web | WebSearch / WebFetch | web_search / web_fetch | web_search / web_fetch | Web | web_search / webfetch |
-| Subagent | Agent | spawn_agent | task | — | run_subagent / read_subagent |
-| Task management | TodoWrite | update_plan | todo_write / get_task_output / kill_task | — | todo_write |
-| MCP | ToolSearch / MCP tools | `mcp__<server>__<tool>` | search_tool / use_tool | configured MCP tools | mcp_list_tools / mcp_call_tool / mcp_read_resource |
+| Role | Claude Code | Codex | Grok Build | Devin CLI |
+|---|---|---|---|---|
+| Read | Read | read_file | read_file | read |
+| Edit | Edit | apply_patch | search_replace | edit |
+| Write | Write | add_file | write | write |
+| Shell | Bash | exec_command | run_terminal_cmd | exec |
+| Search | Grep / Glob | grep_files / list_dir | grep_search / list_dir | grep / glob |
+| Web | WebSearch / WebFetch | web_search / web_fetch | web_search / web_fetch | web_search / webfetch |
+| Subagent | Agent | spawn_agent | task | run_subagent / read_subagent |
+| Task management | TodoWrite | update_plan | todo_write / get_task_output / kill_task | todo_write |
+| MCP | ToolSearch / MCP tools | `mcp__<server>__<tool>` | search_tool / use_tool | mcp_list_tools / mcp_call_tool / mcp_read_resource |
 
 ### Scope per product
 
 - [Claude Code](https://code.claude.com/docs/en/tools-reference): the `tool_use` / `tool_result` history shapes are accepted. Built-in names vary with the runtime and feature flags, so they are not kept as a fixed allow list.
 - Codex: the history shapes for `functions.*`, `custom_tool_call`, the Responses built-in tools, and MCP calls are accepted.
 - [Grok Build](https://docs.x.ai/build/features/permissions): `read_file`, `search_replace`, `grep_search`, `list_dir`, `run_terminal_cmd`, `web_search`, `web_fetch`, `todo_write`, `task`, `kill_task`, `get_task_output`, `memory_search`, `memory_get`, `search_tool`, `use_tool`, `lsp`, and conditionally `write` are handled from the runtime catalog.
-- [Cursor Agent](https://cursor.com/ja/docs/agent/overview#tools): file and folder search, Web, rule retrieval, read, edit, terminal, browser, image generation, ask, and MCP are handled from the runtime catalog. The CLI's `stream-json` is observation output and is never mixed into the conversation history.
 - [Devin CLI](https://docs.devin.ai/cli/reference/permissions#tool-based-permissions): `read`, `write`, `edit`, `apply_patch`, notebooks, search, shell, `webfetch`, tasks, Skills, subagents, permissions, and MCP management tools are handled from the runtime catalog. The ATIF export format will not be added to the history judgment on speculation until its public schema can be confirmed.
 
 For history shapes, Claude's `tool_use` / `tool_result`, the `*_call` shapes of Codex and Responses, and MCP's `mcp_call` are explicitly accepted. History containing images passes through on the safe side.
@@ -227,7 +220,7 @@ bash scripts/test-x-cell.sh --summarize scripts/testdata/x-cell
 This is not part of the normal test suite. Each target is run once in a separate worktree built from the same commit, and the token usage and elapsed time of the bare CLI versus going through `jev-routing` are saved as JSON.
 
 ```bash
-make test-x-cell           # Claude Code → Codex → Grok Build → Cursor → Devin
+make test-x-cell           # Claude Code → Codex → Grok Build → Devin
 make test-x-cell claude    # 1 製品だけ
 make test-selection-benchmark claude # baseline/local/jev/hybrid を1製品で比較
 ```

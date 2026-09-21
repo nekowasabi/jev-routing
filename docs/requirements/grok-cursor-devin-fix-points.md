@@ -1,5 +1,7 @@
 # Grok・Cursor CLI・Devin CLI の修正ポイント
 
+> 2026-09-21: Cursor CLI（`cursor-agent`）対応は取り下げた。以下の Cursor 節は当時の調査記録である。
+
 調査日: 2026-09-19。対象は現在の作業ツリーとインストール済みCLI。製品コードの修正・課金を伴うライブ推論は実施していない。Cursor CLI は、このリポジトリが起動する `cursor-agent` を指す。
 
 目的は、Claude／Codexと同様に、既定の `filter` モードでツール候補の選択と履歴圧縮を実際に適用し、同じ課題を正常に完了させること。`forced`／`direct` の追加対応は別件とする。

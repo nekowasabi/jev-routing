@@ -2,7 +2,7 @@
 
 ## 目的
 
-Claude Code、Codex、Grok Build、Cursor CLI、Devin CLI のライブツールカタログと
+Claude Code、Codex、Grok Build、Devin CLI のライブツールカタログと
 `jev-routing` の選定・フィルタ結果が一致し、必要なツールが実行時に失われないことを
 確認する。判定器の選定品質より、実行可能性を優先する。
 
@@ -39,7 +39,6 @@ Claude Code、Codex、Grok Build、Cursor CLI、Devin CLI のライブツール�
 | Claude Code | `Bash` / `Read` / `Grep` / `Edit` / `Agent` | `Bash` / `Read` / `Grep` / `Edit` / `Agent` |
 | Codex | `exec_command` / `read_file` / `grep_files` / `apply_patch` / `spawn_agent` | 実際に提供された名称 |
 | Grok Build | `run_terminal_cmd` / `read_file` / `grep_search` / `task` | `run_terminal_command` / `grep` / `spawn_subagent` を含め実際に提供された名称 |
-| Cursor CLI | `Shell` / `Read` / `Write` / `Task` | 実際に提供された名称と大文字小文字 |
 | Devin CLI | `exec` / `read` / `edit` / `run_subagent` | `Shell` / `Read` / `Grep` / `Write` を含め実際に提供された名称 |
 
 「想定ライブ名」は確定値ではない。実機で観測した名称を正本にする。
@@ -58,7 +57,7 @@ Claude Code、Codex、Grok Build、Cursor CLI、Devin CLI のライブツール�
 | TC-08 | ateam配送 | Codex と Grok Build を別 `run_id` で起動し、短い返信を依頼する | 別mailboxで受信し、通常TUIが表示される | `run_id` / mailbox / 返信 |
 | TC-09 | 終了分離 | TC-08 の片方だけ `close <run_id>` を実行する | 他方のTUI・mailbox・状態は残る | 終了前後の状態 |
 
-TC-02〜TC-07 は各ホストで実施する。Cursor CLI または Devin CLI が利用不可なら、
+TC-02〜TC-07 は各ホストで実施する。Devin CLI が利用不可なら、
 「未実施（実機なし）」とし、推測で合格にしない。
 
 ## 判定表
@@ -108,7 +107,7 @@ TC-02〜TC-07 は各ホストで実施する。Cursor CLI または Devin CLI �
 | 判断 | 正規形から必要能力を選ぶ | Jev / `internal/plan` |
 | 投影 | 正規形をライブツール名へ解決する | `catalogAliasIn` |
 | 安全策 | 解決不能時に候補を削らない | `alias_unresolved` |
-| 実行 | ホストが提供する実ツールを呼ぶ | Claude Code / Codex / Grok / Cursor / Devin |
+| 実行 | ホストが提供する実ツールを呼ぶ | Claude Code / Codex / Grok / Devin |
 | 証拠 | カタログ・判断・実行結果を同時に残す | ホスト画面 / `run.log` / 回帰試験 |
 
 Jev は候補選定だけを担い、ライブ名の照合・失敗開放・副作用の実行はコードが担う。
