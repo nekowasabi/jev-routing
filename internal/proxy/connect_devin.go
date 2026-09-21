@@ -78,8 +78,9 @@ func (l *lazyConnectDevin) record(frame, out []byte, stats RewriteStats, catalog
 		e.CompactDropped = stats.CompactDropped
 		e.Catalog = mergeDevinCatalog(e.Catalog, catalog)
 		e.Protocol = stats.Protocol
+		copyDecisionRecord(e, stats)
 	})
-	l.s.applyConnectCursorStats(stats, len(frame), len(out))
+	l.s.applyConnectStats(stats, len(frame), len(out))
 	if l.s.Log != nil && stats.Reason != "" && stats.Reason != reasonStream {
 		l.s.Log.Print(FormatStats(stats))
 	}

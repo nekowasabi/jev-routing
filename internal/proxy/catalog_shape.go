@@ -1,11 +1,7 @@
 package proxy
 
 import (
-	"bytes"
-	"compress/gzip"
 	"encoding/json"
-	"fmt"
-	"io"
 	"sort"
 	"strings"
 )
@@ -104,47 +100,6 @@ func countContentTypes(value any, counts map[string]int) {
 	}
 }
 
-func countOpaquePromptStrings(root map[string]any, historyTypes map[string]int) {
-	for _, stateKey := range []string{"conversationState", "conversation_state"} {
-		state, ok := root[stateKey].(map[string]any)
-		if !ok {
-			continue
-		}
-		for _, msgKey := range []string{"rootPromptMessagesJson", "root_prompt_messages_json"} {
-			for _, el := range asSlice(state[msgKey]) {
-				s, ok := el.(string)
-				if !ok {
-					continue
-				}
-				var obj map[string]any
-				if json.Unmarshal([]byte(s), &obj) != nil || obj == nil {
-					historyTypes[opaquePromptClass(s)]++
-				}
-			}
-		}
-	}
-}
-
-func opaquePromptClass(s string) string {
-	if len(s) == 0 {
-		return "opaque_empty"
-	}
-	trimmed := strings.TrimSpace(s)
-	if strings.HasPrefix(trimmed, "[") {
-		return "opaque_array"
-	}
-	if strings.HasPrefix(trimmed, "{") {
-		return "opaque_brace"
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < 0x20 && c != '\t' && c != '\n' && c != '\r' {
-			return "opaque_binary"
-		}
-	}
-	return "opaque_text"
-}
-
 func catalogShape(body []byte) *CatalogShape {
 	var root map[string]any
 	if json.Unmarshal(body, &root) != nil || root == nil {
@@ -178,69 +133,10 @@ func catalogShape(body []byte) *CatalogShape {
 			}
 		}
 	}
-	countOpaquePromptStrings(root, historyTypes)
 	keys := shapeKeys(root)
-	if historyTypes["opaque_binary"] > 0 {
-		if extra := firstOpaqueProtoKeys(root); len(extra) > 0 {
-			keys = append(keys, extra...)
-			sort.Strings(keys)
-		}
-	}
 	return &CatalogShape{Keys: keys, ToolsType: shapeType(root["tools"]), Location: location,
 		RawCount: len(raw), FlatCount: len(flat), Candidates: len(filterableTools(flat)),
 		Definitions: toolShapes(raw, 2), HistoryTypes: historyTypes, ContentTypes: contentTypes,
 		DeferredCount: shape.DeferredCount, ToolSearchPresent: shape.ToolSearchPresent,
 		DeferredPlaceholderPresent: shape.DeferredPlaceholderPresent, SystemReminders: shape.SystemReminders}
-}
-
-func firstOpaqueProtoKeys(root map[string]any) []string {
-	for _, stateKey := range []string{"conversationState", "conversation_state"} {
-		state, ok := root[stateKey].(map[string]any)
-		if !ok {
-			continue
-		}
-		for _, msgKey := range []string{"rootPromptMessagesJson", "root_prompt_messages_json"} {
-			for _, el := range asSlice(state[msgKey]) {
-				s, ok := el.(string)
-				if !ok || opaquePromptClass(s) != "opaque_binary" {
-					continue
-				}
-				raw := []byte(s)
-				keys := protoFieldKeyList(raw)
-				if len(keys) == 0 && len(raw) >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
-					if dec, err := gzip.NewReader(bytes.NewReader(raw)); err == nil {
-						out, _ := io.ReadAll(dec)
-						_ = dec.Close()
-						keys = protoFieldKeyList(out)
-					}
-				}
-				if len(keys) == 0 && len(raw) > 5 {
-					keys = protoFieldKeyList(raw[5:])
-				}
-				return keys
-			}
-		}
-	}
-	return nil
-}
-
-func protoFieldKeyList(raw []byte) []string {
-	fields, ok := parseProtoFields(raw)
-	if !ok || len(fields) == 0 {
-		return nil
-	}
-	counts := map[int]int{}
-	for _, f := range fields {
-		counts[f.field]++
-	}
-	keys := make([]string, 0, len(counts))
-	for n, c := range counts {
-		if c > 1 {
-			keys = append(keys, fmt.Sprintf("opaque_p%dx%d", n, c))
-		} else {
-			keys = append(keys, fmt.Sprintf("opaque_p%d", n))
-		}
-	}
-	sort.Strings(keys)
-	return keys
 }

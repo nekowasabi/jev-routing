@@ -3,12 +3,13 @@ package main
 import (
 	"net"
 	"testing"
-	"time"
+
+	"github.com/nekowasabi/jev-routing/internal/host"
 )
 
-func TestHTTPServerReadTimeout(t *testing.T) {
-	if got, want := newHTTPServer(nil).ReadTimeout, 30*time.Second; got != want {
-		t.Fatalf("ReadTimeout = %s, want %s", got, want)
+func TestHTTPServerOmitsReadTimeout(t *testing.T) {
+	if got := newHTTPServer(nil).ReadTimeout; got != 0 {
+		t.Fatalf("ReadTimeout = %s, want 0 (unlimited body for bidi streams)", got)
 	}
 }
 
@@ -26,5 +27,14 @@ func TestListenForRunFallsBackWhenDefaultPortIsBusy(t *testing.T) {
 	defer ln.Close()
 	if ln.Addr().String() == "127.0.0.1:8787" {
 		t.Fatal("expected an available port when 8787 is busy")
+	}
+}
+
+func TestServeRejectsMissingRequiredJevKey(t *testing.T) {
+	t.Setenv("JEV_SELECTION_MODE", "jev")
+	t.Setenv("JEV_API_KEY", "")
+	t.Setenv("TYPESAFE_API_KEY", "")
+	if code := serve(host.Grok, "127.0.0.1:0"); code != 2 {
+		t.Fatalf("code=%d", code)
 	}
 }

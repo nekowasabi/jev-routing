@@ -47,6 +47,8 @@ type Decision struct {
 	// ReasonCode is the local branch that produced Outcome.
 	ReasonCode string
 	Excluded   []string
+	// Probabilities is the full classifier distribution when known.
+	Probabilities map[string]float64
 }
 
 type Rank struct {

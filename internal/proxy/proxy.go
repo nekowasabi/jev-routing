@@ -58,35 +58,12 @@ type Server struct {
 	RequestRoutes       map[string]int
 	RequestContentTypes map[string]int
 
-	cursorAgentHost string
-	cursorTask      string
-
 	Catalog       plan.Catalog
 	SkillBodies   map[string]string
 	Executor      HostExecutor
 	Apps          *AppStore
 	ApplyErr      string
 	LastDelivered string
-}
-
-func (s *Server) setCursorTask(task string) {
-	if s == nil || strings.TrimSpace(task) == "" {
-		return
-	}
-	s.mu.Lock()
-	if s.cursorTask == "" {
-		s.cursorTask = task
-	}
-	s.mu.Unlock()
-}
-
-func (s *Server) cursorTaskCopy() string {
-	if s == nil {
-		return ""
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cursorTask
 }
 
 func (s *Server) RequestCount() int {
@@ -273,11 +250,6 @@ func DefaultUpstream(h host.ID) string {
 			return u
 		}
 		return "https://chatgpt.com/backend-api/codex"
-	case host.Cursor:
-		if u := os.Getenv("CURSOR_UPSTREAM"); u != "" {
-			return u
-		}
-		return "https://api2.cursor.sh"
 	case host.Devin:
 		if u := os.Getenv("DEVIN_UPSTREAM"); u != "" {
 			return u
@@ -431,12 +403,8 @@ func (s *Server) Handler() http.Handler {
 			r.URL.RawPath = strings.TrimPrefix(r.URL.RawPath, "/v1")
 		}
 		orig(r)
-		if s.rewriteStreamingAgentURL(r) {
-			r.Header.Set("host", r.Host)
-		} else {
-			r.Host = s.Upstream.Host
-			r.Header.Set("host", s.Upstream.Host)
-		}
+		r.Host = s.Upstream.Host
+		r.Header.Set("host", s.Upstream.Host)
 		r.Header.Del("Accept-Encoding")
 	}
 	proxy.ModifyResponse = func(res *http.Response) error {
@@ -454,7 +422,6 @@ func (s *Server) Handler() http.Handler {
 				if len(hosts) == 0 {
 					return
 				}
-				s.rememberCursorAgentHost(hosts)
 				s.events.Update(seq, func(e *Event) {
 					e.URLHosts = mergeHosts(e.URLHosts, hosts)
 				})
@@ -462,6 +429,12 @@ func (s *Server) Handler() http.Handler {
 		}
 		res.Body = wrapBodyObserve(res.Body, func(raw []byte) {
 			s.observeResponse(raw)
+			if tools := extractObservedTools(raw); len(tools) > 0 {
+				s.events.Update(seq, func(e *Event) {
+					e.ObservedTools = mergeObservedTools(e.ObservedTools, tools)
+					markObservedCoverage(e)
+				})
+			}
 		})
 		res.Body = wrapUsage(res.Body, ct, func(u *NormalizedUsage, partial bool, missing, finish string) {
 			bodyMs := time.Since(started).Seconds() * 1000
@@ -503,7 +476,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.RequestRoutes[r.Method+" "+r.URL.Path]++
 		s.mu.Unlock()
-		if r.Method == http.MethodPost && (looksStreamingAgent(r.URL.Path) || looksDevinInference(r.URL.Path)) {
+		if r.Method == http.MethodPost && looksDevinInference(r.URL.Path) {
 			ct := clipEvent(r.Header.Get("Content-Type"))
 			s.mu.Lock()
 			s.Requests++
@@ -530,11 +503,7 @@ func (s *Server) Handler() http.Handler {
 			ctx = context.WithValue(ctx, reqStartKey{}, time.Now())
 			ctx = jev.WithAttemptHook(ctx, s.connectJevAttemptHook(ev.Seq))
 			r = r.WithContext(ctx)
-			if looksStreamingAgent(r.URL.Path) && s.Host == host.Cursor && connectCursorContentType(ct) {
-				r.Body = wrapConnectCursorBody(r.Body, s, ev.Seq, r.Context())
-				r.ContentLength = -1
-				r.Header.Del("Content-Length")
-			} else if looksDevinInference(r.URL.Path) && connectCursorContentType(ct) {
+			if looksDevinInference(r.URL.Path) && connectContentType(ct) {
 				r.Body = wrapConnectDevinBody(r.Body, s, ev.Seq, r.Context())
 				r.ContentLength = -1
 				r.Header.Del("Content-Length")
@@ -561,7 +530,6 @@ func (s *Server) Handler() http.Handler {
 			var urlHosts []string
 			if !origJSON {
 				urlHosts = protoURLHosts(raw)
-				s.rememberCursorAgentHost(urlHosts)
 			}
 			var attemptsMu sync.Mutex
 			var attempts []JevAttempt
@@ -644,48 +612,20 @@ func (s *Server) Handler() http.Handler {
 				s.CharsAfter += len(raw)
 				s.mu.Unlock()
 			}
-			ev := Event{
-				Host:               string(s.Host),
-				Source:             stats.Source,
-				Reason:             stats.Reason,
-				Apply:              stats.Apply,
-				Chosen:             stats.Chosen,
-				Changed:            stats.Changed,
-				OriginalModel:      stats.OriginalModel,
-				SentModel:          stats.SentModel,
-				ToolBefore:         stats.ToolBefore,
-				ToolAfter:          stats.ToolAfter,
-				ToolsBefore:        stats.ToolsBefore,
-				ToolsAfter:         stats.ToolsAfter,
-				HistoryTypes:       stats.HistoryTypes,
-				UnsupportedHistory: stats.UnsupportedHistory,
-				HistoryIssues:      stats.HistoryIssues,
-				CompactDropped:     stats.CompactDropped,
-				CompactApplied:     stats.CompactApplied,
-				ReasoningChanged:   stats.ReasoningChanged,
-				RequestPath:        r.URL.Path,
-				Method:             r.Method,
-				ContentType:        ct,
-				BodyBytes:          origBytes,
-				JsonValid:          &origJSON,
-				URLHosts:           urlHosts,
-				Catalog:            shape,
-				JevAttempts:        attempts,
-				JevCalls:           jevHTTP,
-				SelectionJevCalls:  selectionJevCalls(attempts),
-				OtherJevCalls:      jevHTTP - selectionJevCalls(attempts),
-				JevCached:          jevCache,
-				JevFailed:          jevFail,
-				Protocol:           stats.Protocol,
-			}
-			if stats.Source != "" {
-				c := stats.Confidence
-				ev.Confidence = &c
-			}
-			if stats.NeedsTool != 0 || stats.Source == sourceJev {
-				n := stats.NeedsTool
-				ev.NeedsTool = &n
-			}
+			ev := EventFromStats(stats)
+			ev.RequestPath = r.URL.Path
+			ev.Method = r.Method
+			ev.ContentType = ct
+			ev.BodyBytes = origBytes
+			ev.JsonValid = &origJSON
+			ev.URLHosts = urlHosts
+			ev.Catalog = shape
+			ev.JevAttempts = attempts
+			ev.JevCalls = jevHTTP
+			ev.SelectionJevCalls = selectionJevCalls(attempts)
+			ev.OtherJevCalls = jevHTTP - selectionJevCalls(attempts)
+			ev.JevCached = jevCache
+			ev.JevFailed = jevFail
 			ev = s.events.Add(ev)
 			if stats.Direct && stats.DirectName != "" {
 				s.writeDirect(w, r, stats)
@@ -817,41 +757,6 @@ func (s *Server) connectJevAttemptHook(seq int64) func(jev.Attempt) {
 const reasonNotLLMPath = "not_llm_path"
 const reasonStream = "stream"
 
-func (s *Server) rememberCursorAgentHost(hosts []string) {
-	for _, h := range hosts {
-		if !cursorAgentHost(h) {
-			continue
-		}
-		s.mu.Lock()
-		s.cursorAgentHost = h
-		s.mu.Unlock()
-		return
-	}
-}
-
-func (s *Server) rewriteStreamingAgentURL(r *http.Request) bool {
-	if s.Host != host.Cursor || !looksStreamingAgent(r.URL.Path) {
-		return false
-	}
-	s.mu.Lock()
-	h := s.cursorAgentHost
-	s.mu.Unlock()
-	if h == "" {
-		return false
-	}
-	r.URL.Scheme = "https"
-	r.URL.Host = h
-	r.Host = h
-	return true
-}
-
-func looksStreamingAgent(path string) bool {
-	p := strings.ToLower(path)
-	return strings.Contains(p, "/agent.v1.agentservice/run") ||
-		strings.Contains(p, "/bidiservice/") ||
-		strings.Contains(p, "bidiappend")
-}
-
 func looksDevinInference(path string) bool {
 	return strings.HasSuffix(path, "/exa.api_server_pb.ApiServerService/GetChatMessage") ||
 		strings.HasSuffix(path, "/exa.api_server_pb.ApiServerService/GetDevstralStream")
@@ -862,9 +767,6 @@ func looksLikeLLM(path string) bool {
 	return strings.Contains(p, "/messages") ||
 		strings.Contains(p, "/chat/completions") ||
 		strings.Contains(p, "/responses") ||
-		strings.Contains(p, "/aiserver") ||
-		strings.Contains(p, "/agent.") ||
-		strings.Contains(p, "/agent/") ||
 		strings.Contains(p, "/sessions") ||
 		strings.Contains(p, "/inference") ||
 		strings.Contains(p, "/complete")
@@ -1298,31 +1200,14 @@ func (s *Server) observeHostFrames(frame []byte) {
 	if s == nil || s.Apps == nil {
 		return
 	}
-	if id, result := cursorExecResult(frame); result != "" {
-		s.startObservedCall(id, "exec")
-		_ = ObserveHostCall(s.Apps, id, result, 0)
-		return
-	}
 	payload := frame
 	if looksConnectFrame(frame) {
 		payload = connectFramePayload(frame)
-		if id, result := cursorExecResult(connectFrame(0, payload)); result != "" {
-			s.startObservedCall(id, "exec")
-			_ = ObserveHostCall(s.Apps, id, result, 0)
-			return
-		}
 	} else if len(frame) >= 5 {
 		ln := int(frame[1])<<24 | int(frame[2])<<16 | int(frame[3])<<8 | int(frame[4])
 		if ln+5 == len(frame) {
 			payload = frame[5:]
 		}
-	}
-	if req, _, ok := unwrapAgentRun(payload); ok {
-		if lift, ok := liftCursorAgent(req); ok {
-			s.observeLiftedHostTurns(lift.root)
-		}
-	} else if lift, ok := liftCursorAgent(payload); ok {
-		s.observeLiftedHostTurns(lift.root)
 	}
 	if lift, ok := liftDevinNativeProto(payload); ok {
 		s.observeLiftedHostTurns(lift.root)
@@ -1630,55 +1515,6 @@ func (s *Server) stampApp(app *Application) {
 	}
 	app.Host = string(s.Host)
 	s.Apps.put(app)
-}
-
-func cursorExecResult(raw []byte) (id, result string) {
-	body := raw
-	if looksConnectFrame(raw) {
-		body = connectFramePayload(raw)
-	} else if len(raw) >= 5 {
-		ln := int(raw[1])<<24 | int(raw[2])<<16 | int(raw[3])<<8 | int(raw[4])
-		if ln+5 == len(raw) {
-			body = raw[5:]
-		}
-	}
-	exec := firstLD(body, 2)
-	if exec == nil || looksWrappedAgentRun(exec) {
-		return "", ""
-	}
-	id = strings.TrimSpace(string(firstLD(exec, 1)))
-	if r := firstLD(exec, 7); len(r) > 0 {
-		if inner := firstLD(r, 1); len(inner) > 0 && protoLikelyText(inner) {
-			return id, string(inner)
-		}
-		if protoLikelyText(r) {
-			return id, string(r)
-		}
-	}
-	execFields, ok := parseProtoFields(exec)
-	if !ok {
-		return id, ""
-	}
-	var best []byte
-	for _, f := range execFields {
-		if f.wire != 2 || f.field == 1 || f.field == 10 {
-			continue
-		}
-		_, text := longestProtoLikelyText(f.raw, []int{f.field})
-		if len(text) == 0 || !protoLikelyText(text) {
-			continue
-		}
-		if bytes.Contains(text, []byte(`"properties"`)) || bytes.Contains(text, []byte(`"type":"object"`)) {
-			continue
-		}
-		if len(text) > len(best) {
-			best = text
-		}
-	}
-	if len(best) == 0 {
-		return id, ""
-	}
-	return id, string(best)
 }
 
 func observeJSONResults(store *AppStore, raw []byte) {

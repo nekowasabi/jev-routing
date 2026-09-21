@@ -34,6 +34,15 @@ const (
 	reasonPhaseJev           = "phase_jev"
 	reasonInvalidJev         = "invalid_jev"
 	reasonJevError           = "jev_error"
+	reasonKeyMissing         = "key_missing"
+	reasonDisabledByConfig   = "disabled_by_config"
+	reasonCallFailed         = "call_failed"
+	reasonAbstained          = "abstained"
+	reasonCoverage           = "coverage"
+	reasonMissing            = "missing"
+	reasonInvalidDist        = "invalid"
+	reasonCoverageShort      = "coverage_short"
+	reasonCostGate           = "cost_gate"
 	reasonLocalPassthrough   = "local_passthrough"
 	reasonNoToolNeeded       = "no_tool_needed"
 	reasonHostMeta           = "host_meta"
@@ -77,31 +86,42 @@ type RewriteStats struct {
 	CompactDropped     int      `json:"compactDropped"`
 	Engine             string   `json:"engine"`
 
-	Source           string  `json:"source,omitempty"`
-	Reason           string  `json:"reason,omitempty"`
-	CatalogRevision  string  `json:"catalogRevision,omitempty"`
-	Confidence       float64 `json:"confidence,omitempty"`
-	NeedsTool        float64 `json:"needsTool,omitempty"`
-	LastActionFailed float64 `json:"lastActionFailed,omitempty"`
-	Changed          bool    `json:"changed"`
-	Apply            string  `json:"apply,omitempty"`
-	OriginalModel    string  `json:"originalModel,omitempty"`
-	SentModel        string  `json:"sentModel,omitempty"`
-	Direct           bool    `json:"direct,omitempty"`
-	DirectName       string  `json:"-"`
-	DirectArgs       string  `json:"-"`
-	Stream           bool    `json:"-"`
-	ForcedTool       string  `json:"forcedTool,omitempty"`
-	Protocol         string  `json:"protocol,omitempty"`
-	CompactApplied   bool    `json:"compactApplied,omitempty"`
-	ReasoningChanged bool    `json:"reasoningChanged,omitempty"`
+	Source           string             `json:"source,omitempty"`
+	Reason           string             `json:"reason,omitempty"`
+	CatalogRevision  string             `json:"catalogRevision,omitempty"`
+	Confidence       float64            `json:"confidence,omitempty"`
+	NeedsTool        float64            `json:"needsTool,omitempty"`
+	LastActionFailed float64            `json:"lastActionFailed,omitempty"`
+	Changed          bool               `json:"changed"`
+	Apply            string             `json:"apply,omitempty"`
+	OriginalModel    string             `json:"originalModel,omitempty"`
+	SentModel        string             `json:"sentModel,omitempty"`
+	Direct           bool               `json:"direct,omitempty"`
+	DirectName       string             `json:"-"`
+	DirectArgs       string             `json:"-"`
+	Stream           bool               `json:"-"`
+	ForcedTool       string             `json:"forcedTool,omitempty"`
+	Protocol         string             `json:"protocol,omitempty"`
+	CompactApplied   bool               `json:"compactApplied,omitempty"`
+	ReasoningChanged bool               `json:"reasoningChanged,omitempty"`
+	Probabilities    map[string]float64 `json:"probabilities,omitempty"`
+	CandidateNames   []string           `json:"candidateNames,omitempty"`
+	CandidateCount   int                `json:"candidateCount,omitempty"`
+	MustKeep         []string           `json:"mustKeep,omitempty"`
+	MissingFlags     []string           `json:"missingFlags,omitempty"`
+	RuleVersion      string             `json:"ruleVersion,omitempty"`
+	Concentration    float64            `json:"concentration,omitempty"`
+	ConnectStatus    string             `json:"connectStatus,omitempty"`
+	ProposedKept     []string           `json:"proposedKept,omitempty"`
+	Shadow           bool               `json:"shadow,omitempty"`
+	Transforms       []string           `json:"transforms,omitempty"`
 }
 
 func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, error) {
 	return RewriteWith(context.Background(), body, h, client, DefaultOptions())
 }
 
-func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client, opt Options) ([]byte, RewriteStats, error) {
+func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client, opt Options) (out []byte, stats RewriteStats, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -111,10 +131,24 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	if opt.SelectionMode == "" {
 		opt.SelectionMode = SelectionHybrid
 	}
-	stats := RewriteStats{Host: h, Engine: "local", Apply: applyNone, Source: sourcePassthrough}
+	stats = RewriteStats{Host: h, Engine: "local", Apply: applyNone, Source: sourcePassthrough}
 	if client != nil && client.Live() {
 		stats.Engine = "live"
 	}
+	var asked bool
+	var callErr error
+	var decision plan.Decision
+	defer func() {
+		recordDecision(&stats, opt.SelectionMode, client, stats.ToolsBefore, decision, asked, callErr)
+		stats.Shadow = opt.Shadow
+		if len(stats.ProposedKept) == 0 && len(decision.Set) > 0 {
+			stats.ProposedKept = append([]string(nil), decision.Set...)
+		}
+		if len(stats.ProposedKept) == 0 && len(stats.ToolsBefore) > 0 {
+			stats.ProposedKept = append([]string(nil), stats.ToolsBefore...)
+		}
+		stats.Transforms = appliedTransforms(opt, stats)
+	}()
 
 	var root map[string]any
 	if err := json.Unmarshal(body, &root); err != nil {
@@ -154,6 +188,16 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	toolSpecs := plan.SpecsFrom(asMaps(filterable))
 	stats.CatalogRevision = plan.RevisionOf(plan.CapabilitiesFromSpecs(toolSpecs, h))
 	msgs, _ := locateHistory(root)
+	stats.MissingFlags = collectMissingFlags(root)
+	if refs := toolReferences(msgs); len(refs) > 0 {
+		for name := range refs {
+			if name != "" {
+				stats.MustKeep = append(stats.MustKeep, name)
+			}
+		}
+	}
+	stats.MustKeep = uniqueNames(append(stats.MustKeep, stickyNames(tools)...))
+	sort.Strings(stats.MustKeep)
 	items, user := itemsFromMessages(msgs)
 	if user == "" {
 		user = fallbackUser(root)
@@ -168,7 +212,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	compOpts := compact.Options{Goal: user, PreserveRecent: preserve}
 	compaction := compact.Result{}
 	compactOK := false
-	if opt.Compaction != CompactionOff {
+	if opt.Compaction != CompactionOff && opt.Transforms.Compact {
 		compaction = compact.CompactLocal(items, compOpts)
 		if client != nil && client.Live() && len(items) > 4 {
 			if live, err := jev.AskCompactContext(ctx, client, items, compOpts); err == nil {
@@ -226,7 +270,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		return withoutSelection()
 	}
 
-	decision := plan.DecideSpecs(user, actions, toolSpecs, h)
+	decision = plan.DecideSpecs(user, actions, toolSpecs, h)
 	stats.Source = sourceLocal
 	stats.Confidence = decision.Confidence
 
@@ -240,6 +284,15 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	// Hybrid skips Jev only for selected/constraint outcomes, never for word-match defer.
 	shouldAskJev := opt.SelectionMode == SelectionJev ||
 		(opt.SelectionMode == SelectionHybrid && decision.Outcome != plan.OutcomeSelected)
+	if shouldAskJev && skipClassifier(len(names), stats.MissingFlags, opt.CostGateMax) {
+		if len(stats.MissingFlags) > 0 {
+			stats.Reason = reasonMissing
+		} else {
+			stats.Reason = reasonCostGate
+		}
+		stats.Chosen = "passthrough:" + stats.Reason
+		return withoutSelection()
+	}
 	if shouldAskJev && (client == nil || !client.Live()) {
 		// Why: A deferred hint must not shrink the catalog when Jev is missing.
 		// An already-open local passthrough has nothing extra to preserve.
@@ -248,58 +301,49 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 			stats.Chosen = "passthrough"
 			return withoutSelection()
 		}
-		stats.Reason = reasonJevError
-		stats.Chosen = "passthrough:" + reasonJevError
+		stats.Reason = reasonKeyMissing
+		stats.Chosen = "passthrough:" + reasonKeyMissing
 		return withoutSelection()
 	}
 	if shouldAskJev && client != nil && client.Live() {
-		live, verr, err := askNextTool(ctx, client, user, actions, toolSpecs, lastAssistantText(msgs))
+		asked = true
+		live, verr, err := askNextTool(ctx, client, user, actions, toolSpecs, lastAssistantText(msgs), func() map[string]any {
+			extra := judgmentExtras(user, actions, items, names, root, stats.MustKeep, stats.MissingFlags)
+			extra["criteria_enabled"] = opt.Transforms.Criteria
+			return extra
+		}())
 		if err != nil {
-			stats.Reason = reasonJevError
-			stats.Chosen = "passthrough:" + reasonJevError
+			callErr = err
+			stats.Reason = reasonCallFailed
+			stats.Chosen = "passthrough:" + reasonCallFailed
 			return withoutSelection()
 		}
 		stats.Source = sourceJev
 		stats.Confidence = live.Confidence
 		stats.NeedsTool = live.Done
 		stats.LastActionFailed = live.LastFailed
-		// Why: An uncertain single pick may still carry a confident shortlist.
-		// Forced mode needs exactly one tool, so it keeps the passthrough.
-		shortlist := verr != "" && len(live.Set) > 0 && opt.Mode != ModeForced && opt.SelectionMode != SelectionJev
-		if verr != "" && !shortlist {
-			stats.Reason = verr
-			stats.Chosen = "passthrough:" + verr
-			return withoutSelection()
-		}
 		decision = live
 		usedJev = true
-		stats.Source = sourceJev
-		stats.Confidence = decision.Confidence
-		stats.NeedsTool = decision.Done
-		if shortlist {
+		if verr != "" {
 			stats.Reason = verr
+		}
+		if decision.Passthrough {
+			stats.Chosen = "passthrough:" + stats.Reason
+			stats.ToolAfter = stats.ToolBefore
+			stats.Done = decision.Done
+			stats.Gated = decision.Gated
+			return withoutSelection()
 		}
 	}
 
-	if decision.Passthrough || decision.Tool == plan.Respond || (usedJev && decision.Done <= needsToolNo) {
+	if decision.Passthrough || decision.Tool == plan.Respond {
 		if stats.Reason == "" {
-			if usedJev && decision.Done <= needsToolNo {
-				stats.Reason = reasonNoToolNeeded
-			} else {
-				stats.Reason = reasonLocalPassthrough
-			}
+			stats.Reason = reasonLocalPassthrough
 		}
 		stats.Chosen = "passthrough"
 		stats.ToolAfter = stats.ToolBefore
 		stats.Done = decision.Done
 		stats.Gated = decision.Gated
-		return withoutSelection()
-	}
-
-	if usedJev && decision.Done < needsToolYes {
-		stats.Reason = reasonUncertainJev
-		stats.Chosen = "passthrough:" + reasonUncertainJev
-		stats.ToolAfter = stats.ToolBefore
 		return withoutSelection()
 	}
 
@@ -333,6 +377,18 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.Chosen = "passthrough:" + decision.Tool
 		stats.Reason = "missing_tool"
 		stats.ToolAfter = stats.ToolBefore
+		return withoutSelection()
+	}
+	stats.ProposedKept = plan.ToolNames(asMaps(filterableTools(kept)))
+	if opt.Shadow || !opt.Transforms.Filter {
+		stats.Apply = applyNone
+		stats.Chosen = decision.Tool
+		if opt.Shadow {
+			stats.Chosen = "shadow:" + decision.Tool
+		}
+		stats.ToolAfter = stats.ToolBefore
+		stats.ToolsAfter = stats.ToolsBefore
+		stats.Changed = stats.CompactApplied
 		return withoutSelection()
 	}
 
@@ -397,7 +453,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		}
 	}
 
-	out, err := json.Marshal(work)
+	out, err = json.Marshal(work)
 	if err != nil {
 		return body, stats, err
 	}
@@ -428,8 +484,6 @@ func inspectRequest(root map[string]any) eligibility {
 	protocol := "chat"
 	if !hasMsg && !hasIn {
 		switch {
-		case looksCursorAgent(root):
-			protocol = "cursor"
 		case looksPromptChat(root):
 			protocol = "prompt"
 		default:
@@ -471,7 +525,7 @@ func inspectRequest(root map[string]any) eligibility {
 		if thinkingEnabled(root) || hasCacheControl(root) {
 			forcedOK = false
 		}
-	case "cursor", "prompt":
+	case "prompt":
 		forcedOK = false
 	default:
 		forcedOK = false
@@ -560,7 +614,7 @@ func catalogReason(tools []any) string {
 	for _, raw := range tools {
 		m, ok := raw.(map[string]any)
 		if !ok {
-			return reasonUnrecognizedFormat
+			continue
 		}
 		if isSticky(m) {
 			if stickyReason == "" {
@@ -574,10 +628,7 @@ func catalogReason(tools []any) string {
 		}
 		n := toolNameOf(m)
 		if n == "" {
-			if typ, _ := m["type"].(string); typ != "" && typ != "function" && typ != "custom" {
-				return reasonUnrecognizedFormat
-			}
-			return reasonUnrecognizedFormat
+			continue
 		}
 		seen[n]++
 		if seen[n] > 1 {
@@ -675,6 +726,9 @@ func isSticky(m map[string]any) bool {
 		return true
 	}
 	if ns := namespaceString(m); ns != "" && !localNamespace(ns) {
+		return true
+	}
+	if toolNameOf(m) == "" {
 		return true
 	}
 	return false
@@ -790,12 +844,28 @@ func historyShape(msgs []any) (types, unsupported, issues []string) {
 	return types, unsupported, issues
 }
 
+func isOpaqueAgentMessage(m map[string]any) bool {
+	if m == nil {
+		return false
+	}
+	if _, ok := m["encrypted_content"]; ok {
+		return true
+	}
+	_, hasContent := m["content"].([]any)
+	return hasContent
+}
+
 func messageReason(m map[string]any) string {
 	typ, _ := m["type"].(string)
 	switch typ {
 	case "agent_message":
-		if _, ok := m["text"].(string); !ok {
-			return reasonUnknownHistory
+		if text, hasText := m["text"]; hasText {
+			if _, ok := text.(string); !ok {
+				return reasonUnknownHistory
+			}
+		}
+		if isOpaqueAgentMessage(m) {
+			return ""
 		}
 	case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "local_shell_call_output",
 		"tool_search_call", "web_search_call", "file_search_call", "computer_call", "computer_call_output",
@@ -830,8 +900,7 @@ func contentReason(v any) string {
 			typ, _ := p["type"].(string)
 			switch typ {
 			case "text", "output_text", "input_text", "tool_use", "tool_result", "thinking", "redacted_thinking", "tool_reference", "tool_addition", "tool_removal", "":
-			case "image", "image_url", "input_image", "image_file":
-				return reasonImages
+			case "image", "image_url", "input_image", "image_file", "encrypted_content":
 			default:
 				if _, ok := p["text"]; ok {
 					continue
@@ -887,7 +956,7 @@ func extractRawTools(root map[string]any) []any {
 	if t := asSlice(root["functions"]); t != nil {
 		return t
 	}
-	return cursorToolDefs(root)
+	return nil
 }
 
 func extractTools(root map[string]any) ([]any, string) {
@@ -902,9 +971,6 @@ func extractTools(root map[string]any) ([]any, string) {
 	}
 	if t := asSlice(root["functions"]); t != nil {
 		return flattenCatalog(t), "functions"
-	}
-	if t := cursorToolDefs(root); t != nil {
-		return t, "mcpTools"
 	}
 	return nil, "tools"
 }
@@ -1003,10 +1069,6 @@ func setTools(root map[string]any, key string, tools []any) {
 		}
 		return
 	}
-	if key == "mcpTools" {
-		setCursorTools(root, tools)
-		return
-	}
 	if key == "" {
 		key = "tools"
 	}
@@ -1021,81 +1083,6 @@ func inputToolCatalogs(root map[string]any) []map[string]any {
 		}
 	}
 	return catalogs
-}
-
-func cursorToolDefs(root map[string]any) []any {
-	for _, key := range []string{"mcpTools", "mcp_tools"} {
-		switch v := root[key].(type) {
-		case []any:
-			if len(v) > 0 {
-				return v
-			}
-		case map[string]any:
-			for _, inner := range []string{"mcpTools", "mcp_tools", "tools"} {
-				if t := asSlice(v[inner]); len(t) > 0 {
-					return t
-				}
-			}
-		}
-	}
-	if action, ok := root["action"].(map[string]any); ok {
-		if t := cursorToolDefs(action); t != nil {
-			return t
-		}
-	}
-	return nil
-}
-
-func setCursorTools(root map[string]any, tools []any) {
-	if setCursorToolsAt(root, tools) {
-		return
-	}
-	if action, ok := root["action"].(map[string]any); ok {
-		// Why: cursorToolDefs walks action; write the filtered catalog back
-		// there instead of inventing a sibling top-level mcpTools key.
-		if setCursorToolsAt(action, tools) {
-			return
-		}
-		if cursorToolDefs(action) != nil {
-			setCursorTools(action, tools)
-			return
-		}
-	}
-	root["mcpTools"] = map[string]any{"mcpTools": tools}
-}
-
-func setCursorToolsAt(root map[string]any, tools []any) bool {
-	for _, key := range []string{"mcpTools", "mcp_tools"} {
-		switch v := root[key].(type) {
-		case []any:
-			if len(v) > 0 {
-				root[key] = tools
-				return true
-			}
-		case map[string]any:
-			for _, inner := range []string{"mcpTools", "mcp_tools", "tools"} {
-				if t := asSlice(v[inner]); len(t) > 0 {
-					v[inner] = tools
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func looksCursorAgent(root map[string]any) bool {
-	if cursorToolDefs(root) != nil {
-		return true
-	}
-	_, hasAction := root["action"]
-	if _, ok := root["conversationId"]; ok && hasAction {
-		return true
-	}
-	if _, ok := root["conversation_id"]; ok && hasAction {
-		return true
-	}
-	return false
 }
 
 func looksPromptChat(root map[string]any) bool {
@@ -1148,24 +1135,6 @@ func userFromAction(action map[string]any) string {
 	if s := firstString(action, "prompt", "text", "content"); s != "" {
 		return s
 	}
-	if uma, ok := action["userMessageAction"].(map[string]any); ok {
-		if um, ok := uma["userMessage"].(map[string]any); ok {
-			if s := firstString(um, "text", "content"); s != "" {
-				return s
-			}
-		}
-		if s := userFromAction(uma); s != "" {
-			return s
-		}
-	}
-	// Why: Cursor AgentRunRequest nests the latest user turn under userMessageAction.
-	for _, k := range []string{"userMessageAction", "user_message_action"} {
-		if inner, ok := action[k].(map[string]any); ok {
-			if s := userFromAction(inner); s != "" {
-				return s
-			}
-		}
-	}
 	return ""
 }
 
@@ -1175,8 +1144,6 @@ type historySlot struct {
 	write  func([]any)
 }
 
-// Why: Cursor AgentRunRequest keeps chat history in conversationState
-// (JSON strings) or nested action fields, not only top-level messages/input.
 func locateHistory(root map[string]any) ([]any, func([]any)) {
 	if slots := historySlots(root); len(slots) > 0 {
 		return slots[0].msgs, slots[0].write
@@ -1203,82 +1170,15 @@ func historySlots(root map[string]any) []historySlot {
 	}
 	addSlice(root, "messages", "messages")
 	addSlice(root, "input", "input")
-	for _, stateKey := range []string{"conversationState", "conversation_state"} {
-		state, ok := root[stateKey].(map[string]any)
-		if !ok {
-			continue
-		}
-		for _, msgKey := range []string{"rootPromptMessagesJson", "root_prompt_messages_json"} {
-			raw := asSlice(state[msgKey])
-			if len(raw) == 0 {
-				continue
-			}
-			msgs, asString := parsePromptMessages(raw)
-			if len(msgs) == 0 {
-				continue
-			}
-			st, mk, stringify := state, msgKey, asString
-			slots = append(slots, historySlot{
-				prefix: stateKey + "." + msgKey,
-				msgs:   msgs,
-				write: func(compacted []any) {
-					st[mk] = encodePromptMessages(compacted, stringify)
-				},
-			})
-		}
-	}
 	if action, ok := root["action"].(map[string]any); ok {
 		for _, key := range []string{"messages", "history", "conversationHistory", "conversation_history"} {
 			addSlice(action, key, "action."+key)
-		}
-		for _, umaKey := range []string{"userMessageAction", "user_message_action"} {
-			uma, ok := action[umaKey].(map[string]any)
-			if !ok {
-				continue
-			}
-			for _, key := range []string{"conversationHistory", "conversation_history"} {
-				addSlice(uma, key, "action."+umaKey+"."+key)
-			}
 		}
 	}
 	return slots
 }
 
-func parsePromptMessages(raw []any) ([]any, bool) {
-	var msgs []any
-	asString := false
-	for _, el := range raw {
-		switch v := el.(type) {
-		case string:
-			asString = true
-			var obj map[string]any
-			if json.Unmarshal([]byte(v), &obj) != nil || obj == nil {
-				continue
-			}
-			msgs = append(msgs, obj)
-		case map[string]any:
-			msgs = append(msgs, v)
-		}
-	}
-	return msgs, asString
-}
-
-func encodePromptMessages(msgs []any, asString bool) []any {
-	if !asString {
-		return msgs
-	}
-	out := make([]any, 0, len(msgs))
-	for _, m := range msgs {
-		b, err := json.Marshal(m)
-		if err != nil {
-			continue
-		}
-		out = append(out, string(b))
-	}
-	return out
-}
-
-func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan.Action, specs []plan.Spec, assistantPlan string) (plan.Decision, string, error) {
+func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan.Action, specs []plan.Spec, assistantPlan string, extra map[string]any) (plan.Decision, string, error) {
 	criteria := map[string]string{}
 	for _, s := range specs {
 		if plan.HostMeta(s.Name) {
@@ -1290,7 +1190,8 @@ func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan
 		}
 		// Why: Preserve the supplied capability description; a byte prefix can
 		// omit the operations exposed by a code-execution tool or split UTF-8.
-		criteria[s.Name] = desc
+		criteriaEnabled, _ := extra["criteria_enabled"].(bool)
+		criteria[s.Name] = criteriaFor(s.Name, desc, criteriaEnabled)
 	}
 	criteria[plan.Respond] = "stop calling tools and answer the user. Pick this only when no available tool is needed to make progress on the remaining request."
 	qs := map[string]jev.Question{
@@ -1307,52 +1208,68 @@ func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan
 		"repeat_same_tool":   {Type: "noul", Optional: true, Instructions: "Assuming a tool is needed next, it is the same tool as the most recent entry in `actions_taken`. If `actions_taken` is empty, answer no."},
 	}
 	state := map[string]any{"user_request": user, "actions_taken": actions, "assistant_plan": assistantPlan}
+	for k, v := range extra {
+		if k == "" || v == nil {
+			continue
+		}
+		state[k] = v
+	}
 	res, err := c.AskSelectionContext(ctx, state, qs)
 	if err != nil {
-		return plan.Decision{}, reasonJevError, err
+		return plan.Decision{}, reasonCallFailed, err
 	}
 	choice, choiceOK := jev.ParseChoice(res, "next_tool")
 	need, needOK := jev.ParseNoul(res, "needs_tool")
 	if !choiceOK || !needOK {
-		return plan.Decision{}, reasonInvalidJev, nil
+		return plan.Decision{Passthrough: true}, reasonInvalidJev, nil
+	}
+	withProbs := func(d plan.Decision) plan.Decision {
+		d.Probabilities = copyFloatMap(choice.Probabilities)
+		return d
 	}
 	if !finite01(choice.Conf) || !finite01(need.Noul) {
-		return plan.Decision{}, reasonInvalidJev, nil
+		return plan.Decision{Passthrough: true}, reasonInvalidJev, nil
 	}
 	if _, ok := criteria[choice.Choice]; !ok {
-		return plan.Decision{}, reasonInvalidJev, nil
+		return plan.Decision{Passthrough: true}, reasonInvalidJev, nil
+	}
+	if choice.Choice == plan.Respond {
+		return withProbs(plan.Decision{Tool: plan.Respond, Done: need.Noul, Passthrough: true, Confidence: choice.Conf}), reasonNoToolNeeded, nil
 	}
 	failed, _ := jev.ParseNoul(res, "last_action_failed")
-	// Why: Noul returns a probability, not a separate confidence field.
-	// Apply its probability thresholds below; only Choice has confidence.
-	if choice.Conf < adoptConfidence {
-		d := plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf, LastFailed: failed.Noul}
-		// Why: An uncertain single pick can still carry a confident shortlist;
-		// filtering to it beats passing the whole catalog back untouched.
-		if need.Noul >= needsToolYes && choice.Choice != plan.Respond {
-			inCatalog := func(n string) bool { _, ok := criteria[n]; return ok && n != plan.Respond }
-			if set := topSet(rankChoices(choice.Probabilities), inCatalog); len(set) > 0 {
-				d.Set = withRepeatedTool(set, res, actions, inCatalog)
-				return d, reasonTopSetJev, nil
-			}
-			if set := phaseSet(res, specs); len(set) > 0 {
-				d.Set = withRepeatedTool(set, res, actions, inCatalog)
-				return d, reasonPhaseJev, nil
+	names := make([]string, 0, len(criteria))
+	for n := range criteria {
+		if n != plan.Respond {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	mustKeep, _ := extra["must_keep"].([]string)
+	missing, _ := extra["missing_flags"].([]string)
+	kept, why := adoptCandidates(choice.Probabilities, names, mustKeep, missing, defaultCoverage, 0)
+	d := withProbs(plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf, LastFailed: failed.Noul})
+	switch why {
+	case "coverage":
+		d.Set = kept
+		if d.Tool == plan.Respond || !containsName(kept, d.Tool) {
+			if len(kept) > 0 {
+				d.Tool = kept[0]
 			}
 		}
-		return d, reasonUncertainJev, nil
+		return d, reasonCoverage, nil
+	case "missing":
+		d.Passthrough = true
+		return d, reasonMissing, nil
+	case "invalid":
+		d.Passthrough = true
+		return d, reasonInvalidDist, nil
+	case "coverage_short":
+		d.Passthrough = true
+		return d, reasonCoverageShort, nil
+	default:
+		d.Passthrough = true
+		return d, why, nil
 	}
-	if plan.HostMeta(choice.Choice) {
-		return plan.Decision{Tool: plan.Respond, Done: need.Noul, Passthrough: true, Confidence: choice.Conf, LastFailed: failed.Noul}, "", nil
-	}
-	if choice.Choice == plan.Respond || need.Noul <= needsToolNo {
-		return plan.Decision{Tool: plan.Respond, Done: need.Noul, Passthrough: true, Confidence: choice.Conf, LastFailed: failed.Noul}, "", nil
-	}
-	adopted := plan.Decision{Tool: choice.Choice, Done: need.Noul, Confidence: choice.Conf, LastFailed: failed.Noul}
-	if need.Noul < needsToolYes {
-		return adopted, reasonUncertainJev, nil
-	}
-	return adopted, "", nil
 }
 
 // rankChoices orders a choice distribution by probability, descending.
@@ -1906,6 +1823,10 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 		}
 		m = cloneMap(m)
 		typ, _ := m["type"].(string)
+		if typ == "agent_message" && isOpaqueAgentMessage(m) {
+			out = append(out, m)
+			continue
+		}
 		if typ == "function_call" || typ == "custom_tool_call" {
 			cid := firstString(m, "call_id", "id")
 			if action[cid] == compact.ActionDrop {
@@ -2148,13 +2069,4 @@ func cloneMap(m map[string]any) map[string]any {
 		return m
 	}
 	return out
-}
-
-func FormatStats(s RewriteStats) string {
-	issues := "-"
-	if len(s.HistoryIssues) > 0 {
-		issues = strings.Join(s.HistoryIssues, ",")
-	}
-	return fmt.Sprintf("host=%s tools %d→%d chosen=%s compact -%d chars engine=%s history_issues=%s",
-		s.Host, s.ToolBefore, s.ToolAfter, s.Chosen, s.CharsBefore-s.CharsAfter, s.Engine, issues)
 }

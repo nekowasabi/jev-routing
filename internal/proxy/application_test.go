@@ -307,7 +307,7 @@ func TestHandlerObservesResponsesFunctionCallAndResult(t *testing.T) {
 }
 
 func TestObserveConnectResponseProtoJSONCall(t *testing.T) {
-	s := &Server{Host: host.Cursor, Apps: NewAppStore(), Executor: &recordingExec{}}
+	s := &Server{Host: host.Devin, Apps: NewAppStore(), Executor: &recordingExec{}}
 	inner := []byte(`{"type":"function_call","call_id":"call_proto","name":"exec"}`)
 	s.observeConnectStream(connectFrame(0, protoBytes(1, inner)))
 	got := s.Apps.Get("call_proto")
@@ -322,7 +322,7 @@ func TestObserveConnectResponseProtoJSONCall(t *testing.T) {
 }
 
 func TestObserveConnectGzipFunctionCall(t *testing.T) {
-	s := &Server{Host: host.Cursor, Apps: NewAppStore(), Executor: &recordingExec{}}
+	s := &Server{Host: host.Devin, Apps: NewAppStore(), Executor: &recordingExec{}}
 	inner := protoBytes(1, []byte(`{"type":"function_call","call_id":"call_gz","name":"exec"}`))
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
@@ -375,22 +375,6 @@ func TestAutoApplyGenericRequestDoesNotFailRequired(t *testing.T) {
 	}
 	if n := len(s.Apps.Snapshot()); n != 0 {
 		t.Fatalf("local tool pick must not start a host call: %+v", s.Apps.Snapshot())
-	}
-}
-
-func TestAutoApplyReadsActionUserText(t *testing.T) {
-	s := &Server{
-		Host: host.Cursor,
-		Options: Options{AutoApply: true, ApplicationPolicy: PolicyRequired, KindModes: map[string]string{
-			"skill": KindApply,
-		}},
-		Apps:     NewAppStore(),
-		Executor: &recordingExec{},
-	}
-	body := []byte(`{"action":{"userMessageAction":{"userMessage":{"text":"use the skill-review skill"}}},"tools":[{"name":"skill-review","description":"review skill"}]}`)
-	s.autoApply(body)
-	if s.LastDelivered == "" || !strings.Contains(s.LastDelivered, "review") {
-		t.Fatalf("action user text must select the advertised skill, applyErr=%q delivered=%q", s.ApplyErr, s.LastDelivered)
 	}
 }
 

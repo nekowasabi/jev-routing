@@ -95,7 +95,7 @@ test("filterEvents keeps host source and apply axes", () => {
   assert.equal(got.length, 1);
   assert.equal(got[0].seq, 1);
   assert.equal(filterEvents(SAMPLE_EVENTS, { source: "jev" }).length, 1);
-  assert.equal(filterEvents(SAMPLE_EVENTS, { apply: "none" })[0].host, "cursor");
+  assert.equal(filterEvents(SAMPLE_EVENTS, { apply: "none" })[0].host, "devin");
 });
 
 test("classMap always lists six classes plus compaction", () => {

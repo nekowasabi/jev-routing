@@ -13,6 +13,7 @@ import (
 
 	"github.com/nekowasabi/jev-routing/internal/host"
 	"github.com/nekowasabi/jev-routing/internal/jev"
+	"github.com/nekowasabi/jev-routing/internal/plan"
 )
 
 func chatReq(user string, tools []any) []byte {
@@ -34,6 +35,13 @@ func workTools() []any {
 	}
 }
 
+func adoptTestProbs(choice string) map[string]float64 {
+	if choice == "" || choice == plan.Respond {
+		return map[string]float64{plan.Respond: 1}
+	}
+	return map[string]float64{choice: 0.95, plan.Respond: 0.05}
+}
+
 func jevAnswers(t *testing.T, choice string, choiceConf, needs, needsConf float64, extra func(w http.ResponseWriter, r *http.Request)) *jev.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +51,7 @@ func jevAnswers(t *testing.T, choice string, choiceConf, needs, needsConf float6
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"answers": map[string]any{
-				"next_tool":  map[string]any{"type": "choice", "choice": choice, "confidence": choiceConf},
+				"next_tool":  map[string]any{"type": "choice", "choice": choice, "confidence": choiceConf, "probabilities": adoptTestProbs(choice)},
 				"needs_tool": map[string]any{"type": "noul", "noul": needs, "confidence": needsConf},
 			},
 		})
@@ -66,34 +74,34 @@ func TestGatewayDecision(t *testing.T) {
 			t.Fatalf("%+v", stats)
 		}
 	})
-	t.Run("just-below", func(t *testing.T) {
+	t.Run("just-below-confidence-still-covers", func(t *testing.T) {
 		c := jevAnswers(t, "grep", 0.849, 0.8, 0.8, nil)
-		out, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
+		_, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if stats.Changed {
-			t.Fatalf("low confidence must not rewrite: %+v %s", stats, out)
+		if stats.Chosen != "grep" || stats.Reason != reasonCoverage {
+			t.Fatalf("coverage must ignore choice confidence: %+v", stats)
 		}
 	})
-	t.Run("needs-mid-uncertain", func(t *testing.T) {
+	t.Run("needs-mid-still-covers", func(t *testing.T) {
 		c := jevAnswers(t, "grep", 0.9, 0.5, 0.9, nil)
 		_, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if stats.Changed {
-			t.Fatalf("uncertain needs_tool must passthrough %+v", stats)
+		if stats.Chosen != "grep" || stats.Reason == reasonUncertainJev {
+			t.Fatalf("needs_tool gray zone must not reject: %+v", stats)
 		}
 	})
-	t.Run("needs-no-tool", func(t *testing.T) {
+	t.Run("needs-no-still-covers", func(t *testing.T) {
 		c := jevAnswers(t, "grep", 0.9, 0.2, 0.9, nil)
 		_, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if stats.Changed || stats.ToolAfter != stats.ToolBefore {
-			t.Fatalf("no-tool-needed %+v", stats)
+		if stats.Chosen != "grep" || stats.Reason == reasonNoToolNeeded {
+			t.Fatalf("needs_tool no must not force respond: %+v", stats)
 		}
 	})
 	t.Run("jev-error", func(t *testing.T) {
@@ -244,12 +252,18 @@ func TestSelectionModes(t *testing.T) {
 			t.Fatalf("stats=%+v calls=%d err=%v", stats, calls, err)
 		}
 	})
-	t.Run("jev uncertain passes full catalog", func(t *testing.T) {
+	t.Run("jev coverage-short passes full catalog", func(t *testing.T) {
 		o := DefaultOptions()
 		o.SelectionMode = SelectionJev
 		raw := chatReq(unknown, tools)
-		out, stats, err := RewriteWith(nil, raw, host.Grok, jevAnswers(t, "grep", 0.849, 0.9, 0.9, nil), o)
-		if err != nil || stats.Changed || string(out) != string(raw) {
+		c := jevAnswers(t, "grep", 0.6, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{
+				"next_tool":  map[string]any{"type": "choice", "choice": "grep", "confidence": 0.6, "probabilities": map[string]float64{"grep": 0.4, "read_file": 0.3, "run_terminal_command": 0.2, plan.Respond: 0.1}},
+				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
+			}})
+		})
+		out, stats, err := RewriteWith(nil, raw, host.Grok, c, o)
+		if err != nil || stats.Changed || string(out) != string(raw) || stats.Reason != reasonCoverageShort {
 			t.Fatalf("stats=%+v err=%v", stats, err)
 		}
 	})

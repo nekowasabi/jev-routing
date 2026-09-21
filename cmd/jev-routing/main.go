@@ -1,4 +1,4 @@
-// jev-routing is a request-rewriting proxy for Claude Code, Codex, Grok Build, Cursor, and Devin.
+// jev-routing is a request-rewriting proxy for Claude Code, Codex, Grok Build, and Devin.
 //
 // It is not an MCP server. Do not `claude mcp add` / `codex mcp add` / `grok mcp add`.
 // Install the binary and wrap the host:
@@ -66,17 +66,21 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `jev-routing — Jev harness (Go). No npx. No MCP.
 
 Commands:
-  jev-routing run [--dashboard] [--tmux] claude|codex|grok|cursor|devin [-- host-args...]
-  jev-routing serve --host claude|codex|grok|cursor|devin [--listen 127.0.0.1:8787]
+  jev-routing run [--dashboard] [--tmux] claude|codex|grok|devin [-- host-args...]
+  jev-routing serve --host claude|codex|grok|devin [--listen 127.0.0.1:8787]
   jev-routing route --json < request.json
   jev-routing compact < transcript.json
   jev-routing bench --host grok
 
 Environment:
-  TYPESAFE_API_KEY / JEV_API_KEY   Jev key (optional; local classifier otherwise)
+  TYPESAFE_API_KEY / JEV_API_KEY   Jev key (required when JEV_SELECTION_MODE=jev; otherwise optional)
+  JEV_SELECTION_MODE               local | jev | hybrid (default hybrid)
   JEV_LISTEN                       preferred bind address (run falls back to an available port)
   JEV_ROUTING_MODE                 baseline | filter | forced (default filter)
   JEV_COMPACTION                   off | on (default on)
+  JEV_SHADOW                       on to score the candidate set without rewriting the request
+  JEV_TRANSFORMS                   compact|filter|criteria=on|off (criteria stays off until a confused pair is registered)
+  JEV_COST_GATE_MAX                skip the classifier when N<=this (default 3)
   JEV_REASONING                    preserve | legacy (default legacy)
   JEV_ARGS_MODEL / JEV_ARGS_TOOLS  optional forced-only arg model split
   JEV_DIRECT_TOOLS                 optional forced-only constant-arg Chat tools
@@ -126,7 +130,7 @@ func setEnv(env []string, key, value string) []string {
 
 func cmdServe(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	hostName := fs.String("host", "claude", "claude | codex | grok | cursor | devin")
+	hostName := fs.String("host", "claude", "claude | codex | grok | devin")
 	listen := fs.String("listen", envOr("JEV_LISTEN", "127.0.0.1:8787"), "bind address")
 	_ = fs.Parse(args)
 	h, err := host.Parse(*hostName)
@@ -144,6 +148,11 @@ func serve(h host.ID, listen string) int {
 		return 2
 	}
 	client := jev.FromEnv()
+	line, sterr := jev.StartupStatus(client, opt.SelectionMode)
+	fmt.Fprintln(os.Stderr, line)
+	if sterr != nil {
+		return 2
+	}
 	srv, err := proxy.NewWithOptions(listen, h, client, nil, opt)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -174,8 +183,9 @@ func newHTTPServer(handler http.Handler) *http.Server {
 	return &http.Server{
 		Handler:           h2c.NewHandler(handler, &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// Why: ReadTimeout includes the request body. Devin Connect streams are
+		// long-lived; a 30s cap cuts the proto mid-frame.
+		IdleTimeout: 60 * time.Second,
 	}
 }
 
@@ -185,7 +195,7 @@ func cmdRun(args []string) int {
 	dashboard := fs.Bool("dashboard", false, "open the local dashboard after startup")
 	tmux := fs.Bool("tmux", false, "run the host in tmux")
 	if err := fs.Parse(args); err != nil || len(fs.Args()) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: jev-routing run claude|codex|grok|cursor|devin")
+		fmt.Fprintln(os.Stderr, "usage: jev-routing run claude|codex|grok|devin")
 		return 2
 	}
 	args = fs.Args()
@@ -204,6 +214,11 @@ func cmdRun(args []string) int {
 		return 2
 	}
 	client := jev.FromEnv()
+	line, sterr := jev.StartupStatus(client, opt.SelectionMode)
+	fmt.Fprintln(os.Stderr, line)
+	if sterr != nil {
+		return 2
+	}
 	// Why: the child owns the terminal in raw mode; async proxy logs on the
 	// shared stderr fd would corrupt its TUI. Best effort — never fail the run.
 	logFile, logPath := openRunLog()
@@ -393,7 +408,7 @@ func cmdCompact(args []string) int {
 
 func cmdBench(args []string) int {
 	fs := flag.NewFlagSet("bench", flag.ExitOnError)
-	hostName := fs.String("host", "claude", "claude | codex | grok | cursor | devin")
+	hostName := fs.String("host", "claude", "claude | codex | grok | devin")
 	_ = fs.Parse(args)
 	h, err := host.Parse(*hostName)
 	if err != nil {
@@ -435,8 +450,6 @@ func printEnvHint(h host.ID, listen string) {
 		fmt.Fprintf(os.Stderr, "  unset XAI_API_KEY GROK_MODELS_BASE_URL\n  export GROK_CLI_CHAT_PROXY_BASE_URL=http://%s/v1\n  grok\n", listen)
 	case host.Codex:
 		fmt.Fprintf(os.Stderr, "  # ~/.codex/config.toml\n  openai_base_url = \"http://%s/v1\"\n", listen)
-	case host.Cursor:
-		fmt.Fprintf(os.Stderr, "  export CURSOR_API_ENDPOINT=http://%s\n  cursor-agent --endpoint http://%s\n", listen, listen)
 	case host.Devin:
 		fmt.Fprintf(os.Stderr, "  export DEVIN_API_URL=http://%s\n  devin\n", listen)
 	}

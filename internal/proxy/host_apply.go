@@ -11,8 +11,8 @@ import (
 const contextDelimiter = "\n\n--- jev-routing context ---\n"
 
 // ApplyHostContext writes delivered application text back into the last user
-// message. Cursor/Devin use the same JSON fields already rewritten by the
-// existing Connect lifts; this does not invent tool_choice or hooks.
+// message. Devin uses the same JSON fields already rewritten by the existing
+// Connect lifts; this does not invent tool_choice or hooks.
 func ApplyHostContext(h host.ID, body []byte, extra string) ([]byte, error) {
 	if strings.TrimSpace(extra) == "" {
 		return body, nil
@@ -112,7 +112,7 @@ func appendLastMessage(root map[string]any, extra string) bool {
 }
 
 func appendActionText(action map[string]any, extra string) bool {
-	for _, k := range []string{"userMessage", "user_message", "message", "prompt", "text", "content", "userMessageAction"} {
+	for _, k := range []string{"userMessage", "user_message", "message", "prompt", "text", "content"} {
 		if s, ok := action[k].(string); ok && s != "" {
 			action[k] = s + contextDelimiter + extra
 			return true

@@ -16,7 +16,7 @@ fi
 
 hosts=("$@")
 if ((${#hosts[@]} == 0)); then
-  hosts=(claude codex grok cursor devin)
+  hosts=(claude codex grok devin)
 fi
 
 # The ordinary x-cell remains the historical baseline-vs-Jev smoke check.
@@ -81,10 +81,6 @@ PY
       (cd "$worktree" && grok --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
     grok:local|grok:jev|grok:hybrid)
       (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run grok -- --single "$prompt" --output-format json --no-plan --no-subagents --permission-mode bypassPermissions) >"$raw" 2>"$case_dir/stderr.log" ;;
-    cursor:baseline)
-      (cd "$worktree" && cursor-agent -p --output-format json --trust --force --sandbox disabled -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
-    cursor:local|cursor:jev|cursor:hybrid)
-      (cd "$worktree" && JEV_COMPACTION=off JEV_REASONING=preserve JEV_SELECTION_MODE="$mode" JEV_RUN_STATS="$proxy_stats" "$binary" run cursor -- -p --output-format json --trust --force --sandbox disabled -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
     devin:baseline)
       (cd "$worktree" && devin --permission-mode dangerous --respect-workspace-trust false -p -- "$prompt") >"$raw" 2>"$case_dir/stderr.log" ;;
     devin:local|devin:jev|devin:hybrid)
@@ -165,8 +161,8 @@ PY
 
 failed=0
 for host in "${hosts[@]}"; do
-  case "$host" in claude|codex|grok|cursor|devin) ;; *) echo "対象は claude, codex, grok, cursor, devin です: $host" >&2; exit 2;; esac
-  bin=$host; [[ $host == cursor ]] && bin=cursor-agent
+  case "$host" in claude|codex|grok|devin) ;; *) echo "対象は claude, codex, grok, devin です: $host" >&2; exit 2;; esac
+  bin=$host
   command -v "$bin" >/dev/null || { echo "$bin が PATH にありません" >&2; exit 2; }
   for mode in "${modes[@]}"; do run_one "$host" "$mode"; done
   summarize "$host" || {

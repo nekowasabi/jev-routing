@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -45,6 +46,9 @@ type Options struct {
 	ApplicationPolicy string
 	KindModes         map[string]string
 	AfterRewrite      func([]byte) []byte
+	Shadow            bool
+	Transforms        TransformOptions
+	CostGateMax       int
 }
 
 func DefaultOptions() Options {
@@ -57,6 +61,7 @@ func DefaultOptions() Options {
 		DirectTools:       map[string]bool{},
 		ApplicationPolicy: "",
 		KindModes:         defaultKindModes(),
+		Transforms:        defaultTransforms(),
 	}
 }
 
@@ -97,6 +102,32 @@ func OptionsFromEnv() (Options, error) {
 		default:
 			return o, fmt.Errorf("invalid JEV_REASONING %q (preserve|legacy)", v)
 		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_COST_GATE_MAX")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return o, fmt.Errorf("invalid JEV_COST_GATE_MAX %q", v)
+		}
+		o.CostGateMax = n
+	} else {
+		o.CostGateMax = decidedCostGateMaxCandidates
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_SHADOW")); v != "" {
+		switch v {
+		case "1", "true", "on":
+			o.Shadow = true
+		case "0", "false", "off":
+			o.Shadow = false
+		default:
+			return o, fmt.Errorf("invalid JEV_SHADOW %q (on|off)", v)
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_TRANSFORMS")); v != "" {
+		tr, err := parseTransforms(v)
+		if err != nil {
+			return o, err
+		}
+		o.Transforms = tr
 	}
 	if v := strings.TrimSpace(os.Getenv("JEV_SELECTION_MODE")); v != "" {
 		switch v {

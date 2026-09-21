@@ -153,7 +153,7 @@ func TestCompactionIndependentOfSelection(t *testing.T) {
 						if scenario == "invalid" {
 							choice = "unknown_tool"
 						}
-						answers["next_tool"] = map[string]any{"type": "choice", "choice": choice, "confidence": confidence}
+						answers["next_tool"] = map[string]any{"type": "choice", "choice": choice, "confidence": confidence, "probabilities": adoptTestProbs(choice)}
 						answers["needs_tool"] = map[string]any{"type": "noul", "noul": 0.1, "confidence": 0.9}
 					} else {
 						for key := range in.Questions {
@@ -173,8 +173,8 @@ func TestCompactionIndependentOfSelection(t *testing.T) {
 				out, stats, err := RewriteWith(nil, raw, h, client, opt)
 				wantCompact := scenario != "baseline" && scenario != "off" && scenario != "ineligible"
 				wantReason := map[string]string{
-					"no-catalog": reasonNoCatalog, "respond": reasonNoToolNeeded, "error": reasonJevError,
-					"uncertain": reasonUncertainJev, "invalid": reasonInvalidJev, "local-passthrough": reasonLocalPassthrough,
+					"no-catalog": reasonNoCatalog, "respond": reasonNoToolNeeded, "error": reasonCallFailed,
+					"uncertain": reasonNoToolNeeded, "invalid": reasonInvalidJev, "local-passthrough": reasonLocalPassthrough,
 					"baseline": reasonBaseline, "off": reasonNoToolNeeded, "ineligible": reasonExplicitToolChoice,
 				}[scenario]
 				if err != nil || stats.CompactApplied != wantCompact || stats.Changed != wantCompact || stats.Reason != wantReason {
@@ -241,7 +241,7 @@ func TestGrokLiveHistoryCompactsWithObservedTypes(t *testing.T) {
 				_ = json.NewDecoder(r.Body).Decode(&in)
 				answers := map[string]any{}
 				if _, ok := in.Questions["next_tool"]; ok {
-					answers["next_tool"] = map[string]any{"type": "choice", "choice": choice, "confidence": conf}
+					answers["next_tool"] = map[string]any{"type": "choice", "choice": choice, "confidence": conf, "probabilities": adoptTestProbs(choice)}
 					answers["needs_tool"] = map[string]any{"type": "noul", "noul": needs, "confidence": 0.9}
 				} else {
 					for key := range in.Questions {
@@ -384,8 +384,8 @@ func TestResponsesArrayToolResultsRetainText(t *testing.T) {
 		}
 		for _, image := range []string{"image", "image_url", "input_image", "image_file"} {
 			result["output"] = []any{map[string]any{"type": image}}
-			if reason := historyReason(msgs); reason != reasonImages {
-				t.Fatalf("image result eligibility changed: %s", reason)
+			if reason := historyReason(msgs); reason != "" {
+				t.Fatalf("image result should stay eligible: %s", reason)
 			}
 		}
 	}

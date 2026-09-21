@@ -286,7 +286,7 @@
   const SAMPLE_EVENTS = [
     { seq: 1, host: "grok", source: "local", apply: "filter", chosen: "read_file", reason: "local", confidence: 0.2, changed: true, toolsBefore: ["read_file", "exec"], toolsAfter: ["read_file"], usage: { inputTokens: 12, outputTokens: 3 } },
     { seq: 2, host: "codex", source: "jev", apply: "filter", chosen: "exec", reason: "top_set_jev", confidence: 0.7, changed: true, toolsBefore: ["exec", "web"], toolsAfter: ["exec"], usage: { inputTokens: 9, outputTokens: 4 } },
-    { seq: 3, host: "cursor", source: "passthrough", apply: "none", chosen: "", reason: "unknown_history", changed: false, usageMissing: "no_usage" }
+    { seq: 3, host: "devin", source: "passthrough", apply: "none", chosen: "", reason: "unknown_history", changed: false, usageMissing: "no_usage" }
   ];
 
   const SAMPLE_METRICS = {

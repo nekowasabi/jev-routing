@@ -12,53 +12,69 @@ const eventStrMax = 200
 
 // Event is one request-level observation. Bodies, args, secrets are never stored.
 type Event struct {
-	Seq                int64            `json:"seq"`
-	InstanceID         string           `json:"instanceId"`
-	Ts                 time.Time        `json:"ts"`
-	Host               string           `json:"host"`
-	Source             string           `json:"source"`
-	Reason             string           `json:"reason"`
-	Apply              string           `json:"apply"`
-	Chosen             string           `json:"chosen"`
-	Confidence         *float64         `json:"confidence"`
-	NeedsTool          *float64         `json:"needsTool"`
-	Changed            bool             `json:"changed"`
-	OriginalModel      string           `json:"originalModel,omitempty"`
-	SentModel          string           `json:"sentModel,omitempty"`
-	ToolBefore         int              `json:"toolBefore"`
-	ToolAfter          int              `json:"toolAfter"`
-	ToolsBefore        []string         `json:"toolsBefore,omitempty"`
-	ToolsAfter         []string         `json:"toolsAfter,omitempty"`
-	HistoryTypes       []string         `json:"historyTypes,omitempty"`
-	UnsupportedHistory []string         `json:"unsupportedHistory,omitempty"`
-	HistoryIssues      []string         `json:"historyIssues,omitempty"`
-	CompactDropped     int              `json:"compactDropped"`
-	CompactApplied     bool             `json:"compactApplied"`
-	ReasoningChanged   bool             `json:"reasoningChanged,omitempty"`
-	RequestPath        string           `json:"requestPath,omitempty"`
-	Method             string           `json:"method,omitempty"`
-	ContentType        string           `json:"contentType,omitempty"`
-	BodyBytes          int              `json:"bodyBytes,omitempty"`
-	JsonValid          *bool            `json:"jsonValid,omitempty"`
-	URLHosts           []string         `json:"urlHosts,omitempty"`
-	Catalog            *CatalogShape    `json:"catalog,omitempty"`
-	JevAttempts        []JevAttempt     `json:"jevAttempts,omitempty"`
-	JevCalls           int              `json:"jevCalls"`
-	SelectionJevCalls  int              `json:"selectionJevCalls,omitempty"`
-	OtherJevCalls      int              `json:"otherJevCalls,omitempty"`
-	JevCached          int              `json:"jevCached"`
-	JevFailed          int              `json:"jevFailed"`
-	UpstreamStatus     *int             `json:"upstreamStatus"`
-	UpstreamFinish     string           `json:"upstreamFinish,omitempty"`
-	HeaderMs           *float64         `json:"headerMs"`
-	BodyMs             *float64         `json:"bodyMs"`
-	Usage              *NormalizedUsage `json:"usage"`
-	UsagePartial       bool             `json:"usagePartial,omitempty"`
-	UsageMissing       string           `json:"usageMissing,omitempty"`
-	SavedTokens        *SavedTokens     `json:"savedTokens,omitempty"`
-	Canceled           bool             `json:"canceled,omitempty"`
-	Protocol           string           `json:"protocol,omitempty"`
-	ConnectFrames      int              `json:"connectFrames,omitempty"`
+	Seq                int64              `json:"seq"`
+	InstanceID         string             `json:"instanceId"`
+	Ts                 time.Time          `json:"ts"`
+	Host               string             `json:"host"`
+	Source             string             `json:"source"`
+	Reason             string             `json:"reason"`
+	Apply              string             `json:"apply"`
+	Chosen             string             `json:"chosen"`
+	Confidence         *float64           `json:"confidence"`
+	NeedsTool          *float64           `json:"needsTool"`
+	Changed            bool               `json:"changed"`
+	OriginalModel      string             `json:"originalModel,omitempty"`
+	SentModel          string             `json:"sentModel,omitempty"`
+	ToolBefore         int                `json:"toolBefore"`
+	ToolAfter          int                `json:"toolAfter"`
+	ToolsBefore        []string           `json:"toolsBefore,omitempty"`
+	ToolsAfter         []string           `json:"toolsAfter,omitempty"`
+	HistoryTypes       []string           `json:"historyTypes,omitempty"`
+	UnsupportedHistory []string           `json:"unsupportedHistory,omitempty"`
+	HistoryIssues      []string           `json:"historyIssues,omitempty"`
+	CompactDropped     int                `json:"compactDropped"`
+	CompactApplied     bool               `json:"compactApplied"`
+	ReasoningChanged   bool               `json:"reasoningChanged,omitempty"`
+	RequestPath        string             `json:"requestPath,omitempty"`
+	Method             string             `json:"method,omitempty"`
+	ContentType        string             `json:"contentType,omitempty"`
+	BodyBytes          int                `json:"bodyBytes,omitempty"`
+	JsonValid          *bool              `json:"jsonValid,omitempty"`
+	URLHosts           []string           `json:"urlHosts,omitempty"`
+	Catalog            *CatalogShape      `json:"catalog,omitempty"`
+	JevAttempts        []JevAttempt       `json:"jevAttempts,omitempty"`
+	JevCalls           int                `json:"jevCalls"`
+	SelectionJevCalls  int                `json:"selectionJevCalls,omitempty"`
+	OtherJevCalls      int                `json:"otherJevCalls,omitempty"`
+	JevCached          int                `json:"jevCached"`
+	JevFailed          int                `json:"jevFailed"`
+	UpstreamStatus     *int               `json:"upstreamStatus"`
+	UpstreamFinish     string             `json:"upstreamFinish,omitempty"`
+	HeaderMs           *float64           `json:"headerMs"`
+	BodyMs             *float64           `json:"bodyMs"`
+	Usage              *NormalizedUsage   `json:"usage"`
+	UsagePartial       bool               `json:"usagePartial,omitempty"`
+	UsageMissing       string             `json:"usageMissing,omitempty"`
+	SavedTokens        *SavedTokens       `json:"savedTokens,omitempty"`
+	Canceled           bool               `json:"canceled,omitempty"`
+	Protocol           string             `json:"protocol,omitempty"`
+	ConnectFrames      int                `json:"connectFrames,omitempty"`
+	Probabilities      map[string]float64 `json:"probabilities,omitempty"`
+	CandidateNames     []string           `json:"candidateNames,omitempty"`
+	CandidateCount     int                `json:"candidateCount,omitempty"`
+	MustKeep           []string           `json:"mustKeep,omitempty"`
+	MissingFlags       []string           `json:"missingFlags,omitempty"`
+	RuleVersion        string             `json:"ruleVersion,omitempty"`
+	Concentration      *float64           `json:"concentration,omitempty"`
+	ConnectStatus      string             `json:"connectStatus,omitempty"`
+	ObservedTools      []string           `json:"observedTools,omitempty"`
+	Engine             string             `json:"engine,omitempty"`
+	CompactDelta       int                `json:"compactDelta,omitempty"`
+	ProposedKept       []string           `json:"proposedKept,omitempty"`
+	Shadow             bool               `json:"shadow,omitempty"`
+	ShadowHit          *bool              `json:"shadowHit,omitempty"`
+	Misexcluded        []string           `json:"misexcluded,omitempty"`
+	Transforms         []string           `json:"transforms,omitempty"`
 }
 
 // SavedTokens is an estimate of input tokens avoided before an upstream call.
@@ -190,6 +206,9 @@ func (l *EventLog) Counts() map[string]int {
 		out["jev_calls"] += e.JevCalls
 		out["jev_cached"] += e.JevCached
 		out["jev_failed"] += e.JevFailed
+		if e.ConnectStatus != "" {
+			out["connect_"+e.ConnectStatus]++
+		}
 	}
 	return out
 }

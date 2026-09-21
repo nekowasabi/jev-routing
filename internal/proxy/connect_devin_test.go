@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -26,6 +27,27 @@ func devinPromptToolsJSON(t *testing.T) []byte {
 		},
 	}
 	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func decodeConnectPayload(t *testing.T, frame []byte) []byte {
+	t.Helper()
+	if len(frame) < 5 {
+		t.Fatalf("short frame %d", len(frame))
+	}
+	payload := frame[5:]
+	if frame[0]&connectFlagCompressed == 0 {
+		return payload
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(gr)
+	_ = gr.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +674,7 @@ func TestHandlerConnectDevinRecordsJevAttempt(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"model": "fake",
 			"answers": map[string]any{
-				"next_tool":  map[string]any{"type": "choice", "choice": "grep", "confidence": 0.9},
+				"next_tool":  map[string]any{"type": "choice", "choice": "grep", "confidence": 0.9, "probabilities": adoptTestProbs("grep")},
 				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
 			},
 		})

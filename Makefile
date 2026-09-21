@@ -24,12 +24,12 @@ test-jev-live:
 # 実課金のある比較計測。例: make test-x-cell claude
 # Codex は CODEX_MODEL（既定 gpt-5.6-terra）。短名 terra は ChatGPT ログインで 400。
 test-x-cell:
-	./scripts/test-x-cell.sh $(filter claude codex grok cursor devin,$(MAKECMDGOALS))
+	./scripts/test-x-cell.sh $(filter claude codex grok devin,$(MAKECMDGOALS))
 
 test-selection-benchmark:
-	JEV_SELECTION_BENCHMARK=1 ./scripts/test-x-cell.sh $(filter claude codex grok cursor devin,$(MAKECMDGOALS))
+	JEV_SELECTION_BENCHMARK=1 ./scripts/test-x-cell.sh $(filter claude codex grok devin,$(MAKECMDGOALS))
 
-claude codex grok cursor devin:
+claude codex grok devin:
 	@:
 
 clean:

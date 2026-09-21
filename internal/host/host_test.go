@@ -18,28 +18,10 @@ func TestChildArgs(t *testing.T) {
 	if got := ChildArgs(Codex, listen); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ChildArgs(Codex) = %#v, want %#v", got, want)
 	}
-	if got := ChildArgs(Cursor, listen); !reflect.DeepEqual(got, []string{"--endpoint", "http://localhost:45678"}) {
-		t.Fatalf("ChildArgs(Cursor) = %#v", got)
-	}
 	for _, h := range []ID{Claude, Grok, Devin} {
 		if got := ChildArgs(h, listen); got != nil {
 			t.Fatalf("ChildArgs(%s) = %#v, want nil", h, got)
 		}
-	}
-}
-
-func TestAdvertise(t *testing.T) {
-	if got := Advertise(Cursor, "127.0.0.1:8787"); got != "localhost:8787" {
-		t.Fatalf("Advertise(Cursor, 127.0.0.1) = %q", got)
-	}
-	if got := Advertise(Cursor, "[::1]:8787"); got != "localhost:8787" {
-		t.Fatalf("Advertise(Cursor, [::1]) = %q", got)
-	}
-	if got := Advertise(Cursor, "example.com:443"); got != "example.com:443" {
-		t.Fatalf("Advertise other host = %q", got)
-	}
-	if got := Advertise(Claude, "127.0.0.1:8787"); got != "127.0.0.1:8787" {
-		t.Fatalf("Advertise(Claude) = %q", got)
 	}
 }
 
@@ -65,7 +47,6 @@ func TestParse(t *testing.T) {
 		"claude": Claude, "anthropic": Claude,
 		"codex": Codex, "openai": Codex,
 		"grok": Grok, "xai": Grok,
-		"cursor": Cursor, "cursor-agent": Cursor, "cursor-cli": Cursor,
 		"devin": Devin, "cognition": Devin, "devin-cli": Devin,
 	}
 	for in, want := range cases {
@@ -91,31 +72,7 @@ func TestNativeGrokCatalogNames(t *testing.T) {
 	}
 }
 
-func TestNativeCursorDevin(t *testing.T) {
-	if Native(Cursor, "Bash") != "Shell" {
-		t.Fatalf("cursor Bash: %s", Native(Cursor, "Bash"))
-	}
-	if Native(Cursor, "Agent") != "Task" {
-		t.Fatalf("cursor Agent: %s", Native(Cursor, "Agent"))
-	}
-	if Native(Cursor, "Task") != "Task" {
-		t.Fatalf("cursor Task: %s", Native(Cursor, "Task"))
-	}
-	if Native(Cursor, "Edit") != "Write" {
-		t.Fatalf("cursor Edit: %s", Native(Cursor, "Edit"))
-	}
-	if Native(Cursor, "Read") != "Read" {
-		t.Fatalf("cursor Read: %s", Native(Cursor, "Read"))
-	}
-	if Native(Cursor, "TodoWrite") != "updateTodos" {
-		t.Fatalf("cursor TodoWrite: %s", Native(Cursor, "TodoWrite"))
-	}
-	if Native(Cursor, "AskUserQuestion") != "askQuestion" {
-		t.Fatalf("cursor AskUserQuestion: %s", Native(Cursor, "AskUserQuestion"))
-	}
-	if Native(Cursor, "EnterPlanMode") != "createPlan" {
-		t.Fatalf("cursor EnterPlanMode: %s", Native(Cursor, "EnterPlanMode"))
-	}
+func TestNativeDevin(t *testing.T) {
 	if Native(Devin, "Bash") != "exec" {
 		t.Fatalf("devin Bash: %s", Native(Devin, "Bash"))
 	}
@@ -158,27 +115,14 @@ func TestNativeCursorDevin(t *testing.T) {
 }
 
 func TestBinaryLabel(t *testing.T) {
-	if Cursor.Binary() != "cursor-agent" {
-		t.Fatalf("binary %s", Cursor.Binary())
-	}
 	if Devin.Binary() != "devin" {
 		t.Fatalf("binary %s", Devin.Binary())
 	}
 }
 
-func TestChildEnvCursorDevin(t *testing.T) {
+func TestChildEnvDevin(t *testing.T) {
 	listen := "127.0.0.1:8787"
-	env := ChildEnv(Cursor, listen)
-	if !containsKV(env, "CURSOR_API_ENDPOINT=http://localhost:8787") {
-		t.Fatalf("cursor env missing endpoint: %v", env)
-	}
-	if !containsKV(env, "CURSOR_API_BASE_URL=http://localhost:8787") {
-		t.Fatalf("cursor env missing base url: %v", env)
-	}
-	if containsKVPrefix(env, "OPENAI_BASE_URL=") {
-		t.Fatalf("cursor must not set OPENAI_BASE_URL")
-	}
-	env = ChildEnv(Devin, listen)
+	env := ChildEnv(Devin, listen)
 	if !containsKV(env, "DEVIN_API_URL=http://127.0.0.1:8787") {
 		t.Fatalf("devin env missing url: %v", env)
 	}

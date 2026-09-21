@@ -92,7 +92,7 @@ func TestClassMapRecordsSkillMCPPluginAndEffort(t *testing.T) {
 	}
 	events := []Event{
 		{Host: "codex", ReasoningChanged: true, OriginalModel: "gpt-x", SentModel: "gpt-x"},
-		{Host: "cursor", CompactApplied: true},
+		{Host: "devin", CompactApplied: true},
 	}
 	cells := ClassMap(apps, events, DefaultOptions(), "")
 	st := map[string]ClassCell{}

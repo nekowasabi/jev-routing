@@ -12,7 +12,7 @@ import (
 )
 
 func TestRequiredApplicationHosts(t *testing.T) {
-	hosts := []host.ID{host.Claude, host.Codex, host.Grok, host.Cursor, host.Devin}
+	hosts := []host.ID{host.Claude, host.Codex, host.Grok, host.Devin}
 	cat, err := plan.BuildCatalog(plan.Inventory{
 		Skills: []plan.SkillIn{{Name: "review", Provider: "test", Version: "1", BodyRef: "skill://review/SKILL.md", Available: true, Explicit: true, Description: "review"}},
 	}, host.Claude, &plan.LaunchProbe{})

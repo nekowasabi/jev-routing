@@ -25,42 +25,6 @@ func mergeHosts(dst, src []string) []string {
 	return out
 }
 
-func cursorAgentHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
-	return h == "api5.cursor.sh" || strings.HasSuffix(h, ".api5.cursor.sh")
-}
-
-func rewriteCursorAgentHosts(body []byte, listen string) []byte {
-	listen = strings.TrimSpace(listen)
-	if listen == "" || !bytesContainCursorAgentHost(body) {
-		return body
-	}
-	out, ok := rewriteProtoStrings(body, func(s string) (string, bool) {
-		if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
-			u, err := url.Parse(s)
-			if err != nil || !cursorAgentHost(u.Host) {
-				return s, false
-			}
-			u.Scheme = "http"
-			u.Host = listen
-			return u.String(), true
-		}
-		if cursorAgentHost(s) {
-			return listen, true
-		}
-		return s, false
-	})
-	if !ok {
-		return body
-	}
-	return out
-}
-
-func bytesContainCursorAgentHost(body []byte) bool {
-	s := strings.ToLower(string(body))
-	return strings.Contains(s, "api5.cursor.sh") || strings.Contains(s, "agentn.")
-}
-
 func rewriteProtoStrings(body []byte, fn func(string) (string, bool)) ([]byte, bool) {
 	out, changed, ok := rewriteProtoStringsAt(body, fn, 0)
 	if !ok {

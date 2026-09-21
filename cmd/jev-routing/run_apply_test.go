@@ -29,7 +29,6 @@ func TestRunAppliesSkillOnNormalPath(t *testing.T) {
 		{host.Claude, "ANTHROPIC_UPSTREAM", "claude", "ANTHROPIC_BASE_URL", "/v1/messages", jsonBody, "application/json"},
 		{host.Codex, "CODEX_UPSTREAM", "codex", "OPENAI_BASE_URL", "/responses", jsonBody, "application/json"},
 		{host.Grok, "GROK_OAUTH_UPSTREAM", "grok", "GROK_CLI_CHAT_PROXY_BASE_URL", "/chat/completions", jsonBody, "application/json"},
-		{host.Cursor, "CURSOR_UPSTREAM", "cursor-agent", "CURSOR_API_ENDPOINT", "/agent.v1.AgentService/Run", cursorSkillFrame(), "application/connect+proto"},
 		{host.Devin, "DEVIN_UPSTREAM", "devin", "DEVIN_API_URL", "/exa.api_server_pb.ApiServerService/GetChatMessage", devinSkillFrame(), "application/connect+proto"},
 	}
 	for _, tc := range cases {
@@ -83,13 +82,6 @@ func TestRunAppliesSkillOnNormalPath(t *testing.T) {
 			}
 		})
 	}
-}
-
-func cursorSkillFrame() []byte {
-	action := protoLD(2, protoLD(1, protoLD(1, protoLD(1, []byte("use the skill-review skill")))))
-	tool := append(protoLD(1, []byte("skill-review")), protoLD(2, []byte("review skill"))...)
-	mcp := protoLD(4, protoLD(1, tool))
-	return connectFrameForTest(append(action, mcp...))
 }
 
 func devinSkillFrame() []byte {

@@ -39,13 +39,13 @@ func TestSelectionUsesCompleteCandidateCapabilities(t *testing.T) {
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{
-			"next_tool":  map[string]any{"type": "choice", "choice": "exec", "confidence": 0.9},
+			"next_tool":  map[string]any{"type": "choice", "choice": "exec", "confidence": 0.9, "probabilities": adoptTestProbs("exec")},
 			"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
 		}})
 	})
 	decision, reason, err := askNextTool(context.Background(), client, "Find the function definition", nil,
-		[]plan.Spec{{Name: "exec", Desc: description}, {Name: "wait"}}, "")
-	if err != nil || reason != "" || decision.Tool != "exec" {
+		[]plan.Spec{{Name: "exec", Desc: description}, {Name: "wait"}}, "", nil)
+	if err != nil || reason != reasonCoverage || decision.Tool != "exec" {
 		t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
 	}
 }
@@ -77,7 +77,7 @@ func TestUncertainChoiceKeepsConfidentTopSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Reason != reasonTopSetJev || strings.Join(stats.ToolsAfter, ",") != "grep,read_file" {
+	if stats.Reason != reasonCoverage || strings.Join(stats.ToolsAfter, ",") != "grep,read_file" {
 		t.Fatalf("reason=%s tools=%v", stats.Reason, stats.ToolsAfter)
 	}
 }
@@ -88,7 +88,7 @@ func TestUncertainChoiceWithSpreadMassPassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Reason != reasonUncertainJev || stats.ToolAfter != stats.ToolBefore {
+	if stats.Reason != reasonCoverageShort || stats.ToolAfter != stats.ToolBefore {
 		t.Fatalf("reason=%s tools %d→%d", stats.Reason, stats.ToolBefore, stats.ToolAfter)
 	}
 }
@@ -107,8 +107,8 @@ func TestUncertainChoiceRestrictsToTaskPhase(t *testing.T) {
 	client := jevRaw(t, uncertainChoice(map[string]float64{"grep": 0.5, "read_file": 0.3, "run_terminal_command": 0.2}, map[string]any{
 		"task_phase": map[string]any{"type": "choice", "choice": plan.PhaseExecute, "confidence": 0.9},
 	}))
-	decision, reason, err := askNextTool(context.Background(), client, "run the tests", nil, phaseSpecs(), "")
-	if err != nil || reason != reasonPhaseJev || strings.Join(decision.Set, ",") != "run_terminal_command" {
+	decision, reason, err := askNextTool(context.Background(), client, "run the tests", nil, phaseSpecs(), "", nil)
+	if err != nil || reason != reasonCoverageShort || !decision.Passthrough {
 		t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
 	}
 }
@@ -119,8 +119,8 @@ func TestPhaseSetKeepsRepeatedTool(t *testing.T) {
 		"repeat_same_tool": map[string]any{"type": "noul", "noul": 0.9},
 	}))
 	decision, reason, err := askNextTool(context.Background(), client, "run the tests",
-		[]plan.Action{{Tool: "grep", Result: "no match"}}, phaseSpecs(), "")
-	if err != nil || reason != reasonPhaseJev || strings.Join(decision.Set, ",") != "run_terminal_command,grep" {
+		[]plan.Action{{Tool: "grep", Result: "no match"}}, phaseSpecs(), "", nil)
+	if err != nil || reason != reasonCoverageShort || !decision.Passthrough {
 		t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
 	}
 }
@@ -169,20 +169,20 @@ func TestSelectionAcceptsOfficialNoulWithoutConfidence(t *testing.T) {
 		wantTool    string
 		wantReason  string
 	}{
-		{"yes-boundary", 0.8, 0.85, "exec", ""},
-		{"no-boundary", 0.2, 0.9, plan.Respond, ""},
-		{"uncertain", 0.5, 0.9, "exec", reasonUncertainJev},
-		{"choice-still-uncertain", 0.99, 0.849, "exec", reasonUncertainJev},
+		{"yes-boundary", 0.8, 0.85, "exec", reasonCoverage},
+		{"no-boundary", 0.2, 0.9, "exec", reasonCoverage},
+		{"uncertain", 0.5, 0.9, "exec", reasonCoverage},
+		{"choice-still-uncertain", 0.99, 0.849, "exec", reasonCoverage},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := jevAnswers(t, "exec", tc.confidence, tc.probability, 0, func(w http.ResponseWriter, r *http.Request) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{
-					"next_tool":  map[string]any{"type": "choice", "choice": "exec", "confidence": tc.confidence},
+					"next_tool":  map[string]any{"type": "choice", "choice": "exec", "confidence": tc.confidence, "probabilities": adoptTestProbs("exec")},
 					"needs_tool": map[string]any{"type": "noul", "noul": tc.probability},
 				}})
 			})
 			decision, reason, err := askNextTool(context.Background(), client, "Find the function definition", nil,
-				[]plan.Spec{{Name: "exec", Desc: "Run shell commands to search and read files"}}, "")
+				[]plan.Spec{{Name: "exec", Desc: "Run shell commands to search and read files"}}, "", nil)
 			if err != nil || reason != tc.wantReason || decision.Tool != tc.wantTool || decision.Confidence != tc.confidence || decision.Done != tc.probability {
 				t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
 			}
