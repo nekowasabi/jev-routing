@@ -49,7 +49,7 @@ cd jev-routing
 go install ./cmd/jev-routing
 ```
 
-The key is optional. Without it, an on-device classifier is used.
+The key is optional except when `JEV_SELECTION_MODE=jev`, which refuses to start without it. Without a key, `hybrid` and `local` use the on-device classifier.
 
 ```bash
 export TYPESAFE_API_KEY=ts_...    # https://console.typesafe.ai/settings/keys
@@ -58,11 +58,11 @@ export TYPESAFE_API_KEY=ts_...    # https://console.typesafe.ai/settings/keys
 ## Running
 
 ```bash
-jev-routing run grok              # GROK_CLI_CHAT_PROXY_BASE_URL をプロキシへ
-jev-routing run claude            # ANTHROPIC_BASE_URL をプロキシへ
-jev-routing run codex             # OpenAI ログインでプロキシへ接続
-jev-routing run devin             # DEVIN_API_URL をプロキシへ
-jev-routing route --json < request.json   # ateam / 診断。モデル選定を JSON で返す
+jev-routing run grok              # points GROK_CLI_CHAT_PROXY_BASE_URL at the proxy
+jev-routing run claude            # points ANTHROPIC_BASE_URL at the proxy
+jev-routing run codex             # connects through the proxy with OpenAI login
+jev-routing run devin             # points DEVIN_API_URL at the proxy
+jev-routing route --json < request.json   # ateam / diagnostics. returns the chosen model as JSON
 ```
 
 `run` tries `127.0.0.1:8787` first and automatically picks a free port if it is in use. If `JEV_LISTEN` is set, that address takes precedence.
@@ -189,6 +189,9 @@ These are read once at startup. Invalid values make startup fail.
 | `JEV_COMPACTION` | `off` / `on` | `on` |
 | `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
 | `JEV_SELECTION_MODE` | `local` / `jev` / `hybrid` | `hybrid` |
+| `JEV_SHADOW` | `on` / `off` | `off` |
+| `JEV_TRANSFORMS` | `compact=on/off,filter=on/off,criteria=on/off` | `compact=on,filter=on,criteria=off` |
+| `JEV_COST_GATE_MAX` | integer ≥ 0 | `3` |
 | `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | a model identifier and comma-separated exact-match names | empty (disabled) |
 | `JEV_DIRECT_TOOLS` | allowed names of Chat functions with no arguments / constant arguments | empty (disabled) |
 | `JEV_RUN_ID` | ID for comparison | auto-generated |
@@ -199,6 +202,8 @@ These are read once at startup. Invalid values make startup fail.
 `forced` pins `tool_choice` only for requests that have a verified, real Jev answer. Local scoring alone never forces it. `JEV_ARGS_MODEL` is for `forced` only and transparently swaps just the sending model for allowed tools. Pricing and compatibility are never guessed. `JEV_DIRECT_TOOLS` is effective only together with `forced` and cannot be combined with ARGS_MODEL. Out-of-scope requests and invalid schemas are returned upstream. Real tool execution and approval remain with the host. There is no automatic retry on upstream rejection.
 
 `JEV_SELECTION_MODE=local` uses local rules only and never asks Jev for a selection. `jev` delegates eligible selections to Jev, and if Jev is unconfigured, invalid, uncertain, or fails, the candidates are not narrowed. `hybrid` uses only the local rules that are conclusive and hands the pending cases, such as word matches, to Jev. If Jev is not connected, the candidates are not narrowed.
+
+`JEV_SHADOW=on` scores the candidate set without rewriting the request. `JEV_TRANSFORMS` turns compaction, tool-catalog filtering, and contrast criteria on or off independently; criteria stays off until a confused pair is registered. `JEV_COST_GATE_MAX` skips the classifier when the candidate count is at most this value.
 
 On ordinary proxy requests the same decision function is called automatically, and it goes on to supply the body of the selected skill, invoke MCP/CLI, and verify the result. When `JEV_AUTO_APPLY=on`, only targets whose per-kind mode is `apply` are started, and under `required` a non-delivery, an unsupported case, or an unconsumed selection is not treated as a successful exit. `fallback` reverts to the legacy settings only when explicitly specified. `jev-routing route --json` is the same entry point used by ateam and diagnostics, and it is not assumed that an LLM will call it on its own. The model-selection JSON is `model` / `effort` / `reason_code`. A selection log or narrowed candidates alone do not count as an application having completed. Unknown executions are never retried automatically. The dashboard shows the movable points, the reasons for non-application, and the comparison effects in Japanese. Missing data and "no comparison" are left as missing / no comparison, and mock values are labeled as samples.
 
@@ -221,8 +226,8 @@ This is not part of the normal test suite. Each target is run once in a separate
 
 ```bash
 make test-x-cell           # Claude Code → Codex → Grok Build → Devin
-make test-x-cell claude    # 1 製品だけ
-make test-selection-benchmark claude # baseline/local/jev/hybrid を1製品で比較
+make test-x-cell claude    # one product only
+make test-selection-benchmark claude # compare baseline/local/jev/hybrid on one product
 ```
 
 Results land in `artifacts/x-cell/<datetime>/<host>/comparison.json`. Use only results with `comparable: true` (`valid: true`) for comparison. Not reaching the proxy, `rewritten=0` (passthrough only), or a mismatch in the completion condition yields `comparable: false` and no reduction figures. Billed tokens vary a lot with cache state across independent sessions, so they are not compared on a single run. Instead, `routing_request_chars` (the reduction in bytes of the JSON body the proxy actually received and sent upstream) and the differences in output tokens and runtime are recorded. Codex with ChatGPT login uses `-m gpt-5.6-terra` (override with `CODEX_MODEL`). The short name `terra` returns 400.

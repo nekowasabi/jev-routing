@@ -49,7 +49,7 @@ cd jev-routing
 go install ./cmd/jev-routing
 ```
 
-キーは任意。無いときはオンデバイスの分類器です。
+キーは任意です。ただし `JEV_SELECTION_MODE=jev` のときは必須で、無いと起動しません。キーが無いとき、`hybrid` と `local` はオンデバイスの分類器を使います。
 
 ```bash
 export TYPESAFE_API_KEY=ts_...    # https://console.typesafe.ai/settings/keys
@@ -189,6 +189,9 @@ jev-routing run --dashboard grok
 | `JEV_COMPACTION` | `off` / `on` | `on` |
 | `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
 | `JEV_SELECTION_MODE` | `local` / `jev` / `hybrid` | `hybrid` |
+| `JEV_SHADOW` | `on` / `off` | `off` |
+| `JEV_TRANSFORMS` | `compact=on/off,filter=on/off,criteria=on/off` | `compact=on,filter=on,criteria=off` |
+| `JEV_COST_GATE_MAX` | 0 以上の整数 | `3` |
 | `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | モデル識別子とカンマ区切りの完全一致名 | 空（無効） |
 | `JEV_DIRECT_TOOLS` | 無引数/定数引数 Chat function の許可名 | 空（無効） |
 | `JEV_RUN_ID` | 比較用 ID | 自動生成 |
@@ -199,6 +202,8 @@ jev-routing run --dashboard grok
 `forced` は、検証済みの実 Jev 回答がある要求だけ `tool_choice` を固定します。ローカル採点だけでは強制しません。`JEV_ARGS_MODEL` は `forced` 専用で、許可ツールの送信モデルだけを透過的に差し替えます。価格や互換性は推測しません。`JEV_DIRECT_TOOLS` は `forced` と同時だけ有効で、ARGS_MODEL とは併用できません。対象外・不正スキーマは上流へ戻します。実ツール実行と承認はホストに残します。上流拒否の自動再送はありません。
 
 `JEV_SELECTION_MODE=local` はローカル規則だけを使い、Jev へ選定を問い合わせません。`jev` は適格な選定を Jev に委譲し、Jev が未設定・不正・不確実・失敗なら候補を絞りません。`hybrid` は確定したローカル規則だけを使い、語一致などの保留は Jev に渡します。Jev 未接続なら候補を絞りません。
+
+`JEV_SHADOW=on` は候補集合を採点しますが、リクエストは書き換えません。`JEV_TRANSFORMS` は compaction、ツールカタログの絞り込み、対比 criteria を個別に on/off します。criteria は混乱ペアが登録されるまで off のままです。`JEV_COST_GATE_MAX` は候補数がこの値以下のとき分類器を飛ばします。
 
 通常のプロキシ要求では同じ判断関数が自動で呼ばれ、選定したスキル本文の供給・MCP/CLI 呼出し・結果照合まで進みます。`JEV_AUTO_APPLY=on` のとき種類別モードが `apply` の対象だけを起動し、`required` では未配達・未対応・選定不消費を成功終了にしません。`fallback` は明示指定時だけ従来設定へ戻します。`jev-routing route --json` は ateam と診断用の同じ入口であり、LLM が自発的に呼ぶことは前提にしません。モデル選定の JSON は `model` / `effort` / `reason_code` です。選定ログや候補絞込みだけでは適用完了にしません。不明な実行は自動再送しません。ダッシュボードは可動個所・未適用理由・比較効果を日本語で示します。欠測と比較なしは欠測／比較なしのまま残し、模擬値はサンプルと表示します。
 
