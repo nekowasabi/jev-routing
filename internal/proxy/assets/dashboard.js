@@ -94,6 +94,24 @@
     return totals;
   }
 
+  // Usage is attached when the response body ends. Compaction savings are
+  // attached before the upstream call, so a poll during the stream already
+  // has savings and must be replaced once usage arrives.
+  function usageSettled(event) {
+    if (!event) return false;
+    if (event.usage || event.usageMissing) return true;
+    return !!event.upstreamFinish;
+  }
+
+  function usageCursor(events) {
+    let cursor = 0;
+    for (const event of events || []) {
+      if (!usageSettled(event)) break;
+      cursor = event.seq || cursor;
+    }
+    return cursor;
+  }
+
   function toolReplacement(e) {
     if (!e.changed || !Array.isArray(e.toolsBefore) || !Array.isArray(e.toolsAfter)) return "—";
     const removed = e.toolsBefore.filter((name) => !e.toolsAfter.includes(name));
@@ -309,7 +327,9 @@
   function mergeEvents(store, incoming, oldestSeq, truncated) {
     const next = store.slice();
     for (const e of incoming || []) {
-      if (!next.some((x) => x.seq === e.seq)) next.push(e);
+      const existing = next.findIndex((x) => x.seq === e.seq);
+      if (existing >= 0) next[existing] = e;
+      else next.push(e);
     }
     next.sort((a, b) => a.seq - b.seq);
     while (next.length > MAX_STORE) next.shift();
@@ -556,7 +576,7 @@
       const r = payload.router || {};
       const merged = mergeEvents(store, payload.events, r.oldestSeq, payload.historyTruncated);
       store = merged.events;
-      if (store.length) since = store[store.length - 1].seq;
+      since = usageCursor(store);
       fillHostFilter(store);
       const summary = summarizeEvents(store, r.counts);
       const totals = usageTotals(store);
@@ -829,5 +849,5 @@
     setInterval(poll, 2000);
   }
 
-  return { clip, formatUsage, formatSavings, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS, start };
+  return { clip, formatUsage, formatSavings, usageTotals, usageCursor, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS, start };
 });

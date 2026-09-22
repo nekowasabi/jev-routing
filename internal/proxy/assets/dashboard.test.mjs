@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatUsage, usageTotals, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS } from "./dashboard.mjs";
+import { formatUsage, usageTotals, usageCursor, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS } from "./dashboard.mjs";
 
 test("formatUsage distinguishes missing from zero", () => {
   assert.equal(formatUsage(null, "no_usage", false).missing, true);
@@ -80,6 +80,42 @@ test("application graphs distinguish increase decrease unapplied local skip miss
   assert.equal(formatEffect("local_skip"), "正常なローカル省略");
   assert.equal(formatEffect("missing"), "欠測");
   assert.equal(formatEffect("none"), "比較なし");
+});
+
+test("mergeEvents replaces an in-flight seq when usage arrives", () => {
+  const early = { seq: 7, savedTokens: { compactionInput: 100 } };
+  const late = {
+    seq: 7,
+    savedTokens: { compactionInput: 100, directInput: 40 },
+    usage: { inputTokens: 11, outputTokens: 2, cachedTokens: 5, cacheWriteTokens: 3, reasoningTokens: 1 },
+    upstreamFinish: "complete",
+  };
+  const first = mergeEvents([], [early], 7, false);
+  const second = mergeEvents(first.events, [late], 7, false);
+  assert.equal(second.events.length, 1);
+  const totals = usageTotals(second.events);
+  assert.equal(totals.input, 11);
+  assert.equal(totals.output, 2);
+  assert.equal(totals.cached, 5);
+  assert.equal(totals.cacheWrite, 3);
+  assert.equal(totals.reasoning, 1);
+  assert.equal(totals.directSaved, 40);
+  assert.equal(totals.compactionSaved, 100);
+  assert.equal(totals.known, 1);
+});
+
+test("usageCursor waits on an in-flight response and passes a direct skip", () => {
+  const inflight = [
+    { seq: 1, usage: { inputTokens: 1 }, upstreamFinish: "complete" },
+    { seq: 2, savedTokens: { compactionInput: 9 }, upstreamStatus: 200 },
+    { seq: 3, usage: { inputTokens: 5 }, upstreamFinish: "complete" },
+  ];
+  assert.equal(usageCursor(inflight), 1);
+  const settled = [
+    { seq: 1, usageMissing: "not_called", upstreamFinish: "direct", savedTokens: { directInput: 50 } },
+    { seq: 2, usage: { inputTokens: 8, cacheWriteTokens: 1 }, upstreamFinish: "complete" },
+  ];
+  assert.equal(usageCursor(settled), 2);
 });
 
 test("mergeEvents caps store and flags truncation", () => {

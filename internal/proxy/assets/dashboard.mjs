@@ -4,6 +4,7 @@ const api = require("./dashboard.js");
 export const clip = api.clip;
 export const formatUsage = api.formatUsage;
 export const usageTotals = api.usageTotals;
+export const usageCursor = api.usageCursor;
 export const toolReplacement = api.toolReplacement;
 export const summarizeUnsupportedHistory = api.summarizeUnsupportedHistory;
 export const unknownHistoryDetails = api.unknownHistoryDetails;
