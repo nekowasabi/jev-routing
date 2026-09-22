@@ -34,6 +34,137 @@ def expected_live_answers(worktree: Path) -> dict[str, str]:
     return answers
 
 
+LOCATE_PROMPT = (
+    "ファイルを変更せず、RewriteWith、extractTools、applyCompactToMessages、DefaultOptions、DefaultUpstream の定義を調べてください。"
+    "各関数について個別のツール呼び出しで定義を検索し、別のツール呼び出しで本文を読んで確認してください（合計10回以上、並列化せず順に実行）。"
+    "最終回答は関数名をキー、リポジトリ相対パス:定義行番号を値にしたJSONオブジェクトだけにしてください。説明文や完了マーカーは不要です。"
+)
+
+# Dependency facts from go.mod. This is not a symbol-definition search.
+MODULE_PROMPT = (
+    "ファイルは変更しないでください。go.mod だけを開き、"
+    "module パス、go ディレクティブのバージョン、indirect ではない直接依存の個数を数えてください。"
+    "最終回答は module, go, direct_requires の3キーだけの JSON オブジェクトにしてください。"
+    "direct_requires は整数です。説明文は不要です。"
+)
+
+
+def prompt_for(task: str) -> str:
+    if task == "locate":
+        return LOCATE_PROMPT
+    if task == "module":
+        return MODULE_PROMPT
+    raise ValueError(f"unknown task: {task}")
+
+
+def expected_module_facts(worktree: Path) -> dict[str, str]:
+    text = (worktree / "go.mod").read_text()
+    module = re.search(r"^module[ \t]+(\S+)", text, re.M)
+    go_version = re.search(r"^go[ \t]+(\S+)", text, re.M)
+    if module is None or go_version is None:
+        raise ValueError("go.mod missing module or go")
+    direct = 0
+    in_block = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("require ("):
+            in_block = True
+            continue
+        if in_block and line == ")":
+            in_block = False
+            continue
+        if in_block:
+            if line and not line.startswith("//") and "// indirect" not in line:
+                direct += 1
+            continue
+        if re.match(r"require\s+\S+\s+\S+", line) and "// indirect" not in line:
+            direct += 1
+    return {"module": module.group(1), "go": go_version.group(1), "direct_requires": str(direct)}
+
+
+def expected_for_task(task: str, worktree: Path) -> dict[str, str]:
+    if task == "locate":
+        return expected_live_answers(worktree)
+    if task == "module":
+        return expected_module_facts(worktree)
+    raise ValueError(f"unknown task: {task}")
+
+
+def median(values: list[float]) -> float | None:
+    nums = sorted(values)
+    if not nums:
+        return None
+    mid = len(nums) // 2
+    if len(nums) % 2:
+        return float(nums[mid])
+    return (nums[mid - 1] + nums[mid]) / 2
+
+
+def _usage_num(result: dict[str, Any], key: str) -> float | None:
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    value = usage.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def median_report(root: Path, task: str) -> dict[str, Any]:
+    """Median of baseline-minus-hybrid over quality-successful repeats."""
+    reps = sorted(path for path in root.iterdir() if path.is_dir() and re.fullmatch(r"r\d+", path.name))
+    hosts: dict[str, dict[str, Any]] = {}
+    for rep in reps:
+        for host_dir in sorted(path for path in rep.iterdir() if path.is_dir()):
+            base_path = host_dir / "baseline" / "result.json"
+            hybrid_path = host_dir / "hybrid" / "result.json"
+            if not base_path.is_file() or not hybrid_path.is_file():
+                continue
+            base = json.loads(base_path.read_text())
+            hybrid = json.loads(hybrid_path.read_text())
+            slot = hosts.setdefault(host_dir.name, {"reps": []})
+            quality_both = (
+                (base.get("quality") or {}).get("success") is True
+                and (hybrid.get("quality") or {}).get("success") is True
+            )
+            row: dict[str, Any] = {
+                "rep": rep.name,
+                "quality_both": quality_both,
+                "baseline_wall_ms": base.get("wall_ms") if isinstance(base.get("wall_ms"), (int, float)) else None,
+                "hybrid_wall_ms": hybrid.get("wall_ms") if isinstance(hybrid.get("wall_ms"), (int, float)) else None,
+                "baseline_output_tokens": _usage_num(base, "output_tokens"),
+                "hybrid_output_tokens": _usage_num(hybrid, "output_tokens"),
+                "baseline_input_tokens": _usage_num(base, "input_tokens"),
+                "hybrid_input_tokens": _usage_num(hybrid, "input_tokens"),
+            }
+            comparison_path = host_dir / "comparison.json"
+            if comparison_path.is_file():
+                comparison = json.loads(comparison_path.read_text())
+                row["comparable"] = comparison.get("comparable") is True
+            slot["reps"].append(row)
+    for host, slot in hosts.items():
+        usable = [row for row in slot["reps"] if row["quality_both"]]
+        wall, output, inp = [], [], []
+        for row in usable:
+            if isinstance(row["baseline_wall_ms"], (int, float)) and isinstance(row["hybrid_wall_ms"], (int, float)):
+                wall.append(row["baseline_wall_ms"] - row["hybrid_wall_ms"])
+            if row["baseline_output_tokens"] is not None and row["hybrid_output_tokens"] is not None:
+                output.append(row["baseline_output_tokens"] - row["hybrid_output_tokens"])
+            if row["baseline_input_tokens"] is not None and row["hybrid_input_tokens"] is not None:
+                inp.append(row["baseline_input_tokens"] - row["hybrid_input_tokens"])
+        wall_med, out_med, in_med = median(wall), median(output), median(inp)
+        slot["samples"] = len(usable)
+        slot["runs"] = len(slot["reps"])
+        slot["median_wall_ms_saved"] = wall_med
+        slot["median_output_tokens_saved"] = out_med
+        slot["median_input_tokens_saved"] = in_med
+        slot["improved"] = (
+            len(usable) >= 3
+            and wall_med is not None and wall_med > 0
+            and out_med is not None and out_med > 0
+            and in_med is not None and in_med > 0
+        )
+    return {"task": task, "hosts": hosts}
+
+
 def extract_cli_payload(host: str, raw: str) -> tuple[dict[str, Any], str]:
     """Parse a CLI --output-format json payload. Grok emits `text`; Claude uses `result`."""
     if host == "codex":
@@ -129,7 +260,15 @@ def live_acceptance(baseline: dict[str, Any], jev: dict[str, Any]) -> dict[str, 
                  and not event.get("canceled")]
     if not any(event.get("apply") in ("filter", "forced") for event in completed):
         failures.append("selection_not_completed_upstream")
-    if stats.get("compaction") == "on":
+    # A local definition lookup has no tool history to compact. The model only
+    # generates the reply, so compaction is not required for that completed turn.
+    local_lookup = any(
+        event.get("reason") == "local_lookup" and event.get("apply") in ("filter", "forced")
+        for event in completed
+    )
+    if local_lookup:
+        pass
+    elif stats.get("compaction") == "on":
         if stats.get("compactionApplied", 0) <= 0:
             failures.append("compaction_not_applied")
         if not any(event.get("compactApplied") is True and event.get("apply") != "direct"
@@ -370,7 +509,7 @@ def _slim_mode(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def xcell_history_record(host_dir: Path, *, run_id: str, benchmark: bool,
-                         recorded_at: str | None = None) -> dict[str, Any]:
+                         recorded_at: str | None = None, task: str = "locate") -> dict[str, Any]:
     """One append-only row for long-term comparison. Omits request/response bodies."""
     comparison = json.loads((host_dir / "comparison.json").read_text())
     modes: dict[str, Any] = {}
@@ -387,6 +526,7 @@ def xcell_history_record(host_dir: Path, *, run_id: str, benchmark: bool,
     return {
         "recorded_at": recorded_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "run_id": run_id,
+        "task": task,
         "commit": commit,
         "host": _text(comparison.get("host")) or host_dir.name,
         "benchmark": benchmark,

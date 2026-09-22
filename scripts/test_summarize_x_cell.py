@@ -9,11 +9,15 @@ from pathlib import Path
 
 from summarize_x_cell import (
     LIVE_TARGETS,
+    MODULE_PROMPT,
     append_xcell_history,
     expected_live_answers,
+    expected_module_facts,
     extract_cli_payload,
     live_acceptance,
     live_quality,
+    median_report,
+    prompt_for,
     summarize_dir,
     xcell_history_record,
 )
@@ -74,6 +78,14 @@ class SummarizeXCell(unittest.TestCase):
         jev = {**baseline, "mode": "jev", "proxy_stats": {
             "selectionApplied": 1, "compactionApplied": 1, "compaction": "on",
             "events": [{"apply": "filter", "compactApplied": True,
+                        "upstreamStatus": 200, "upstreamFinish": "complete"}]}}
+        self.assertTrue(live_acceptance(baseline, jev)["valid"])
+
+    def test_local_lookup_answer_does_not_require_history_compaction(self):
+        baseline = {"mode": "baseline", "exit_code": 0, "quality": {"success": True}}
+        jev = {**baseline, "mode": "hybrid", "proxy_stats": {
+            "selectionApplied": 1, "compactionApplied": 0, "compaction": "on",
+            "events": [{"apply": "filter", "reason": "local_lookup", "compactApplied": False,
                         "upstreamStatus": 200, "upstreamFinish": "complete"}]}}
         self.assertTrue(live_acceptance(baseline, jev)["valid"])
 
@@ -183,6 +195,50 @@ class SummarizeXCell(unittest.TestCase):
             lines = [json.loads(line) for line in log.read_text().splitlines()]
             self.assertEqual([line["run_id"] for line in lines], ["r1", "r2"])
             self.assertIsNone(lines[1]["reduction"])
+
+    def test_module_facts_count_direct_requires(self):
+        self.assertNotIn("定義を調べ", MODULE_PROMPT)
+        self.assertNotIn("並列化せず", MODULE_PROMPT)
+        self.assertNotIn("検索", MODULE_PROMPT)
+        self.assertEqual(prompt_for("module"), MODULE_PROMPT)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/app\n\ngo 1.22.0\n\n"
+                "require golang.org/x/net v1.2.3\n\n"
+                "require (\n\texample.com/direct v1.0.0\n\texample.com/skip v0.1.0 // indirect\n)\n"
+            )
+            self.assertEqual(expected_module_facts(root), {
+                "module": "example.com/app",
+                "go": "1.22.0",
+                "direct_requires": "2",
+            })
+        repo = Path(__file__).resolve().parents[1]
+        live = expected_module_facts(repo)
+        self.assertEqual(live["module"], "github.com/nekowasabi/jev-routing")
+        self.assertEqual(live["direct_requires"], "1")
+
+    def test_repeat_median_requires_three_quality_successes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index, saved in enumerate((10, -5, 30), start=1):
+                rep = root / f"r{index:02d}" / "claude"
+                for mode, wall in (("baseline", 100), ("hybrid", 100 - saved)):
+                    mode_dir = rep / mode
+                    mode_dir.mkdir(parents=True)
+                    (mode_dir / "result.json").write_text(json.dumps({
+                        "wall_ms": wall,
+                        "usage": {"output_tokens": 50 if mode == "baseline" else 40,
+                                  "input_tokens": 20 if mode == "baseline" else 12},
+                        "quality": {"success": True},
+                    }))
+                (rep / "comparison.json").write_text(json.dumps({"comparable": False}))
+            report = median_report(root, "module")
+            slot = report["hosts"]["claude"]
+            self.assertEqual(slot["samples"], 3)
+            self.assertEqual(slot["median_wall_ms_saved"], 10)
+            self.assertEqual(slot["median_output_tokens_saved"], 10)
+            self.assertTrue(slot["improved"])
 
     def test_live_harness_exit_tracks_acceptance(self):
         with tempfile.TemporaryDirectory() as tmp:

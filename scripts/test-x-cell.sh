@@ -33,18 +33,34 @@ if ! command -v jq >/dev/null; then
 fi
 
 run_id=$(date +%Y%m%dT%H%M%S)-$$
-out_dir="$root/artifacts/x-cell/$run_id"
+suite_root="$root/artifacts/x-cell/$run_id"
+out_dir="$suite_root"
 # Append-only series for comparing runs over time. Override with JEV_XCELL_LOG.
 history_log=${JEV_XCELL_LOG:-"$HOME/.local/state/jev-routing/x-cell.jsonl"}
-mkdir -p "$out_dir"
+mkdir -p "$suite_root"
 binary="$root/bin/jev-routing"
 go build -o "$binary" ./cmd/jev-routing
 commit=$(git rev-parse HEAD)
-prompt='ファイルを変更せず、RewriteWith、extractTools、applyCompactToMessages、DefaultOptions、DefaultUpstream の定義を調べてください。各関数について個別のツール呼び出しで定義を検索し、別のツール呼び出しで本文を読んで確認してください（合計10回以上、並列化せず順に実行）。最終回答は関数名をキー、リポジトリ相対パス:定義行番号を値にしたJSONオブジェクトだけにしてください。説明文や完了マーカーは不要です。'
+task=${JEV_XCELL_TASK:-locate}
+repeats=${JEV_XCELL_REPEATS:-1}
+case "$task" in
+  locate|module) ;;
+  *) echo "JEV_XCELL_TASK は locate または module です: $task" >&2; exit 2;;
+esac
+if ! [[ "$repeats" =~ ^[1-9][0-9]*$ ]]; then
+  echo "JEV_XCELL_REPEATS は 1 以上の整数です: $repeats" >&2
+  exit 2
+fi
+prompt=$(PYTHONPATH="$root/scripts" python3 - "$task" <<'PY'
+import sys
+from summarize_x_cell import prompt_for
+print(prompt_for(sys.argv[1]), end="")
+PY
+)
 
 cleanup() {
   local dir
-  for dir in "$out_dir"/*/*/worktree; do
+  for dir in "$suite_root"/*/*/worktree "$suite_root"/*/*/*/worktree; do
     [[ -d "$dir" ]] && git worktree remove --force "$dir" >/dev/null 2>&1 || true
   done
 }
@@ -61,10 +77,10 @@ run_one() {
   worktree="$case_dir/worktree"
   mkdir -p "$case_dir"
   git worktree add --detach "$worktree" "$commit" >/dev/null
-  PYTHONPATH="$root/scripts" python3 - "$worktree" "$case_dir/expected.json" <<'PY'
+  PYTHONPATH="$root/scripts" python3 - "$worktree" "$case_dir/expected.json" "$task" <<'PY'
 import json, pathlib, sys
-from summarize_x_cell import expected_live_answers
-pathlib.Path(sys.argv[2]).write_text(json.dumps(expected_live_answers(pathlib.Path(sys.argv[1]))))
+from summarize_x_cell import expected_for_task
+pathlib.Path(sys.argv[2]).write_text(json.dumps(expected_for_task(sys.argv[3], pathlib.Path(sys.argv[1]))))
 PY
   raw="$case_dir/raw.json"
   result="$case_dir/result.json"
@@ -159,13 +175,13 @@ PY
        else null end),
      invalid_reason: (if $comparable then null else ($acceptance.failures | join(", ")) end)}
   ' >"$out_dir/$host/comparison.json"
-  PYTHONPATH="$root/scripts" python3 - "$out_dir/$host" "$history_log" "$run_id" "${JEV_SELECTION_BENCHMARK:-0}" <<'PY' || return $?
+  PYTHONPATH="$root/scripts" python3 - "$out_dir/$host" "$history_log" "$history_run_id" "${JEV_SELECTION_BENCHMARK:-0}" "$task" <<'PY' || return $?
 import sys
 from pathlib import Path
 from summarize_x_cell import append_xcell_history, xcell_history_record
-host_dir, log_path, run_id, benchmark = sys.argv[1:]
+host_dir, log_path, run_id, benchmark, task = sys.argv[1:]
 append_xcell_history(Path(log_path), xcell_history_record(
-    Path(host_dir), run_id=run_id, benchmark=benchmark == "1",
+    Path(host_dir), run_id=run_id, benchmark=benchmark == "1", task=task,
 ))
 PY
   jq -r 'if .comparable then "\(.host): コスト差分=\(.reduction.cost_usd // "N/A")USD API時間差分=\(.reduction.duration_api_ms // "N/A")ms 書換えリクエスト削減=\(.reduction.routing_request_chars)バイト 出力トークン差分=\(.reduction.output_tokens) 実行時間差分=\(.reduction.wall_ms)ms (num_turns: baseline=\(.baseline.num_turns // "N/A") jev=\(.jev.num_turns // "N/A"))" else "\(.host): 比較不能 — \(.invalid_reason)" end' "$out_dir/$host/comparison.json"
@@ -173,17 +189,41 @@ PY
 }
 
 failed=0
-for host in "${hosts[@]}"; do
-  case "$host" in claude|codex|grok|devin) ;; *) echo "対象は claude, codex, grok, devin です: $host" >&2; exit 2;; esac
-  bin=$host
-  command -v "$bin" >/dev/null || { echo "$bin が PATH にありません" >&2; exit 2; }
-  for mode in "${modes[@]}"; do run_one "$host" "$mode"; done
-  summarize "$host" || {
-    # An unsupported request shape is an exclusion in the four-condition
-    # experiment, not a harness failure. The JSON retains its exact reason.
-    [[ "${JEV_SELECTION_BENCHMARK:-}" == "1" ]] || failed=1
-  }
+for ((rep=1; rep<=repeats; rep++)); do
+  history_run_id="$run_id"
+  if ((repeats > 1)); then
+    out_dir="$suite_root/r$(printf '%02d' "$rep")"
+    history_run_id="$run_id-r$(printf '%02d' "$rep")"
+    echo "反復 $rep/$repeats: $out_dir"
+  else
+    out_dir="$suite_root"
+  fi
+  mkdir -p "$out_dir"
+  for host in "${hosts[@]}"; do
+    case "$host" in claude|codex|grok|devin) ;; *) echo "対象は claude, codex, grok, devin です: $host" >&2; exit 2;; esac
+    bin=$host
+    command -v "$bin" >/dev/null || { echo "$bin が PATH にありません" >&2; exit 2; }
+    for mode in "${modes[@]}"; do run_one "$host" "$mode"; done
+    summarize "$host" || {
+      # An unsupported request shape is an exclusion in the four-condition
+      # experiment, not a harness failure. The JSON retains its exact reason.
+      [[ "${JEV_SELECTION_BENCHMARK:-}" == "1" ]] || failed=1
+    }
+  done
 done
+if ((repeats > 1)); then
+  PYTHONPATH="$root/scripts" python3 - "$suite_root" "$task" <<'PY'
+import json, sys
+from pathlib import Path
+from summarize_x_cell import median_report
+root, task = Path(sys.argv[1]), sys.argv[2]
+report = median_report(root, task)
+(root / "median.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+for host, slot in report["hosts"].items():
+    flag = "改善" if slot["improved"] else "改善なし"
+    print(f"{task} {host}: 品質成功 {slot['samples']}/{slot['runs']} 中央値 実行時間削減={slot['median_wall_ms_saved']}ms 出力トークン削減={slot['median_output_tokens_saved']} 入力トークン削減={slot['median_input_tokens_saved']} {flag}")
+PY
+fi
 echo "履歴: $history_log"
-echo "結果: $out_dir"
+echo "結果: $suite_root"
 exit "$failed"
