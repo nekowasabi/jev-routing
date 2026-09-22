@@ -21,6 +21,8 @@ const (
 	ReasonIneligible     = "ineligible"
 	ReasonLocalSelected  = "local_selected"
 	ReasonAskFailed      = "ask_failed"
+	ReasonAskTimeout     = "ask_timeout"
+	ReasonLowConfidence  = "low_confidence"
 	NoMatchID            = "no_match"
 )
 

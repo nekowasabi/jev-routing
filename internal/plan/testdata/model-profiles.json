@@ -1,7 +1,0 @@
-{
-  "pairs": [
-    {"id": "pair:test-fast:low", "model": "test-fast", "effort": "low", "hosts": ["claude", "grok"], "difficulty": "easy", "cost": "low"},
-    {"id": "pair:test-fast:high", "model": "test-fast", "effort": "high", "hosts": ["claude"]},
-    {"id": "pair:test-deep:high", "model": "test-deep", "effort": "high", "hosts": ["claude", "codex"], "difficulty": "hard", "cost": "high"}
-  ]
-}

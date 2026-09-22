@@ -69,7 +69,7 @@ func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	counts := s.events.Counts()
 	s.mu.Unlock()
-	apps := withModelRouteApps(s.Apps.Snapshot())
+	apps := s.Apps.Snapshot()
 	metrics := MergeMetrics(MetricsFromEvents(all), MetricsFromApps(apps))
 	metrics.ByClass = ClassMap(apps, all, s.Options, string(s.Host))
 	w.Header().Set("content-type", "application/json")

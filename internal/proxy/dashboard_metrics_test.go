@@ -1,11 +1,7 @@
 package proxy
 
 import (
-	"path/filepath"
-	"strings"
 	"testing"
-
-	"github.com/nekowasabi/jev-routing/internal/plan"
 )
 
 func TestDashboardMetrics(t *testing.T) {
@@ -113,48 +109,5 @@ func TestClassMapRecordsSkillMCPPluginAndEffort(t *testing.T) {
 	}
 	if st["compaction"].Status != ClassRewritten {
 		t.Fatalf("compaction %+v", st["compaction"])
-	}
-}
-
-func TestAppsFromModelLog(t *testing.T) {
-	t.Setenv("JEV_MODEL_LOG", filepath.Join(t.TempDir(), "model-routes.jsonl"))
-	plan.RecordModelDecision(plan.ModelDecision{
-		Host: "claude", Source: "jev", ReasonCode: "jev",
-		AppliedModel: "gpt-x", AppliedEffort: "high", PairID: "p1",
-	})
-	apps := withModelRouteApps(nil)
-	var model *Application
-	for _, a := range apps {
-		if a != nil && a.Kind == plan.KindModel {
-			model = a
-			break
-		}
-	}
-	if model == nil || !strings.Contains(model.CapabilityID, "gpt-x") || model.State != AppVerified {
-		t.Fatalf("%+v", model)
-	}
-	cells := ClassMap(apps, nil, DefaultOptions(), "")
-	for _, c := range cells {
-		if c.Kind != plan.KindModel {
-			continue
-		}
-		if c.Status != ClassVerified || !strings.Contains(c.Evidence, "gpt-x") {
-			t.Fatalf("model cell %+v", c)
-		}
-		return
-	}
-	t.Fatal("missing model cell")
-}
-
-func TestAppsFromModelLogRejectedCallID(t *testing.T) {
-	t.Setenv("JEV_MODEL_LOG", filepath.Join(t.TempDir(), "model-routes.jsonl"))
-	plan.RecordModelDecision(plan.ModelDecision{
-		Host: "claude", Source: "legacy", ReasonCode: plan.ReasonLowConfidence,
-		AppliedModel: "test-opus", AppliedEffort: "medium",
-		RejectedID: "pair:claude-sonnet-5:medium",
-	})
-	apps := appsFromModelLog()
-	if len(apps) != 1 || apps[0].CallID != "low_confidence:pair:claude-sonnet-5:medium" {
-		t.Fatalf("%+v", apps)
 	}
 }

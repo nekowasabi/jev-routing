@@ -122,7 +122,7 @@ func (s *Server) StatsSnapshot() map[string]any {
 func (s *Server) RunStats() map[string]any {
 	snap := s.StatsSnapshot()
 	events, _, _, truncated := s.events.Snapshot(0)
-	apps := withModelRouteApps(s.Apps.Snapshot())
+	apps := s.Apps.Snapshot()
 	// Compatible keys first.
 	return map[string]any{
 		"requests":            snap["requests"],

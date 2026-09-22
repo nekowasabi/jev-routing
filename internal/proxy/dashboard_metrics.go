@@ -1,8 +1,6 @@
 package proxy
 
 import (
-	"strconv"
-
 	"github.com/nekowasabi/jev-routing/internal/plan"
 )
 
@@ -313,58 +311,4 @@ func classStatus(kind string, a *classAcc, opt Options) string {
 	default:
 		return ClassObserve
 	}
-}
-
-func appsFromModelLog() []*Application {
-	decisions := plan.LoadModelDecisions()
-	if len(decisions) == 0 {
-		return nil
-	}
-	out := make([]*Application, 0, len(decisions))
-	for _, d := range decisions {
-		applied := d.AppliedModel
-		if applied == "" {
-			applied = d.RequestedModel
-		}
-		if applied == "" {
-			applied = "unknown"
-		}
-		id := d.PairID
-		if id == "" {
-			id = "model-route-" + strconv.FormatInt(d.TS.Unix(), 10)
-		}
-		state := AppSelected
-		verified := d.Source == "jev"
-		if verified {
-			state = AppVerified
-		} else {
-			switch d.ReasonCode {
-			case plan.ReasonAskTimeout, plan.ReasonNoPair, plan.ReasonAskFailed:
-				state = AppFailed
-			}
-		}
-		callID := d.ReasonCode
-		if d.RejectedID != "" {
-			callID = d.ReasonCode + ":" + d.RejectedID
-		}
-		out = append(out, &Application{
-			DecisionID:   id,
-			State:        state,
-			Kind:         plan.KindModel,
-			CapabilityID: plan.CapabilityID(plan.KindModel, d.Host, applied, d.AppliedEffort),
-			CallID:       callID,
-			Verified:     verified,
-			Host:         d.Host,
-		})
-	}
-	return out
-}
-
-func withModelRouteApps(apps []*Application) []*Application {
-	extra := appsFromModelLog()
-	if len(extra) == 0 {
-		return apps
-	}
-	out := append([]*Application{}, apps...)
-	return append(out, extra...)
 }

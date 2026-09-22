@@ -47,8 +47,6 @@ func main() {
 		os.Exit(cmdRun(os.Args[2:]))
 	case "serve":
 		os.Exit(cmdServe(os.Args[2:]))
-	case "route":
-		os.Exit(cmdRoute(os.Args[2:], os.Stdin, os.Stdout))
 	case "compact":
 		os.Exit(cmdCompact(os.Args[2:]))
 	case "bench":
@@ -68,7 +66,6 @@ func usage() {
 Commands:
   jev-routing run [--dashboard] [--tmux] claude|codex|grok|devin [-- host-args...]
   jev-routing serve --host claude|codex|grok|devin [--listen 127.0.0.1:8787]
-  jev-routing route --json < request.json
   jev-routing compact < transcript.json
   jev-routing bench --host grok
 
