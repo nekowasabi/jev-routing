@@ -1,5 +1,7 @@
 # Process 06: ateamの自動選択・起動・結果回収を接続する
 
+> 2026-09-23 更新: agmsg 1.4.0 の jev 対応により、ateam の model/effort 自動選択（auto）と `jev-routing route --json` を撤去した。本書の該当記述は履歴として残す。
+
 ## goal
 
 この工程だけは`private_dotfiles`側に実装する。名簿と既存パターンに任意の`routing.model`／`routing.effort`（fixed/auto）、`routing.catalog`、`routing_timeout_ms`を追加する。未指定はfixed。項目別の優先順位は分析書の契約どおりにし、共有名簿の解決器から新規項目を渡す。`single`のautoと`spawn`の任意モード指定を実装し、`spawn_member`を呼ぶ前に判断CLIへ照会する。チーム対象は一括入力できる形にする。推論失敗時は従来値、設定構文エラーは明示エラー。実行状態に指定値・適用値・復帰理由を保存する。AGMSG本体・Grok既存baseline対策・役割・人数・ホストを維持する。

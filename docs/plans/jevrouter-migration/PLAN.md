@@ -1,5 +1,7 @@
 # JevRouterの能力選定・モデル自動選択の移植計画
 
+> 2026-09-23 更新: agmsg 1.4.0 の jev 対応により、ateam の model/effort 自動選択（auto）と `jev-routing route --json` を撤去した。本書の該当記述は履歴として残す。
+
 ## 目的
 
 六分類（Model / Subagents / Skills / MCP Tools / CLIs / Plugins）を共通の判断契約で扱い、確定可能なローカル処理とJevの意味判断を分ける。各ホストの自動問い合わせから、本文供給・ツール呼出し・子起動・結果照合まで接続する。ateamのモデルと`effort`を項目別に固定／自動選択できるようにする。

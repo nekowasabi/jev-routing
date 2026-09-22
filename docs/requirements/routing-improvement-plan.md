@@ -1,5 +1,7 @@
 # jev-routing 改善計画書（最終版）
 
+> 2026-09-23 更新: agmsg 1.4.0 の jev 対応により、ateam の model/effort 自動選択（auto）と `jev-routing route --json` を撤去した。本書の該当記述は履歴として残す。
+
 作成日: 2026-09-21
 統合元: `IMPROVE.md`（実測に基づく11案）、`docs/requirements/routing-fundamental-improvements.md`（目的の置き直しと5原則）
 状態: 計画。実装・稼働ログ再集計・上流受理試験は未実施。

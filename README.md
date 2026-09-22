@@ -11,7 +11,6 @@ Agent CLIs keep resending the same growing payload every turn: the full tool sch
 1. **History compaction** — only `tool_use` / `tool_result` are scored and then dropped or truncated. User and assistant prose is untouched and nothing is summarized
 2. **One schema for tool selection** — Jev is asked for the next tool and for done in the same call, so the step's `tools[]` shrinks to a single schema (zero when the step is a plain response)
 3. **thinking / reasoning stripping** — reasoning blocks that the next decision does not need are removed
-4. **Model / effort routing** — `route --json` picks, among the candidate pairs, the cheapest one that is still strong enough for the difficulty
 
 What you get from adopting it:
 
@@ -62,14 +61,9 @@ jev-routing run grok              # points GROK_CLI_CHAT_PROXY_BASE_URL at the p
 jev-routing run claude            # points ANTHROPIC_BASE_URL at the proxy
 jev-routing run codex             # connects through the proxy with OpenAI login
 jev-routing run devin             # points DEVIN_API_URL at the proxy
-jev-routing route --json < request.json   # ateam / diagnostics. returns the chosen model as JSON
 ```
 
 `run` tries `127.0.0.1:8787` first and automatically picks a free port if it is in use. If `JEV_LISTEN` is set, that address takes precedence.
-
-`route --json` is the selection entry point for ateam and for diagnostics. Given `model_mode` / `effort_mode` and candidate `pairs`, it returns the pair applied to the response's `model`. The keys are `model` / `effort` / `source` / `reason_code` / `asked`. If Jev is not connected and there is more than one candidate, `reason_code` is `no_match` and it falls back to the legacy values of `legacy_model` and `effort`. ateam uses this automatic selection only for `ateam auto review`; without `auto` it uses the fixed values from the roster. Each selection appends one line to `~/.local/state/jev-routing/model-routes.jsonl`. The destination can be changed with `JEV_MODEL_LOG`.
-
-Model selection for `ateam auto` does not use the `next_tool` classifier meant for capability; it uses a dedicated `model_pair` question. Candidate pairs carry `difficulty` and `cost`, and Jev picks the cheapest / smallest pair that is still sufficient. When confidence is too low to adopt a pair, the applied values stay at the legacy ones and the rejected pair is recorded in `rejected_id`.
 
 ### Launching inside tmux
 
@@ -171,7 +165,7 @@ jev-routing run --dashboard grok
 
 - Routing overview (counts by decision source and by application)
 - Status of the six categories (model and effort, subagents, skills, MCP, CLI, plugins, compaction). Unobserved stays unobserved
-- Application list. In addition to the proxy's rewrites, the model and effort chosen by `route --json` are emitted as `kind=model`, where capability is the applied model and callId is the reason such as `jev` / `no_match`
+- Application list, covering the proxy's rewrites (subagents, skills, MCP, CLI, plugins)
 - Token consumption aggregated from upstream responses (input, output, cache, reasoning)
 - Recent requests (sequence number, host, decision source, application, selected tool, reason, changes, tool substitution, jev, tokens, time)
 - Filters by host / decision source / application, and per-row detail (decision ID, operation ID). j/k moves between rows, Enter opens the detail, r reconnects
@@ -205,7 +199,7 @@ These are read once at startup. Invalid values make startup fail.
 
 `JEV_SHADOW=on` scores the candidate set without rewriting the request. `JEV_TRANSFORMS` turns compaction, tool-catalog filtering, and contrast criteria on or off independently; criteria stays off until a confused pair is registered. `JEV_COST_GATE_MAX` skips the classifier when the candidate count is at most this value.
 
-On ordinary proxy requests the same decision function is called automatically, and it goes on to supply the body of the selected skill, invoke MCP/CLI, and verify the result. When `JEV_AUTO_APPLY=on`, only targets whose per-kind mode is `apply` are started, and under `required` a non-delivery, an unsupported case, or an unconsumed selection is not treated as a successful exit. `fallback` reverts to the legacy settings only when explicitly specified. `jev-routing route --json` is the same entry point used by ateam and diagnostics, and it is not assumed that an LLM will call it on its own. The model-selection JSON is `model` / `effort` / `reason_code`. A selection log or narrowed candidates alone do not count as an application having completed. Unknown executions are never retried automatically. The dashboard shows the movable points, the reasons for non-application, and the comparison effects in Japanese. Missing data and "no comparison" are left as missing / no comparison, and mock values are labeled as samples.
+On ordinary proxy requests the same decision function is called automatically, and it goes on to supply the body of the selected skill, invoke MCP/CLI, and verify the result. When `JEV_AUTO_APPLY=on`, only targets whose per-kind mode is `apply` are started, and under `required` a non-delivery, an unsupported case, or an unconsumed selection is not treated as a successful exit. `fallback` reverts to the legacy settings only when explicitly specified. A selection log or narrowed candidates alone do not count as an application having completed. Unknown executions are never retried automatically. The dashboard shows the movable points, the reasons for non-application, and the comparison effects in Japanese. Missing data and "no comparison" are left as missing / no comparison, and mock values are labeled as samples.
 
 A mock run is not evidence of approval compatibility on a real host, nor of a real-service speedup or cost improvement. Read/search versus free-form commands and diffs should be evaluated as separate tasks.
 

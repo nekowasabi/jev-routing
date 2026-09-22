@@ -11,7 +11,6 @@ jev-routing は、コーディングエージェント CLI（Claude Code / Codex
 1. **履歴圧縮（compaction）** — `tool_use` / `tool_result` だけを採点し、drop / truncate する。ユーザー文とアシスタント文には触らず、要約もしない
 2. **tool 選択の 1 スキーマ化** — Jev に「次のツール」と「完了したか」を同時に問い、そのステップの `tools[]` を 1 スキーマ（応答のみなら 0 個）に絞る
 3. **thinking / reasoning の除去** — 次の判断に不要な推論ブロックを落とす
-4. **モデル／effort のルーティング** — `route --json` で、難易度とコストから候補ペアのうち足りる範囲で最も安い組を選ぶ
 
 導入して得られるもの:
 
@@ -62,14 +61,9 @@ jev-routing run grok              # GROK_CLI_CHAT_PROXY_BASE_URL をプロキシ
 jev-routing run claude            # ANTHROPIC_BASE_URL をプロキシへ
 jev-routing run codex             # OpenAI ログインでプロキシへ接続
 jev-routing run devin             # DEVIN_API_URL をプロキシへ
-jev-routing route --json < request.json   # ateam / 診断。モデル選定を JSON で返す
 ```
 
 `run` はまず `127.0.0.1:8787` を使い、使用中なら空きポートを自動割当します。`JEV_LISTEN` を指定すると、そのアドレスを優先します。
-
-`route --json` は ateam と診断用の選定入口です。`model_mode` / `effort_mode` と候補 `pairs` を渡すと、応答の `model` に適用した組を返します。キーは `model` / `effort` / `source` / `reason_code` / `asked` です。Jev 未接続で候補が複数なら `reason_code` は `no_match` で、`legacy_model` と `effort` の従来値へ戻します。ateam は `ateam auto review` のときだけこの自動選定を使い、`auto` が無いときは名簿の固定値です。選定は `~/.local/state/jev-routing/model-routes.jsonl` に1行追記します。記録先は `JEV_MODEL_LOG` で変えられます。
-
-`ateam auto` のモデル選定は capability 用の `next_tool` 分類器ではなく、専用の `model_pair` 質問です。候補ペアは `difficulty` と `cost` を持ち、Jev は足りる範囲で最も安い／小さい組を選びます。確信度が低く採用できないときは適用は従来値のまま、却下した組を `rejected_id` に残します。
 
 ### tmux で起動する
 
@@ -171,7 +165,7 @@ jev-routing run --dashboard grok
 
 - ルーティング概要（判定元・適用の件数）
 - 六分類の状態（モデルとeffort、子エージェント、スキル、MCP、CLI、プラグイン、圧縮）。未観測は未観測のまま残す
-- 適用一覧。プロキシの書き換えに加え、`route --json` が選んだモデルとeffortを `kind=model` として出す。capability が適用モデル、callId が `jev` / `no_match` などの理由
+- 適用一覧。プロキシの書き換え（子エージェント、スキル、MCP、CLI、プラグイン）を対象とする
 - 上流レスポンスから集計したトークン消費（入力・出力・キャッシュ・推論）
 - 直近のリクエスト（連番、ホスト、判定元、適用、採用ツール、理由、変更、ツール置換、jev、トークン、時間）
 - ホスト／判定元／適用の絞込みと行の詳細（判断ID・操作ID）。j/k で行移動、Enter で詳細、r で再接続
@@ -205,7 +199,7 @@ jev-routing run --dashboard grok
 
 `JEV_SHADOW=on` は候補集合を採点しますが、リクエストは書き換えません。`JEV_TRANSFORMS` は compaction、ツールカタログの絞り込み、対比 criteria を個別に on/off します。criteria は混乱ペアが登録されるまで off のままです。`JEV_COST_GATE_MAX` は候補数がこの値以下のとき分類器を飛ばします。
 
-通常のプロキシ要求では同じ判断関数が自動で呼ばれ、選定したスキル本文の供給・MCP/CLI 呼出し・結果照合まで進みます。`JEV_AUTO_APPLY=on` のとき種類別モードが `apply` の対象だけを起動し、`required` では未配達・未対応・選定不消費を成功終了にしません。`fallback` は明示指定時だけ従来設定へ戻します。`jev-routing route --json` は ateam と診断用の同じ入口であり、LLM が自発的に呼ぶことは前提にしません。モデル選定の JSON は `model` / `effort` / `reason_code` です。選定ログや候補絞込みだけでは適用完了にしません。不明な実行は自動再送しません。ダッシュボードは可動個所・未適用理由・比較効果を日本語で示します。欠測と比較なしは欠測／比較なしのまま残し、模擬値はサンプルと表示します。
+通常のプロキシ要求では同じ判断関数が自動で呼ばれ、選定したスキル本文の供給・MCP/CLI 呼出し・結果照合まで進みます。`JEV_AUTO_APPLY=on` のとき種類別モードが `apply` の対象だけを起動し、`required` では未配達・未対応・選定不消費を成功終了にしません。`fallback` は明示指定時だけ従来設定へ戻します。選定ログや候補絞込みだけでは適用完了にしません。不明な実行は自動再送しません。ダッシュボードは可動個所・未適用理由・比較効果を日本語で示します。欠測と比較なしは欠測／比較なしのまま残し、模擬値はサンプルと表示します。
 
 模擬試験は実ホストの承認互換や実サービスの高速化・費用改善の証拠ではありません。読取/検索と自由記述のコマンド・差分は別課題で評価してください。
 

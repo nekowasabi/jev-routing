@@ -1,5 +1,7 @@
 # Jev適用分析の互換性レビュー
 
+> 2026-09-23 更新: agmsg 1.4.0 の jev 対応により、ateam の model/effort 自動選択（auto）と `jev-routing route --json` を撤去した。本書の該当記述は履歴として残す。
+
 対象: [分析文書](../requirements/jev-agent-efficiency-analysis.md)。レビュー日: 2026-09-19。
 `ateam review` の Claude Code（正確性）、Codex（設計・境界）、Grok Build（意図・過剰実装）の報告を統合した。対象は `24c7276` と読み取り時の未コミット変更。調査中にも実測成果物が追加されており、下記は明示した記録に基づく。
 
