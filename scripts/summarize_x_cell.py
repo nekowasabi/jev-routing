@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -294,6 +296,115 @@ def summarize_dir(root: Path) -> dict[str, Any]:
         "scope": "saved-fixtures",
         "measured_live": False,
     }
+
+
+_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cached_input_tokens",
+    "cache_creation_input_tokens",
+    "reasoning_tokens",
+)
+_PROXY_KEYS = (
+    "requests",
+    "rewritten",
+    "charsBefore",
+    "charsAfter",
+    "selectionApplied",
+    "compactionApplied",
+    "jevCacheHits",
+    "passthrough",
+    "compaction",
+    "reasoning",
+    "selectionMode",
+    "jevOK",
+    "jevFail",
+    "jevHTTP",
+    "applyErr",
+)
+
+
+def _metric(value: Any) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _whole(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _slim_mode(result: dict[str, Any]) -> dict[str, Any]:
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    quality = result.get("quality") if isinstance(result.get("quality"), dict) else {}
+    proxy = result.get("proxy_stats") if isinstance(result.get("proxy_stats"), dict) else {}
+    kept_proxy = {}
+    for key in _PROXY_KEYS:
+        if key not in proxy:
+            continue
+        value = proxy[key]
+        if value is None or isinstance(value, (bool, str, int, float)):
+            kept_proxy[key] = value
+    return {
+        "exit_code": _whole(result.get("exit_code")),
+        "wall_ms": _metric(result.get("wall_ms")),
+        "duration_api_ms": _metric(result.get("duration_api_ms")),
+        "num_turns": _whole(result.get("num_turns")),
+        "total_cost_usd": _metric(result.get("total_cost_usd")),
+        "model": _text(result.get("model")),
+        "effort": _text(result.get("effort")),
+        "routing_reasoning": _text(result.get("routing_reasoning")),
+        "rewritten": _whole(result.get("rewritten")),
+        "routing_chars_before": _metric(result.get("routing_chars_before")),
+        "routing_chars_after": _metric(result.get("routing_chars_after")),
+        "quality_success": quality.get("success") if isinstance(quality.get("success"), bool) else None,
+        "usage": {key: _metric(usage.get(key)) for key in _USAGE_KEYS},
+        "proxy": kept_proxy,
+    }
+
+
+def xcell_history_record(host_dir: Path, *, run_id: str, benchmark: bool,
+                         recorded_at: str | None = None) -> dict[str, Any]:
+    """One append-only row for long-term comparison. Omits request/response bodies."""
+    comparison = json.loads((host_dir / "comparison.json").read_text())
+    modes: dict[str, Any] = {}
+    commit = None
+    for child in sorted(path for path in host_dir.iterdir() if path.is_dir()):
+        result_path = child / "result.json"
+        if not result_path.is_file():
+            continue
+        result = json.loads(result_path.read_text())
+        modes[child.name] = _slim_mode(result)
+        if commit is None:
+            commit = _text(result.get("commit"))
+    reduction = comparison.get("reduction")
+    return {
+        "recorded_at": recorded_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "run_id": run_id,
+        "commit": commit,
+        "host": _text(comparison.get("host")) or host_dir.name,
+        "benchmark": benchmark,
+        "comparable": comparison.get("comparable") is True,
+        "valid": comparison.get("valid") is True,
+        "invalid_reason": _text(comparison.get("invalid_reason")),
+        "reduction": reduction if isinstance(reduction, dict) else None,
+        "modes": modes,
+    }
+
+
+def append_xcell_history(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def main(argv: list[str]) -> int:

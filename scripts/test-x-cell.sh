@@ -34,6 +34,8 @@ fi
 
 run_id=$(date +%Y%m%dT%H%M%S)-$$
 out_dir="$root/artifacts/x-cell/$run_id"
+# Append-only series for comparing runs over time. Override with JEV_XCELL_LOG.
+history_log=${JEV_XCELL_LOG:-"$HOME/.local/state/jev-routing/x-cell.jsonl"}
 mkdir -p "$out_dir"
 binary="$root/bin/jev-routing"
 go build -o "$binary" ./cmd/jev-routing
@@ -157,6 +159,15 @@ PY
        else null end),
      invalid_reason: (if $comparable then null else ($acceptance.failures | join(", ")) end)}
   ' >"$out_dir/$host/comparison.json"
+  PYTHONPATH="$root/scripts" python3 - "$out_dir/$host" "$history_log" "$run_id" "${JEV_SELECTION_BENCHMARK:-0}" <<'PY' || return $?
+import sys
+from pathlib import Path
+from summarize_x_cell import append_xcell_history, xcell_history_record
+host_dir, log_path, run_id, benchmark = sys.argv[1:]
+append_xcell_history(Path(log_path), xcell_history_record(
+    Path(host_dir), run_id=run_id, benchmark=benchmark == "1",
+))
+PY
   jq -r 'if .comparable then "\(.host): コスト差分=\(.reduction.cost_usd // "N/A")USD API時間差分=\(.reduction.duration_api_ms // "N/A")ms 書換えリクエスト削減=\(.reduction.routing_request_chars)バイト 出力トークン差分=\(.reduction.output_tokens) 実行時間差分=\(.reduction.wall_ms)ms (num_turns: baseline=\(.baseline.num_turns // "N/A") jev=\(.jev.num_turns // "N/A"))" else "\(.host): 比較不能 — \(.invalid_reason)" end' "$out_dir/$host/comparison.json"
   jq -e '.valid == true' "$out_dir/$host/comparison.json" >/dev/null
 }
@@ -173,5 +184,6 @@ for host in "${hosts[@]}"; do
     [[ "${JEV_SELECTION_BENCHMARK:-}" == "1" ]] || failed=1
   }
 done
+echo "履歴: $history_log"
 echo "結果: $out_dir"
 exit "$failed"

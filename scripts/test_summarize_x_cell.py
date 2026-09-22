@@ -7,7 +7,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from summarize_x_cell import LIVE_TARGETS, expected_live_answers, extract_cli_payload, live_acceptance, live_quality, summarize_dir
+from summarize_x_cell import (
+    LIVE_TARGETS,
+    append_xcell_history,
+    expected_live_answers,
+    extract_cli_payload,
+    live_acceptance,
+    live_quality,
+    summarize_dir,
+    xcell_history_record,
+)
 
 
 ROOT = Path(__file__).resolve().parent / "testdata" / "x-cell"
@@ -138,6 +147,43 @@ class SummarizeXCell(unittest.TestCase):
             self.assertTrue(live_quality({"exit_code": 0}, result, worktree, expected)["success"])
 
     @unittest.skipUnless(shutil.which("jq"), "live harness requires jq")
+    def test_history_appends_compact_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp) / "claude"
+            (host / "baseline").mkdir(parents=True)
+            (host / "hybrid").mkdir()
+            baseline = {
+                "host": "claude", "mode": "baseline", "commit": "abc", "exit_code": 0,
+                "wall_ms": 10.5, "usage": {"input_tokens": 1, "output_tokens": 2},
+                "quality": {"success": True}, "events": [{"huge": True}],
+                "total_cost_usd": 0.1, "duration_api_ms": 3, "num_turns": 4,
+            }
+            hybrid = {
+                **baseline, "mode": "hybrid", "wall_ms": 8, "rewritten": 2,
+                "routing_chars_before": 100, "routing_chars_after": 40,
+                "proxy_stats": {"requests": 2, "events": [{"x": 1}], "compaction": "on"},
+            }
+            (host / "baseline" / "result.json").write_text(json.dumps(baseline))
+            (host / "hybrid" / "result.json").write_text(json.dumps(hybrid))
+            (host / "comparison.json").write_text(json.dumps({
+                "host": "claude", "comparable": True, "valid": True, "invalid_reason": None,
+                "reduction": {"wall_ms": 2.5}, "baseline": baseline, "jev": hybrid,
+            }))
+            record = xcell_history_record(
+                host, run_id="r1", benchmark=False, recorded_at="2026-09-22T00:00:00+00:00",
+            )
+            self.assertEqual(record["commit"], "abc")
+            self.assertIsNone(record["modes"]["baseline"]["usage"]["cached_input_tokens"])
+            self.assertEqual(record["modes"]["hybrid"]["proxy"], {"requests": 2, "compaction": "on"})
+            self.assertNotIn("events", json.dumps(record["modes"]))
+            self.assertEqual(record["reduction"]["wall_ms"], 2.5)
+            log = Path(tmp) / "history.jsonl"
+            append_xcell_history(log, record)
+            append_xcell_history(log, {**record, "run_id": "r2", "comparable": False, "reduction": None})
+            lines = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual([line["run_id"] for line in lines], ["r1", "r2"])
+            self.assertIsNone(lines[1]["reduction"])
+
     def test_live_harness_exit_tracks_acceptance(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -173,11 +219,16 @@ class SummarizeXCell(unittest.TestCase):
                 path = fakebin / name
                 path.write_text(code)
                 path.chmod(0o755)
+            home = root / "home"
+            history = home / ".local" / "state" / "jev-routing" / "x-cell.jsonl"
+            base_env = {key: value for key, value in os.environ.items() if key != "JEV_XCELL_LOG"}
+            seen = 0
             for host, exit_code in (("claude", 7), ("claude", 0), ("codex", 7), ("codex", 0)):
                 proc = subprocess.run(["bash", str(scripts / "test-x-cell.sh"), host], cwd=root,
-                                      env={**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
+                                      env={**base_env, "HOME": str(home),
+                                           "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
                                            "FAKE_EXIT": str(exit_code), "CODEX_MODEL": "gpt-5.6-terra",
-                    "JEV_REASONING": "legacy",
+                                           "JEV_REASONING": "legacy",
                                            "ARGV_LOG": str(root / "codex-argv.jsonl")}, capture_output=True, text=True)
                 self.assertEqual(proc.returncode, int(exit_code != 0), proc.stdout + proc.stderr)
                 self.assertIn("結果: ", proc.stdout, proc.stdout + proc.stderr)
@@ -193,6 +244,17 @@ class SummarizeXCell(unittest.TestCase):
                         self.assertEqual(data[mode]["model"], "gpt-5.6-terra")
                         self.assertEqual(data[mode]["effort"], "low")
                         self.assertEqual(data[mode]["routing_reasoning"], "legacy" if mode == "jev" else None)
+                seen += 1
+                self.assertIn(f"履歴: {history}", proc.stdout, proc.stdout + proc.stderr)
+                rows = [json.loads(line) for line in history.read_text().splitlines()]
+                self.assertEqual(len(rows), seen)
+                self.assertEqual(rows[-1]["host"], host)
+                self.assertEqual(rows[-1]["run_id"], run_path.name)
+                self.assertEqual(rows[-1]["comparable"], exit_code == 0)
+                self.assertEqual(rows[-1]["modes"]["baseline"]["exit_code"], exit_code)
+                self.assertIn("hybrid", rows[-1]["modes"])
+                if exit_code:
+                    self.assertIsNone(rows[-1]["reduction"])
             calls = [json.loads(line) for line in (root / "codex-argv.jsonl").read_text().splitlines()]
             self.assertEqual(len(calls), 4)
             for args in calls:
