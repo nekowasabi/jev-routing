@@ -61,6 +61,7 @@ func jevAnswers(t *testing.T, choice string, choiceConf, needs, needsConf float6
 }
 
 func TestGatewayDecision(t *testing.T) {
+	t.Setenv("JEV_LOOKUP_ROOT", t.TempDir())
 	unknown := "summarize this repo's architecture for me"
 	tools := workTools()
 
@@ -152,6 +153,7 @@ func TestGatewayDecision(t *testing.T) {
 }
 
 func TestHybridDefersHeuristics(t *testing.T) {
+	t.Setenv("JEV_LOOKUP_ROOT", t.TempDir())
 	tools := workTools()
 	heuristic := "The auth middleware test is failing. Find it."
 	selected := "Do not parallel. Sequential search and read the definition of RewriteWith."

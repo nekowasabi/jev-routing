@@ -636,6 +636,7 @@ func TestMCPToolsSurviveUnknownPrompt(t *testing.T) {
 
 // A selected sequential-locate rule must not cost a Jev round trip.
 func TestRewriteSkipsLiveWhenLocalConfident(t *testing.T) {
+	t.Setenv("JEV_LOOKUP_ROOT", t.TempDir())
 	var calls int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&calls, 1)

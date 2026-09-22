@@ -201,6 +201,7 @@ func runShadowEval(t *testing.T, c shadowEvalCase) (filter, shadow shadowEvalRow
 }
 
 func TestSideEffectFreeEvalDecidesFilterRange(t *testing.T) {
+	t.Setenv("JEV_LOOKUP_ROOT", t.TempDir())
 	const locate = "Do not parallel. Sequential search and read the definition of RewriteWith."
 	cases := []shadowEvalCase{
 		{

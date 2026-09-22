@@ -49,6 +49,7 @@ const (
 	reasonForcedUnavailable  = "forced_unavailable"
 	reasonIneligibleForced   = "ineligible_forced"
 	reasonAliasUnresolved    = "alias_unresolved"
+	reasonLocalLookup        = "local_lookup"
 
 	sourceLocal       = "local"
 	sourceJev         = "jev"
@@ -252,6 +253,22 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 				stats.CompactDropped++
 			}
 		}
+	}
+	// A fully resolved definition lookup is answered from the workspace.
+	// Skill, MCP, and other tools are removed so the model only generates the reply.
+	if applyLocalLookup(work, user, actions, opt) {
+		stats.Apply = applyFilter
+		stats.Reason = reasonLocalLookup
+		stats.Source = sourceLocal
+		stats.Chosen = plan.Respond
+		stats.ToolAfter = 0
+		stats.ToolsAfter = nil
+		stats.Changed = true
+		out, err = json.Marshal(work)
+		if err != nil {
+			return body, stats, err
+		}
+		return out, stats, nil
 	}
 	withoutSelection := func() ([]byte, RewriteStats, error) {
 		if !stats.CompactApplied {
