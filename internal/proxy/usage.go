@@ -181,7 +181,8 @@ func (c *usageCollector) Finish() (*NormalizedUsage, bool, string, string) {
 			c.missing = "invalid_json"
 		}
 		c.jsonDone = true
-	} else if c.usage == nil && c.missing == "" {
+	}
+	if c.usage == nil && c.missing == "" {
 		c.missing = "no_usage"
 	}
 	return c.usage, c.partial, c.missing, ""
@@ -250,18 +251,16 @@ func (c *usageCollector) finishConnect() {
 func extractUsage(obj map[string]any) *NormalizedUsage {
 	raw, ok := obj["usage"]
 	if !ok {
-		// Anthropic message_delta / message_start
-		if msg, ok := obj["message"].(map[string]any); ok {
-			raw, ok = msg["usage"]
-			if !ok {
-				return nil
+		// Anthropic message_delta / message_start, or a Responses API
+		// response.completed event whose usage sits on response.
+		for _, key := range []string{"message", "delta", "response"} {
+			if nested, ok := obj[key].(map[string]any); ok {
+				if raw, ok = nested["usage"]; ok {
+					break
+				}
 			}
-		} else if delta, ok := obj["delta"].(map[string]any); ok {
-			raw, ok = delta["usage"]
-			if !ok {
-				return nil
-			}
-		} else {
+		}
+		if raw == nil {
 			return nil
 		}
 	}

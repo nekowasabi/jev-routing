@@ -75,6 +75,31 @@ func TestUsageCollectorConnectGzipFrame(t *testing.T) {
 	}
 }
 
+func TestUsageCollectorResponsesSSECache(t *testing.T) {
+	c := newUsageCollector("application/json")
+	body := "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":36,\"output_tokens\":8,\"input_tokens_details\":{\"cached_tokens\":22},\"output_tokens_details\":{\"reasoning_tokens\":3}}}}\n\n"
+	c.Write([]byte(body))
+	u, _, missing, _ := c.Finish()
+	if missing != "" || u == nil || u.CachedTokens == nil || *u.CachedTokens != 22 {
+		t.Fatalf("usage=%+v missing=%q", u, missing)
+	}
+	if u.InputTokens == nil || *u.InputTokens != 36 || u.OutputTokens == nil || *u.OutputTokens != 8 {
+		t.Fatalf("tokens %+v", u)
+	}
+	if u.ReasoningTokens == nil || *u.ReasoningTokens != 3 {
+		t.Fatalf("reasoning %+v", u)
+	}
+}
+
+func TestUsageCollectorSSEWithoutUsage(t *testing.T) {
+	c := newUsageCollector("text/event-stream")
+	c.Write([]byte("data: {\"type\":\"response.created\"}\n\n"))
+	u, _, missing, _ := c.Finish()
+	if u != nil || missing != "no_usage" {
+		t.Fatalf("usage=%+v missing=%q", u, missing)
+	}
+}
+
 func TestUsageCollectorPlainProtoNotConnect(t *testing.T) {
 	c := newUsageCollector("application/proto")
 	if c.connect {
