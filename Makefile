@@ -5,7 +5,7 @@ ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test test-jev-live test-x-cell test-selection-benchmark clean
+.PHONY: build install test test-jev-live test-x-cell test-selection-benchmark bench-selftest clean
 
 build:
 	go build -o bin/$(BINARY) ./cmd/jev-routing
@@ -15,6 +15,9 @@ install:
 
 test:
 	go test ./...
+
+bench-selftest:
+	go run ./cmd/jev-routing bench selftest
 
 # TypeSafe live catalog-accuracy checks. Skipped by `go test ./...`.
 # Requires TYPESAFE_API_KEY or JEV_API_KEY. Two POSTs per run.
