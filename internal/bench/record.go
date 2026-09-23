@@ -7,6 +7,7 @@ type RunRecord struct {
 	Agent          string         `json:"agent"`
 	AgentModel     string         `json:"agentModel,omitempty"`
 	UserTools      bool           `json:"userTools"`
+	Catalog        int            `json:"catalog,omitempty"`
 	Mode           string         `json:"mode"`
 	Rep            int            `json:"rep"`
 	ExitCode       int            `json:"exitCode"`

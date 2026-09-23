@@ -58,7 +58,8 @@ func inspect(calls []toolCall, sandbox, home string) Isolation {
 	seen := map[string]string{}
 	var order []string
 	for _, call := range calls {
-		if skipAgentsSearch(call.text) {
+		// The bench catalog stub touches nothing; its arguments are not reads.
+		if strings.HasPrefix(call.tool, "mcp__bench__") || skipAgentsSearch(call.text) {
 			continue
 		}
 		for _, path := range pathsIn(call.text) {

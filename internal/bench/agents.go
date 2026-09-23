@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,11 +21,31 @@ type agentCmd struct {
 	Dir  string
 }
 
-func agentCommand(agent, listen, workspace, prompt, model string, userTools bool) (agentCmd, error) {
+// agentCommand builds the agent's command line. catalog > 0 adds the stub MCP
+// server (jev-routing bench-mcp N) so tool selection has a catalog to choose from.
+func agentCommand(agent, listen, workspace, prompt, model string, userTools bool, catalog int) (agentCmd, error) {
+	var exe string
+	if catalog > 0 {
+		if agent != "codex" && agent != "claude" {
+			return agentCmd{}, fmt.Errorf("--catalog is supported for codex and claude only")
+		}
+		var err error
+		if exe, err = os.Executable(); err != nil {
+			return agentCmd{}, err
+		}
+	}
 	switch agent {
 	case "codex":
 		var rest []string
-		if !userTools {
+		// A JSON string is a valid TOML basic string.
+		command, _ := json.Marshal(exe)
+		args := fmt.Sprintf(`["bench-mcp","%d"]`, catalog)
+		switch {
+		case catalog > 0 && userTools:
+			rest = append(rest, "-c", "mcp_servers.bench.command="+string(command), "-c", "mcp_servers.bench.args="+args)
+		case catalog > 0:
+			rest = append(rest, "-c", "mcp_servers={bench={command="+string(command)+",args="+args+"}}", "-c", "plugins={}")
+		case !userTools:
 			rest = append(rest, "-c", "mcp_servers={}", "-c", "plugins={}")
 		}
 		rest = append(rest, "exec", "--ephemeral")
@@ -41,8 +62,15 @@ func agentCommand(agent, listen, workspace, prompt, model string, userTools bool
 		if !userTools {
 			args = append(args, "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands", "--tools", "Bash,Edit,Write,Read,Glob,Grep")
 		}
+		if catalog > 0 {
+			cfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"bench": map[string]any{"command": exe, "args": []string{"bench-mcp", strconv.Itoa(catalog)}}}})
+			args = append(args, "--mcp-config", string(cfg))
+		}
 		args = append(args, "--permission-mode", "acceptEdits",
 			"--allowedTools", "Read", "Edit", "Write", "Glob", "Grep", "Bash(node:*)", "Bash(npm test:*)", "Bash(npm run:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(git diff:*)", "Bash(git status:*)")
+		if catalog > 0 {
+			args = append(args, "mcp__bench")
+		}
 		return agentCmd{File: "claude", Args: args, Env: host.ChildEnv(host.Claude, listen), Dir: workspace}, nil
 	case "grok":
 		args := []string{"--single", prompt, "--output-format", "json", "--no-plan", "--no-subagents", "--permission-mode", "bypassPermissions"}

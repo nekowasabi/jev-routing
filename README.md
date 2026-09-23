@@ -129,6 +129,20 @@ Agents are `codex`, `claude`, `grok`, `devin`, and `fake`. Real agents spend rea
 
 Results land in `results/<timestamp>/` (`runs.jsonl`, `summary.md`, and a directory per run). A run that reads a file outside its sandbox that it did not create is marked contaminated and left out of the summary. `bench audit` re-reads agent logs. `bench chart` writes `comparison-light.svg` and `comparison-dark.svg`.
 
+### How to measure
+
+```bash
+jev-routing bench --agent codex --model gpt-5.6-terra --reps 4 --catalog 40 --prices 1.25,0.125,10
+JEV_TRANSFORMS=filter=off jev-routing bench --agent codex --model gpt-5.6-terra --reps 4 --catalog 40 --modes on --prices 1.25,0.125,10
+```
+
+- Pin the model with `--model` and give `--prices`. Judge by cost per solved task and wall-clock seconds, not by total input tokens. Rewriting history or tools can shrink input while breaking the provider's prompt-cache prefix, and uncached input costs about 10× cached. The summary's `…uncached, median` row shows this.
+- Use an even `--reps`, 4 or more. The on/off order alternates per rep, so an even count cancels the warm-cache advantage of whichever mode runs second. With `--reps 1`, on always runs first.
+- `--catalog N` (`codex` and `claude` only, N up to 60) adds a stub MCP server with N extra tools: a fixed, reproducible mix of unrelated SaaS/ops tools and distractors that overlap the built-ins. Calls return an error. Without it the agent sees only 3–6 built-in tools, so tool selection has almost nothing to choose. Prefer it over `--user-tools`, which depends on the local setup.
+- `JEV_TRANSFORMS` (e.g. `filter=off`, `compact=off`) ablates the on runs only; off is always the baseline. With `--modes on` you can reuse an earlier off baseline from the same commit.
+- Per-request decisions are in `results/<dir>/<task>.<mode>.<rep>/gateway.log` (tools before→after, chosen, apply, conf).
+- The current tasks are short (a few minutes, tens of requests), so agent-requested compaction rarely triggers. They do not measure long sessions.
+
 ## Compaction
 
 The history-compaction judgment was ported to Go with reference to [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction) ([MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE), Copyright (c) 2025). It does not summarize; it follows the same drop / truncate contract for `tool_use` / `tool_result`. The state Jev sees is fitted in the same stages as the current library: tool inputs capped at 1000, then 200, then 60 characters, long texts abridged, old texts collapsed, old calls reduced to one line, then old call-less entries left out.

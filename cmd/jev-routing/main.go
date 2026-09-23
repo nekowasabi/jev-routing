@@ -51,6 +51,8 @@ func main() {
 		os.Exit(cmdCompact(os.Args[2:]))
 	case "bench":
 		os.Exit(cmdBench(os.Args[2:]))
+	case "bench-mcp": // internal: stub MCP server for bench --catalog
+		os.Exit(bench.MCPStub(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage()
 	default:

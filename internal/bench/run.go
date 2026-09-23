@@ -35,6 +35,7 @@ Options:
   --host NAME                            alias of --agent
   --model NAME                           model passed to the agent
   --user-tools                           keep your MCP servers, plugins, skills and settings
+  --catalog N                            add a stub MCP server with N extra tools (codex, claude; default 0)
   --tasks a,b                            task ids (default: all)
   --modes on,off                         routing states to compare (default on,off)
   --on-mode filter|forced                what "on" means (default filter; "off" is always baseline)
@@ -93,6 +94,7 @@ func runCmd(args []string) int {
 	hostFlag := fs.String("host", "", "alias of --agent")
 	model := fs.String("model", "", "model")
 	userTools := fs.Bool("user-tools", false, "keep user tools")
+	catalog := fs.Int("catalog", 0, "stub MCP tools")
 	taskIDs := fs.String("tasks", "", "task ids")
 	modeFlag := fs.String("modes", "on,off", "on,off")
 	onMode := fs.String("on-mode", proxy.ModeFilter, "filter|forced")
@@ -125,6 +127,10 @@ func runCmd(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 2
 		}
+	}
+	if _, err := catalogTools(*catalog); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
 	}
 	if *onMode != proxy.ModeFilter && *onMode != proxy.ModeForced {
 		fmt.Fprintf(os.Stderr, "--on-mode must be filter or forced, not %q\n", *onMode)
@@ -228,7 +234,11 @@ func runCmd(args []string) int {
 	if len(plan) == 1 {
 		plural = ""
 	}
-	fmt.Printf("%d run%s with %s; results in %s\n\n", len(plan), plural, agent, outDir)
+	catalogNote := ""
+	if *catalog > 0 {
+		catalogNote = fmt.Sprintf(" (catalog: %d stub MCP tools)", *catalog)
+	}
+	fmt.Printf("%d run%s with %s%s; results in %s\n\n", len(plan), plural, agent, catalogNote, outDir)
 	fmt.Fprintln(os.Stderr, "Real agents spend real quota. Routing on rewrites; routing off is a metering baseline.")
 
 	var runs []RunRecord
@@ -297,7 +307,7 @@ func runCmd(args []string) int {
 				_ = os.WriteFile(agentLog, []byte(ferr.Error()+"\n"), 0o644)
 			}
 		} else {
-			cmd, err := agentCommand(agent, gw.addr(), workspace, step.task.Prompt, *model, *userTools)
+			cmd, err := agentCommand(agent, gw.addr(), workspace, step.task.Prompt, *model, *userTools, *catalog)
 			if err != nil {
 				gw.Close()
 				fmt.Fprintln(os.Stderr, err)
@@ -338,6 +348,7 @@ func runCmd(args []string) int {
 		record.Agent = agent
 		record.AgentModel = *model
 		record.UserTools = *userTools
+		record.Catalog = *catalog
 		record.Mode = step.mode
 		record.Rep = step.rep
 		record.ExitCode = outcome.ExitCode

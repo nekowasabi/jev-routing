@@ -157,6 +157,9 @@ func Summarize(all []RunRecord, prices *Prices) string {
 		{"…of which cached", func(g []RunRecord) *float64 {
 			return median(inputShare(g, func(r RunRecord) int { return r.Cached }))
 		}, fmtPercent, false},
+		{"…uncached, median", func(g []RunRecord) *float64 {
+			return median(floatField(g, func(r RunRecord) float64 { return float64(uncachedInput(r)) }))
+		}, fmtInt, true},
 		{"…of which cache writes", func(g []RunRecord) *float64 {
 			return median(inputShare(g, cacheWrite))
 		}, fmtPercent, false},
@@ -306,12 +309,13 @@ func Summarize(all []RunRecord, prices *Prices) string {
 					n++
 				}
 			}
-			if n < smallest {
+			// A mode that was not run (e.g. --modes on) is not a small cell.
+			if n > 0 && n < smallest {
 				smallest = n
 			}
 		}
 	}
-	if len(tasks) == 0 {
+	if smallest == math.MaxInt {
 		smallest = 0
 	}
 	if smallest < 5 {

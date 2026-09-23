@@ -221,9 +221,9 @@ func TestUsageFollowsEachProvider(t *testing.T) {
 		return body
 	}
 	for task, want := range map[string][]string{
-		"a": {"Input tokens incl. cache, median | 77,862 |", "…of which cached | 29% |", "…of which cache writes | 71% |"},
-		"b": {"Input tokens incl. cache, median | 1,000 |", "…of which cached | 80% |", "…of which reasoning | 20 |"},
-		"c": {"Input tokens incl. cache, median | 2,000 |", "…of which cached | 25% |"},
+		"a": {"Input tokens incl. cache, median | 77,862 |", "…of which cached | 29% |", "…uncached, median | 14 |", "…of which cache writes | 71% |"},
+		"b": {"Input tokens incl. cache, median | 1,000 |", "…of which cached | 80% |", "…uncached, median | 200 |", "…of which reasoning | 20 |"},
+		"c": {"Input tokens incl. cache, median | 2,000 |", "…of which cached | 25% |", "…uncached, median | 1,500 |"},
 	} {
 		body := section(task)
 		for _, row := range want {
@@ -237,6 +237,10 @@ func TestUsageFollowsEachProvider(t *testing.T) {
 		if hasReasoning := strings.Contains(body, "reasoning"); hasReasoning == (task == "a") {
 			t.Errorf("task %s reasoning row shown = %v:\n%s", task, hasReasoning, body)
 		}
+	}
+	// Only "on" was run; the empty "off" cells must not count as 0 runs.
+	if !strings.Contains(got, "Only 1 run per cell") {
+		t.Errorf("run-count note ignores unrun mode:\n%s", got)
 	}
 	if !strings.Contains(got, "The cache-write price was ignored for codex, grok") {
 		t.Errorf("summary does not note the ignored cache-write price:\n%s", got)
