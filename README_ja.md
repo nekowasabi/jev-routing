@@ -113,7 +113,7 @@ Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`�
 
 ## Compaction
 
-履歴圧縮の判定は [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)（[MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE)、Copyright (c) 2025）を参考に Go へ移植した。要約はせず、`tool_use` / `tool_result` の drop / truncate 契約を踏襲する。
+履歴圧縮の判定は [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)（[MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE)、Copyright (c) 2025）を参考に Go へ移植した。要約はせず、`tool_use` / `tool_result` の drop / truncate 契約を踏襲する。Jev に見せる state は現行ライブラリと同じ段階で収める。ツール入力を 1000、200、60 文字へ縮め、長い本文を頭と末尾だけにし、古い本文を畳み、古い呼び出しを1行にし、呼び出しを持たない古い項目を落とす。
 
 - ユーザー文とアシスタント文は触らない
 - tool_use と tool_result だけを noul で採点
@@ -121,6 +121,13 @@ Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`�
 - `keepCall` のみ → 結果を先頭 300 字に truncate
 - どちらも閾値未満 → 両方 drop
 - 先頭と直近はピン留め
+
+Codex と Grok Build は、Claude Code の `session.compact` のように `PreCompact` から置換トランスクリプトを返せない。
+
+- Codex のローカル圧縮（`codex-rs/core/src/compact.rs`）は、provider が OpenAI / Azure でないとき（`RemoteCompactionSupport::Unsupported`）に動く。`CONTEXT CHECKPOINT COMPACTION` の要約を求め、直近のユーザーメッセージとその要約だけを残す。ツール結果は置換後の履歴項目にならない。
+- Grok Build の full-replace（`xai-grok-compaction` の `code_compaction`）は `[system, user prefix, AGENTS.md, 最後のクエリ, 直近の尾, summary]` を組み直す。summary は番号付き節の `<summary>` で、掃除後 500 文字未満は退化する。それより古いツール呼び出しは summary の中にしか残らない。
+
+これらの圧縮プロンプトが届いたとき、jev-routing は要約モデルへ転送しない。同じ fast-jev 判定を行い、ホストが保存するアシスタントメッセージとして残ったトランスクリプトを返す。Codex は Responses の SSE、Grok は `<summary>` ブロック。通常ターンではツール結果をその場で drop / truncate し、Codex の `local_shell_call`、`shell_call`、`apply_patch_call`、`mcp_call` も対象にする。
 
 ツール選択が不確実でも、安全に適用できる履歴圧縮は実行します。Claude の `system` 境界、署名付き思考、ツール参照、呼び出しと結果の対応は維持します。
 

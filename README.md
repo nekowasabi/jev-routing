@@ -113,7 +113,7 @@ Devin CLI is assumed to use `/messages` and `/sessions` under `DEVIN_API_URL` (d
 
 ## Compaction
 
-The history-compaction judgment was ported to Go with reference to [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction) ([MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE), Copyright (c) 2025). It does not summarize; it follows the same drop / truncate contract for `tool_use` / `tool_result`.
+The history-compaction judgment was ported to Go with reference to [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction) ([MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE), Copyright (c) 2025). It does not summarize; it follows the same drop / truncate contract for `tool_use` / `tool_result`. The state Jev sees is fitted in the same stages as the current library: tool inputs capped at 1000, then 200, then 60 characters, long texts abridged, old texts collapsed, old calls reduced to one line, then old call-less entries left out.
 
 - User and assistant prose is never touched
 - Only tool_use and tool_result are scored with noul
@@ -121,6 +121,13 @@ The history-compaction judgment was ported to Go with reference to [tamaratran/f
 - `keepCall` only → truncate the result to the first 300 characters
 - Both below threshold → drop both
 - The first and the most recent entries are pinned
+
+Codex and Grok Build cannot return a replacement transcript from `PreCompact` the way Claude Code's `session.compact` hook can.
+
+- Codex local compaction (`codex-rs/core/src/compact.rs`) runs when the provider is not OpenAI/Azure (`RemoteCompactionSupport::Unsupported` in `model-provider`). It asks for a `CONTEXT CHECKPOINT COMPACTION` summary, then keeps recent user messages plus that summary. Tool results are not items in the replacement history.
+- Grok Build full-replace (`xai-grok-compaction` `code_compaction`) rebuilds `[system, user prefix, AGENTS.md, last query, recent tail, summary]`. The summary must be one `<summary>` block of numbered sections, at least 500 characters after cleaning. Older tool calls survive only inside that block.
+
+When one of those compaction prompts arrives, jev-routing does not forward it to a summarizer. It runs the same fast-jev decisions and returns the retained transcript as the assistant message the host will store: Responses SSE for Codex, a `<summary>` block for Grok. Ordinary turns still drop or truncate tool payloads in place, including Codex `local_shell_call`, `shell_call`, `apply_patch_call`, and `mcp_call` pairs.
 
 Even when tool selection is uncertain, history compaction is still applied where it is safe to do so. Claude's `system` boundary, signed thinking, tool references, and the pairing of calls with their results are all preserved.
 
