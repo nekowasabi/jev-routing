@@ -1,0 +1,189 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1058" width="1200" height="1058" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Benchmark results with Jev routing on and off">
+<rect width="1200" height="1058" fill="#fcfcfb"/>
+<text x="32" y="40" font-size="20" fill="#0b0b0b" text-anchor="start" font-weight="650">Same task, same model: Jev routing on vs. off</text>
+<text x="32" y="62" font-size="13" fill="#52514e" text-anchor="start" font-weight="400">Bars are medians, dots are the individual runs (1 to 5 per mode), drawn relative to each pair's baseline median.</text>
+<text x="32" y="80" font-size="13" fill="#52514e" text-anchor="start" font-weight="400">Lower is better, except for checks passed. GPT models ran in Codex, Claude models in Claude Code, both without MCP servers or plugins.</text>
+<rect x="32" y="94" width="14" height="8" rx="4" fill="#2a78d6"/>
+<text x="52" y="102" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Jev routing on</text>
+<rect x="164.4" y="94" width="14" height="8" rx="4" fill="#eb6834"/>
+<text x="184.4" y="102" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Routing off (baseline)</text>
+<text x="32" y="138" font-size="14" fill="#0b0b0b" text-anchor="start" font-weight="600">Input tokens per run (incl. cache)</text>
+<line x1="182" y1="154" x2="182" y2="286" stroke="#c3c2b7" stroke-width="1"/>
+<text x="182" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">0%</text>
+<line x1="242.4" y1="154" x2="242.4" y2="286" stroke="#e1e0d9" stroke-width="1"/>
+<text x="242.4" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">50%</text>
+<line x1="302.8" y1="154" x2="302.8" y2="286" stroke="#c3c2b7" stroke-width="1"/>
+<text x="302.8" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">baseline</text>
+<line x1="363.2" y1="154" x2="363.2" y2="286" stroke="#e1e0d9" stroke-width="1"/>
+<text x="363.2" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">150%</text>
+<line x1="423.6" y1="154" x2="423.6" y2="286" stroke="#e1e0d9" stroke-width="1"/>
+<text x="423.6" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">200%</text>
+<line x1="484" y1="154" x2="484" y2="286" stroke="#e1e0d9" stroke-width="1"/>
+<text x="484" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">250%</text>
+<text x="170" y="178" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · engine</text>
+<path d="M182,162 H299.74 a4,4 0 0 1 0,8 H182 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="303.74" cy="166" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M182,178 H298.8 a4,4 0 0 1 0,8 H182 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="302.8" cy="182" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="494" y="170" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">411k  +1%</text>
+<text x="494" y="186" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">408k</text>
+<text x="170" y="224" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · bugfix</text>
+<path d="M182,208 H363.6 a4,4 0 0 1 0,8 H182 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="367.6" cy="212" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M182,224 H298.8 a4,4 0 0 1 0,8 H182 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="302.8" cy="228" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="494" y="216" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">1.29M  +54%</text>
+<text x="494" y="232" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">839k</text>
+<text x="170" y="270" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · san</text>
+<path d="M182,254 H440.36 a4,4 0 0 1 0,8 H182 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="444.36" cy="258" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M182,270 H298.8 a4,4 0 0 1 0,8 H182 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="302.8" cy="274" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="494" y="262" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">577k  +117%</text>
+<text x="494" y="278" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">266k</text>
+<text x="620" y="138" font-size="14" fill="#0b0b0b" text-anchor="start" font-weight="600">Output tokens per run</text>
+<line x1="770" y1="154" x2="770" y2="286" stroke="#c3c2b7" stroke-width="1"/>
+<text x="770" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">0%</text>
+<line x1="845.5" y1="154" x2="845.5" y2="286" stroke="#e1e0d9" stroke-width="1"/>
+<text x="845.5" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">50%</text>
+<line x1="921" y1="154" x2="921" y2="286" stroke="#c3c2b7" stroke-width="1"/>
+<text x="921" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">baseline</text>
+<line x1="996.5" y1="154" x2="996.5" y2="286" stroke="#e1e0d9" stroke-width="1"/>
+<text x="996.5" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">150%</text>
+<line x1="1072" y1="154" x2="1072" y2="286" stroke="#e1e0d9" stroke-width="1"/>
+<text x="1072" y="300" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">200%</text>
+<text x="758" y="178" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · engine</text>
+<path d="M770,162 H921.07 a4,4 0 0 1 0,8 H770 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="925.07" cy="166" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M770,178 H917 a4,4 0 0 1 0,8 H770 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="921" cy="182" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="1082" y="170" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">5,262  +3%</text>
+<text x="1082" y="186" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">5,124</text>
+<text x="758" y="224" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · bugfix</text>
+<path d="M770,208 H872.94 a4,4 0 0 1 0,8 H770 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="876.94" cy="212" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M770,224 H917 a4,4 0 0 1 0,8 H770 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="921" cy="228" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="1082" y="216" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">4,185  -29%</text>
+<text x="1082" y="232" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">5,909</text>
+<text x="758" y="270" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · san</text>
+<path d="M770,254 H1008.41 a4,4 0 0 1 0,8 H770 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="1012.41" cy="258" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M770,270 H917 a4,4 0 0 1 0,8 H770 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="921" cy="274" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="1082" y="262" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">4,251  +61%</text>
+<text x="1082" y="278" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">2,648</text>
+<text x="32" y="436" font-size="14" fill="#0b0b0b" text-anchor="start" font-weight="600">LLM requests per run</text>
+<line x1="182" y1="452" x2="182" y2="584" stroke="#c3c2b7" stroke-width="1"/>
+<text x="182" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">0%</text>
+<line x1="242.4" y1="452" x2="242.4" y2="584" stroke="#e1e0d9" stroke-width="1"/>
+<text x="242.4" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">50%</text>
+<line x1="302.8" y1="452" x2="302.8" y2="584" stroke="#c3c2b7" stroke-width="1"/>
+<text x="302.8" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">baseline</text>
+<line x1="363.2" y1="452" x2="363.2" y2="584" stroke="#e1e0d9" stroke-width="1"/>
+<text x="363.2" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">150%</text>
+<line x1="423.6" y1="452" x2="423.6" y2="584" stroke="#e1e0d9" stroke-width="1"/>
+<text x="423.6" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">200%</text>
+<line x1="484" y1="452" x2="484" y2="584" stroke="#e1e0d9" stroke-width="1"/>
+<text x="484" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">250%</text>
+<text x="170" y="476" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · engine</text>
+<path d="M182,460 H309.78 a4,4 0 0 1 0,8 H182 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="313.78" cy="464" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M182,476 H298.8 a4,4 0 0 1 0,8 H182 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="302.8" cy="480" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="494" y="468" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">12  +9%</text>
+<text x="494" y="484" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">11</text>
+<text x="170" y="522" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · bugfix</text>
+<path d="M182,506 H434.7 a4,4 0 0 1 0,8 H182 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="438.7" cy="510" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M182,522 H298.8 a4,4 0 0 1 0,8 H182 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="302.8" cy="526" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="494" y="514" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">34  +113%</text>
+<text x="494" y="530" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">16</text>
+<text x="170" y="568" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · san</text>
+<path d="M182,552 H454.11 a4,4 0 0 1 0,8 H182 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="458.11" cy="556" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M182,568 H298.8 a4,4 0 0 1 0,8 H182 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="302.8" cy="572" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="494" y="560" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">16  +129%</text>
+<text x="494" y="576" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">7</text>
+<text x="620" y="436" font-size="14" fill="#0b0b0b" text-anchor="start" font-weight="600">Wall-clock seconds per run</text>
+<line x1="770" y1="452" x2="770" y2="584" stroke="#c3c2b7" stroke-width="1"/>
+<text x="770" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">0%</text>
+<line x1="830.4" y1="452" x2="830.4" y2="584" stroke="#e1e0d9" stroke-width="1"/>
+<text x="830.4" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">50%</text>
+<line x1="890.8" y1="452" x2="890.8" y2="584" stroke="#c3c2b7" stroke-width="1"/>
+<text x="890.8" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">baseline</text>
+<line x1="951.2" y1="452" x2="951.2" y2="584" stroke="#e1e0d9" stroke-width="1"/>
+<text x="951.2" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">150%</text>
+<line x1="1011.6" y1="452" x2="1011.6" y2="584" stroke="#e1e0d9" stroke-width="1"/>
+<text x="1011.6" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">200%</text>
+<line x1="1072" y1="452" x2="1072" y2="584" stroke="#e1e0d9" stroke-width="1"/>
+<text x="1072" y="598" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">250%</text>
+<text x="758" y="476" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · engine</text>
+<path d="M770,460 H852.58 a4,4 0 0 1 0,8 H770 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="856.58" cy="464" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M770,476 H886.8 a4,4 0 0 1 0,8 H770 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="890.8" cy="480" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="1082" y="468" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">156 s  -28%</text>
+<text x="1082" y="484" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">218 s</text>
+<text x="758" y="522" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · bugfix</text>
+<path d="M770,506 H923.6 a4,4 0 0 1 0,8 H770 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="927.6" cy="510" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M770,522 H886.8 a4,4 0 0 1 0,8 H770 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="890.8" cy="526" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="1082" y="514" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">239 s  +30%</text>
+<text x="1082" y="530" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">183 s</text>
+<text x="758" y="568" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · san</text>
+<path d="M770,552 H1020.7 a4,4 0 0 1 0,8 H770 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="1024.7" cy="556" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M770,568 H886.8 a4,4 0 0 1 0,8 H770 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="890.8" cy="572" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="1082" y="560" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">170 s  +111%</text>
+<text x="1082" y="576" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">81 s</text>
+<text x="32" y="734" font-size="14" fill="#0b0b0b" text-anchor="start" font-weight="600">Hidden checks passed</text>
+<line x1="182" y1="750" x2="182" y2="882" stroke="#c3c2b7" stroke-width="1"/>
+<text x="182" y="896" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">0%</text>
+<line x1="257.5" y1="750" x2="257.5" y2="882" stroke="#e1e0d9" stroke-width="1"/>
+<text x="257.5" y="896" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">25%</text>
+<line x1="333" y1="750" x2="333" y2="882" stroke="#e1e0d9" stroke-width="1"/>
+<text x="333" y="896" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">50%</text>
+<line x1="408.5" y1="750" x2="408.5" y2="882" stroke="#e1e0d9" stroke-width="1"/>
+<text x="408.5" y="896" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">75%</text>
+<line x1="484" y1="750" x2="484" y2="882" stroke="#e1e0d9" stroke-width="1"/>
+<text x="484" y="896" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">100%</text>
+<text x="170" y="774" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · engine</text>
+<path d="M182,758 H480 a4,4 0 0 1 0,8 H182 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="484" cy="762" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M182,774 H370.94 a4,4 0 0 1 0,8 H182 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="374.94" cy="778" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="494" y="766" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">100%  +57%</text>
+<text x="494" y="782" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">64%</text>
+<text x="170" y="820" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · bugfix</text>
+<path d="M182,804 H429.67 a4,4 0 0 1 0,8 H182 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="433.67" cy="808" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M182,820 H429.67 a4,4 0 0 1 0,8 H182 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="433.67" cy="824" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="494" y="812" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">83%</text>
+<text x="494" y="828" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">83%</text>
+<text x="170" y="866" font-size="12" fill="#52514e" text-anchor="end" font-weight="400">gpt-6-luna · san</text>
+<path d="M182,850 H480 a4,4 0 0 1 0,8 H182 Z" fill="#2a78d6" opacity="0.55"/>
+<circle cx="484" cy="854" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M182,866 H480 a4,4 0 0 1 0,8 H182 Z" fill="#eb6834" opacity="0.55"/>
+<circle cx="484" cy="870" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="494" y="858" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="600">100%</text>
+<text x="494" y="874" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">100%</text>
+<text x="620" y="734" font-size="14" fill="#0b0b0b" text-anchor="start" font-weight="600">Solved runs and what Jev itself cost</text>
+<text x="620" y="764" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="600">gpt-6-luna · engine</text>
+<text x="620" y="780" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Solved 1/1 with routing, 0/1 without. Jev steered 12 of 12 requests for $0.000.</text>
+<text x="620" y="796" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Compaction: 10 of 12 requests, 90 tool entries dropped, ~25,286 input tokens saved.</text>
+<text x="620" y="812" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Input share with routing: cached 78%. Without: cached 89%.</text>
+<text x="620" y="834" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="600">gpt-6-luna · bugfix</text>
+<text x="620" y="850" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Solved 0/1 with routing, 0/1 without. Jev steered 34 of 34 requests for $0.000.</text>
+<text x="620" y="866" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Compaction: 32 of 34 requests, 878 tool entries dropped, ~823,166 input tokens saved.</text>
+<text x="620" y="882" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Input share with routing: cached 81%. Without: cached 93%.</text>
+<text x="620" y="904" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="600">gpt-6-luna · san</text>
+<text x="620" y="920" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Solved 1/1 with routing, 1/1 without. Jev steered 16 of 16 requests for $0.000.</text>
+<text x="620" y="936" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Compaction: 14 of 16 requests, 174 tool entries dropped, ~133,995 input tokens saved.</text>
+<text x="620" y="952" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Input share with routing: cached 75%. Without: cached 85%.</text>
+</svg>
