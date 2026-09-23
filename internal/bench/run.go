@@ -25,7 +25,7 @@ const helpText = `jev-routing bench — same coding task, routing on and routing
 Usage:
   jev-routing bench [options]
   jev-routing bench selftest
-  jev-routing bench report <results dir> [--prices in,cached,out]
+  jev-routing bench report <results dir> [--prices in,cached,out[,cachewrite]]
   jev-routing bench audit <results dir>...
   jev-routing bench chart <results dir>... [--out charts]
   jev-routing bench fake-upstream [--port 8798]
@@ -40,7 +40,7 @@ Options:
   --on-mode filter|forced                what "on" means (default filter; "off" is always baseline)
   --reps N                               repetitions of every task in every mode (default 1)
   --timeout-min N                        override each task's own time limit
-  --prices in,cached,out                 USD per million tokens
+  --prices in,cached,out[,cachewrite]    USD per million tokens (cachewrite default 1.25×in)
   --port N                               port for the per-run proxy (default 8890)
   --out DIR                              results directory (default results/<timestamp>)
   --keep                                 keep the workspaces
@@ -510,10 +510,10 @@ func parsePrices(s string) (*Prices, error) {
 		return nil, nil
 	}
 	parts := strings.Split(s, ",")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("--prices takes in,cached,out USD per million tokens")
+	if len(parts) != 3 && len(parts) != 4 {
+		return nil, fmt.Errorf("--prices takes in,cached,out[,cachewrite] USD per million tokens")
 	}
-	var nums [3]float64
+	var nums [4]float64
 	for i, part := range parts {
 		n, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
 		if err != nil {
@@ -521,7 +521,10 @@ func parsePrices(s string) (*Prices, error) {
 		}
 		nums[i] = n
 	}
-	return &Prices{Input: nums[0], Cached: nums[1], Output: nums[2]}, nil
+	if len(parts) == 3 {
+		nums[3] = 1.25 * nums[0] // Anthropic 5-minute cache write price
+	}
+	return &Prices{Input: nums[0], Cached: nums[1], Output: nums[2], CacheWrite: nums[3], CacheWriteGiven: len(parts) == 4}, nil
 }
 
 func contains(list []string, want string) bool {
@@ -566,10 +569,15 @@ func loadRuns(dir string) ([]RunRecord, error) {
 
 func reportCmd(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: jev-routing bench report <results dir> [--prices in,cached,out]")
+		fmt.Fprintln(os.Stderr, "usage: jev-routing bench report <results dir> [--prices in,cached,out[,cachewrite]]")
 		return 2
 	}
 	dir := args[0]
+	if _, err := os.Stat(filepath.Join(dir, "runs.jsonl")); err != nil {
+		if found, _ := filepath.Glob(filepath.Join(dir, "*", "runs.jsonl")); len(found) > 0 {
+			dir = filepath.Dir(found[len(found)-1]) // timestamp dirs sort lexically; last is newest
+		}
+	}
 	pricesFlag := ""
 	for i := 1; i < len(args); i++ {
 		if args[i] == "--prices" && i+1 < len(args) {

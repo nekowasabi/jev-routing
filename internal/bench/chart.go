@@ -68,9 +68,12 @@ type panel struct {
 
 func panels() []panel {
 	return []panel{
-		{"Input tokens per run", false, func(r RunRecord) float64 { return float64(r.Input) }, func(v float64) string {
+		{"Input tokens per run (incl. cache)", false, func(r RunRecord) float64 { return float64(totalInput(r)) }, func(v float64) string {
 			if v >= 1e6 {
 				return strconv.FormatFloat(v/1e6, 'f', 2, 64) + "M"
+			}
+			if v < 1e3 {
+				return strconv.Itoa(int(math.Round(v)))
 			}
 			return strconv.Itoa(int(math.Round(v/1e3))) + "k"
 		}},
@@ -184,7 +187,7 @@ func draw(runs []RunRecord, t theme) string {
 	panelW := (W - 2*PAD - (COLS-1)*GAP) / COLS
 	plotW := panelW - labelW - valueW
 	panelH := 34 + float64(len(groups))*(2*rowH+groupGap) + 22
-	if alt := 60 + float64(len(groups))*38; alt > panelH {
+	if alt := 60 + float64(len(groups))*70; alt > panelH {
 		panelH = alt
 	}
 	rows := math.Ceil(float64(len(ps)+1) / COLS)
@@ -342,7 +345,7 @@ func draw(runs []RunRecord, t theme) string {
 	y0 := header + float64(len(ps)/int(COLS))*(panelH+28)
 	text(x0, y0+14, "Solved runs and what Jev itself cost", 14, t.ink, "start", 600)
 	for i, group := range groups {
-		y := y0 + 44 + float64(i)*38
+		y := y0 + 44 + float64(i)*70
 		cell := func(mode string) []RunRecord {
 			var out []RunRecord
 			for _, run := range runs {
@@ -377,6 +380,23 @@ func draw(runs []RunRecord, t theme) string {
 		}
 		text(x0, y, group, 12, t.ink, "start", 600)
 		text(x0, y+16, fmt.Sprintf("Solved %s with routing, %s without. Jev steered %d of %d requests for $%.3f.", solved("on"), solved("off"), steered, requests, float64(jevTokens)*0.042/1e6), 12, t.ink2, "start", 400)
+		onMedian := func(pick func(RunRecord) float64) string {
+			return fmtInt(median(floatField(on, pick)))
+		}
+		text(x0, y+32, fmt.Sprintf("Compaction: %s of %s requests, %s tool entries dropped, ~%s input tokens saved.",
+			onMedian(func(r RunRecord) float64 { return float64(r.CompactRequests) }),
+			onMedian(func(r RunRecord) float64 { return float64(r.Requests) }),
+			onMedian(func(r RunRecord) float64 { return float64(r.CompactDropped) }),
+			onMedian(func(r RunRecord) float64 { return float64(r.CompactSavedTokens) })), 12, t.ink2, "start", 400)
+		cache := func(mode string) string {
+			c := cell(mode)
+			read := fmtPercent(median(inputShare(c, func(r RunRecord) int { return r.Cached })))
+			if len(c) > 0 && specOf(c[0].Agent).hasCacheWrite {
+				return "cache read " + read + " · cache write " + fmtPercent(median(inputShare(c, cacheWrite)))
+			}
+			return "cached " + read
+		}
+		text(x0, y+48, fmt.Sprintf("Input share with routing: %s. Without: %s.", cache("on"), cache("off")), 12, t.ink2, "start", 400)
 	}
 	out = append(out, "</svg>")
 	return strings.Join(out, "\n")

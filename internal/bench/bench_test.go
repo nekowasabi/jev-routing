@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +16,7 @@ func TestSummarizeComparesMediansAndDropsContaminated(t *testing.T) {
 		{Task: "chess-bugfix", Mode: "on", Rep: 2, Solved: false, Score: 0.5, Requests: 4, Input: 10, Output: 10, Seconds: 5, Isolation: &Isolation{Contaminated: true, ForeignReads: []string{"/tmp/other"}}, Modes: map[string]int{}},
 	}
 	got := Summarize(runs, &Prices{Input: 1, Cached: 0.1, Output: 2})
-	if !strings.Contains(got, "Input tokens, median | 50 (-50%) | 100 |") {
+	if !strings.Contains(got, "Input tokens incl. cache, median | 50 (-50%) | 100 |") {
 		t.Fatalf("summary missing input delta:\n%s", got)
 	}
 	if !strings.Contains(got, "Excluded as contaminated") || !strings.Contains(got, "chess-bugfix.on.2") {
@@ -23,6 +24,23 @@ func TestSummarizeComparesMediansAndDropsContaminated(t *testing.T) {
 	}
 	if strings.Contains(got, "Only 0 run") {
 		t.Fatalf("contaminated run was counted:\n%s", got)
+	}
+}
+
+func TestSummarizeReportsCompaction(t *testing.T) {
+	runs := []RunRecord{
+		{Task: "chess-bugfix", Mode: "on", Rep: 1, Requests: 10, CompactRequests: 3, CompactDropped: 7, CompactSavedTokens: 1200},
+		{Task: "chess-bugfix", Mode: "off", Rep: 1, Requests: 10},
+	}
+	got := Summarize(runs, nil)
+	for _, row := range []string{
+		"Requests compacted, median | 3 | 0 |",
+		"Tool entries dropped or truncated, median | 7 | 0 |",
+		"Input tokens saved by compaction (est.), median | 1,200 | 0 |",
+	} {
+		if !strings.Contains(got, row) {
+			t.Fatalf("summary missing %q:\n%s", row, got)
+		}
 	}
 }
 
@@ -163,5 +181,67 @@ func TestFakePipeline(t *testing.T) {
 	summary, err := os.ReadFile(filepath.Join(out, "summary.md"))
 	if err != nil || !strings.Contains(string(summary), "chess-bugfix") {
 		t.Fatalf("summary: %v\n%s", err, summary)
+	}
+}
+
+func TestUsageFollowsEachProvider(t *testing.T) {
+	claude := RunRecord{Task: "a", Agent: "claude", Mode: "on", Input: 14, Cached: 22629, CacheWrite: 55219, Output: 5143}
+	codex := RunRecord{Task: "b", Agent: "codex", Mode: "on", Input: 1000, Cached: 800, Output: 50, Reasoning: 20}
+	grok := RunRecord{Task: "c", Agent: "grok", Mode: "on", Input: 2000, Cached: 500, CacheWrite: 99, Output: 100}
+	for _, tc := range []struct {
+		run             RunRecord
+		total, uncached int
+		cost            float64 // at --prices 4,0.4,20,5
+	}{
+		{claude, 77862, 14, 0.388},
+		{codex, 1000, 200, (200*4 + 800*0.4 + 50*20) / 1e6},
+		{grok, 2000, 1500, (1500*4 + 500*0.4 + 100*20) / 1e6}, // stray CacheWrite is not billed
+	} {
+		if got := totalInput(tc.run); got != tc.total {
+			t.Errorf("%s totalInput = %d, want %d", tc.run.Agent, got, tc.total)
+		}
+		if got := uncachedInput(tc.run); got != tc.uncached {
+			t.Errorf("%s uncachedInput = %d, want %d", tc.run.Agent, got, tc.uncached)
+		}
+		for _, flag := range []string{"4,0.4,20,5", "4,0.4,20"} {
+			prices, err := parsePrices(flag)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := costOf(tc.run, *prices); math.Abs(got-tc.cost) > 0.001 {
+				t.Errorf("%s --prices %s: cost = %f, want %f", tc.run.Agent, flag, got, tc.cost)
+			}
+		}
+	}
+	prices, _ := parsePrices("4,0.4,20,5")
+	got := Summarize([]RunRecord{claude, codex, grok}, prices)
+	section := func(task string) string {
+		_, rest, _ := strings.Cut(got, "## "+task+"\n")
+		body, _, _ := strings.Cut(rest, "\n\n")
+		return body
+	}
+	for task, want := range map[string][]string{
+		"a": {"Input tokens incl. cache, median | 77,862 |", "…of which cached | 29% |", "…of which cache writes | 71% |"},
+		"b": {"Input tokens incl. cache, median | 1,000 |", "…of which cached | 80% |", "…of which reasoning | 20 |"},
+		"c": {"Input tokens incl. cache, median | 2,000 |", "…of which cached | 25% |"},
+	} {
+		body := section(task)
+		for _, row := range want {
+			if !strings.Contains(body, row) {
+				t.Errorf("task %s missing %q:\n%s", task, row, body)
+			}
+		}
+		if hasWrites := strings.Contains(body, "cache writes"); hasWrites != (task == "a") {
+			t.Errorf("task %s cache-write row shown = %v:\n%s", task, hasWrites, body)
+		}
+		if hasReasoning := strings.Contains(body, "reasoning"); hasReasoning == (task == "a") {
+			t.Errorf("task %s reasoning row shown = %v:\n%s", task, hasReasoning, body)
+		}
+	}
+	if !strings.Contains(got, "The cache-write price was ignored for codex, grok") {
+		t.Errorf("summary does not note the ignored cache-write price:\n%s", got)
+	}
+	if three, _ := parsePrices("4,0.4,20"); strings.Contains(Summarize([]RunRecord{codex}, three), "ignored") {
+		t.Errorf("defaulted cache-write price should not be noted")
 	}
 }

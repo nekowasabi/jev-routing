@@ -167,6 +167,11 @@ type dashEvent struct {
 		Ms          float64 `json:"ms"`
 		InputTokens *int    `json:"inputTokens"`
 	} `json:"jevAttempts"`
+	CompactApplied bool `json:"compactApplied"`
+	CompactDropped int  `json:"compactDropped"`
+	SavedTokens    *struct {
+		CompactionInput int `json:"compactionInput"`
+	} `json:"savedTokens"`
 }
 
 func (g *gateway) meter() (RunRecord, error) {
@@ -225,6 +230,13 @@ func (g *gateway) meter() (RunRecord, error) {
 		for _, attempt := range event.JevAttempts {
 			out.JevInput += deref(attempt.InputTokens)
 			out.JevSeconds += attempt.Ms / 1000
+		}
+		if event.CompactApplied {
+			out.CompactRequests++
+		}
+		out.CompactDropped += event.CompactDropped
+		if event.SavedTokens != nil {
+			out.CompactSavedTokens += event.SavedTokens.CompactionInput
 		}
 		if event.SentModel != "" {
 			models[event.SentModel] = true

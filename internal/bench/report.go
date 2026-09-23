@@ -3,20 +3,24 @@ package bench
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-// Prices are USD per million tokens. Cached input is billed separately from the rest of input.
+// Prices are USD per million tokens. Cache reads and cache writes are billed separately from the rest of input.
 type Prices struct {
-	Input  float64
-	Cached float64
-	Output float64
+	Input      float64
+	Cached     float64
+	Output     float64
+	CacheWrite float64
+	// CacheWriteGiven is true when --prices named the cache-write price instead of defaulting it.
+	CacheWriteGiven bool
 }
 
 func costOf(run RunRecord, prices Prices) float64 {
-	return (float64(run.Input-run.Cached)*prices.Input+float64(run.Cached)*prices.Cached+float64(run.Output)*prices.Output)/1e6 + (float64(run.JevInput) * 0.042 / 1e6)
+	return (float64(uncachedInput(run))*prices.Input+float64(run.Cached)*prices.Cached+float64(cacheWrite(run))*prices.CacheWrite+float64(run.Output)*prices.Output)/1e6 + (float64(run.JevInput) * 0.042 / 1e6)
 }
 
 func median(values []float64) *float64 {
@@ -147,18 +151,14 @@ func Summarize(all []RunRecord, prices *Prices) string {
 		{"LLM requests, median", func(g []RunRecord) *float64 {
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.Requests) }))
 		}, fmtInt, true},
-		{"Input tokens, median", func(g []RunRecord) *float64 {
-			return median(floatField(g, func(r RunRecord) float64 { return float64(r.Input) }))
+		{"Input tokens incl. cache, median", func(g []RunRecord) *float64 {
+			return median(floatField(g, func(r RunRecord) float64 { return float64(totalInput(r)) }))
 		}, fmtInt, true},
 		{"…of which cached", func(g []RunRecord) *float64 {
-			vals := make([]float64, 0, len(g))
-			for _, run := range g {
-				if run.Input == 0 {
-					continue
-				}
-				vals = append(vals, float64(run.Cached)/float64(run.Input))
-			}
-			return median(vals)
+			return median(inputShare(g, func(r RunRecord) int { return r.Cached }))
+		}, fmtPercent, false},
+		{"…of which cache writes", func(g []RunRecord) *float64 {
+			return median(inputShare(g, cacheWrite))
 		}, fmtPercent, false},
 		{"Output tokens, median", func(g []RunRecord) *float64 {
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.Output) }))
@@ -186,6 +186,15 @@ func Summarize(all []RunRecord, prices *Prices) string {
 			}
 			return median(vals)
 		}, fmtPercent, false},
+		{"Requests compacted, median", func(g []RunRecord) *float64 {
+			return median(floatField(g, func(r RunRecord) float64 { return float64(r.CompactRequests) }))
+		}, fmtInt, false},
+		{"Tool entries dropped or truncated, median", func(g []RunRecord) *float64 {
+			return median(floatField(g, func(r RunRecord) float64 { return float64(r.CompactDropped) }))
+		}, fmtInt, false},
+		{"Input tokens saved by compaction (est.), median", func(g []RunRecord) *float64 {
+			return median(floatField(g, func(r RunRecord) float64 { return float64(r.CompactSavedTokens) }))
+		}, fmtInt, false},
 		{"Failed LLM requests, total", func(g []RunRecord) *float64 {
 			n := 0
 			for _, run := range g {
@@ -234,6 +243,7 @@ func Summarize(all []RunRecord, prices *Prices) string {
 	}
 
 	var lines []string
+	var ignoredCacheWrite []string
 	lines = append(lines, "# Benchmark summary", "")
 	for _, task := range tasks {
 		var with, without []RunRecord
@@ -248,7 +258,19 @@ func Summarize(all []RunRecord, prices *Prices) string {
 			}
 		}
 		lines = append(lines, "## "+task, "", "| | Routing on | Routing off (baseline) |", "| --- | ---: | ---: |")
+		var cacheWrites, reasoning bool
+		for _, run := range append(with, without...) {
+			spec := specOf(run.Agent)
+			cacheWrites = cacheWrites || spec.hasCacheWrite
+			reasoning = reasoning || spec.reportsReasoning
+			if !spec.hasCacheWrite {
+				ignoredCacheWrite = append(ignoredCacheWrite, run.Agent)
+			}
+		}
 		for _, m := range metrics {
+			if (m.label == "…of which cache writes" && !cacheWrites) || (m.label == "…of which reasoning" && !reasoning) {
+				continue
+			}
 			var a, b *float64
 			if len(with) > 0 {
 				a = m.measure(with)
@@ -263,6 +285,10 @@ func Summarize(all []RunRecord, prices *Prices) string {
 			lines = append(lines, fmt.Sprintf("| %s | %s%s | %s |", m.label, m.format(a), extra, m.format(b)))
 		}
 		lines = append(lines, "")
+	}
+	if prices != nil && prices.CacheWriteGiven && len(ignoredCacheWrite) > 0 {
+		sort.Strings(ignoredCacheWrite)
+		lines = append(lines, "The cache-write price was ignored for "+strings.Join(slices.Compact(ignoredCacheWrite), ", ")+": those providers do not bill cache writes.", "")
 	}
 	if len(excluded) > 0 {
 		names := make([]string, len(excluded))
@@ -304,6 +330,17 @@ func floatField(g []RunRecord, pick func(RunRecord) float64) []float64 {
 	out := make([]float64, len(g))
 	for i, run := range g {
 		out[i] = pick(run)
+	}
+	return out
+}
+
+// inputShare is pick(r)/totalInput(r) per run, skipping runs with no input.
+func inputShare(g []RunRecord, pick func(RunRecord) int) []float64 {
+	out := make([]float64, 0, len(g))
+	for _, run := range g {
+		if total := totalInput(run); total > 0 {
+			out = append(out, float64(pick(run))/float64(total))
+		}
 	}
 	return out
 }
