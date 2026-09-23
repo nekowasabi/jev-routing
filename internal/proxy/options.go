@@ -49,6 +49,8 @@ type Options struct {
 	Shadow            bool
 	Transforms        TransformOptions
 	CostGateMax       int
+	// hints is shared by every copy of these Options (one per proxy server).
+	hints *hintStore
 }
 
 func DefaultOptions() Options {
@@ -62,6 +64,7 @@ func DefaultOptions() Options {
 		ApplicationPolicy: "",
 		KindModes:         defaultKindModes(),
 		Transforms:        defaultTransforms(),
+		hints:             newHintStore(),
 	}
 }
 

@@ -400,8 +400,8 @@ func TestClaudeFilterKeepsAdaptiveThinking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Chosen != "Bash" || stats.ToolAfter != 1 {
-		t.Fatalf("want Bash filter, got %+v", stats)
+	if stats.Chosen != "Bash" || stats.ToolAfter != 3 {
+		t.Fatalf("want Bash with the full catalog, got %+v", stats)
 	}
 	var got map[string]any
 	if err := json.Unmarshal(out, &got); err != nil {
@@ -460,12 +460,8 @@ func TestExploreKeepsAgent(t *testing.T) {
 	}
 	var got map[string]any
 	_ = json.Unmarshal(out, &got)
-	tools := got["tools"].([]any)
-	if len(tools) != 1 {
-		t.Fatalf("kept %d", len(tools))
-	}
-	if tools[0].(map[string]any)["name"] != "Agent" {
-		t.Fatalf("kept %+v", tools[0])
+	if tools := got["tools"].([]any); len(tools) != 4 {
+		t.Fatalf("Claude catalog narrowed to %d", len(tools))
 	}
 }
 

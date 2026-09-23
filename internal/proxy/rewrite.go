@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/nekowasabi/jev-routing/internal/compact"
 	"github.com/nekowasabi/jev-routing/internal/host"
@@ -59,6 +60,8 @@ const (
 	applyFilter = "filter"
 	applyForced = "forced"
 	applyDirect = "direct"
+	// applyAdvise leaves the Claude request intact and appends the decision as a reminder.
+	applyAdvise = "advise"
 
 	adoptConfidence = 0.85
 	needsToolYes    = 0.8
@@ -159,6 +162,14 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 	stats.OriginalModel = modelName(root)
 	stats.SentModel = stats.OriginalModel
+	// Why: Claude Code resends history without our hints; restoring them keeps
+	// earlier messages byte-identical so the prompt cache prefix survives.
+	if h == host.Claude && opt.hints.reapply(root) {
+		if b, err := json.Marshal(root); err == nil {
+			body = b
+			stats.Changed = true
+		}
+	}
 
 	if opt.Mode == ModeBaseline {
 		stats.Chosen = "passthrough:" + reasonBaseline
@@ -213,7 +224,9 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	compOpts := compact.Options{Goal: user, PreserveRecent: preserve}
 	compaction := compact.Result{}
 	compactOK := false
-	if opt.Compaction != CompactionOff && opt.Transforms.Compact {
+	// Why: Claude history is compacted only when Claude Code asks for it
+	// (native path). Rewriting old turns every request breaks prompt caching.
+	if opt.Compaction != CompactionOff && opt.Transforms.Compact && h != host.Claude {
 		compaction = compact.CompactLocal(items, compOpts)
 		if client != nil && client.Live() && len(items) > 4 {
 			if live, err := jev.AskCompactContext(ctx, client, items, compOpts); err == nil {
@@ -256,7 +269,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 	// A fully resolved definition lookup is answered from the workspace.
 	// Skill, MCP, and other tools are removed so the model only generates the reply.
-	if applyLocalLookup(work, user, actions, opt) {
+	if h != host.Claude && applyLocalLookup(work, user, actions, opt) {
 		stats.Apply = applyFilter
 		stats.Reason = reasonLocalLookup
 		stats.Source = sourceLocal
@@ -279,6 +292,39 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 			return body, stats, err
 		}
 		stats.Changed = true
+		return out, stats, nil
+	}
+	// Why: Claude tool definitions head Anthropic's prompt cache, so narrowing
+	// tools[] or setting tool_choice rebuilds the whole cache (and Opus 5.5
+	// rejects forced tool_choice). Claude gets the decision as a reminder instead.
+	advise := h == host.Claude && !opt.Shadow && opt.Transforms.Filter
+	adviseClaude := func(tool string) ([]byte, RewriteStats, error) {
+		stats.Chosen = tool
+		stats.Done = decision.Done
+		stats.Gated = decision.Gated
+		msgs := asSlice(work["messages"])
+		var last map[string]any
+		if len(msgs) > 0 {
+			last, _ = msgs[len(msgs)-1].(map[string]any)
+		}
+		key := toolResultKey(last)
+		if key == "" {
+			return withoutSelection()
+		}
+		next := tool + " (other tools remain available)"
+		if tool == plan.Respond {
+			next = "reply to the user without calling a tool"
+		}
+		appendHintBlock(last, opt.hints.remember(key, "<system-reminder>jev-routing: suggested next step: "+next+".</system-reminder>"))
+		stats.Apply = applyAdvise
+		stats.Changed = true
+		if stats.Reason == "" {
+			stats.Reason = stats.Source
+		}
+		out, err := json.Marshal(work)
+		if err != nil {
+			return body, stats, err
+		}
 		return out, stats, nil
 	}
 	localFallback := func() bool {
@@ -373,7 +419,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 			if verr != "" {
 				stats.Reason = verr
 			}
-			if decision.Passthrough {
+			if decision.Passthrough && !(advise && stats.Reason == reasonNoToolNeeded) {
 				stats.Chosen = "passthrough:" + stats.Reason
 				stats.ToolAfter = stats.ToolBefore
 				stats.Done = decision.Done
@@ -384,51 +430,22 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 
 	if decision.Passthrough || decision.Tool == plan.Respond {
-		if h == host.Claude && stats.Reason == reasonNoToolNeeded {
-			available := map[string]bool{}
-			for _, t := range tools {
-				if m, ok := t.(map[string]any); ok {
-					available[toolNameOf(m)] = true
-				}
-			}
-			var keep []string
-			for name := range toolReferences(msgs) {
-				if resolved := catalogAliasIn(available, name); resolved != "" {
-					keep = append(keep, resolved)
-				}
-			}
-			sort.Strings(keep)
-			if len(keep) > 0 {
-				// Why: Keep the already-referenced Claude tools after a final answer so the
-				// next turn retains the same reduced cache prefix instead of rebuilding it.
-				decision = plan.Decision{Tool: keep[0], Set: keep, Confidence: decision.Confidence}
-			} else {
-				stats.Chosen = "passthrough"
-				stats.ToolAfter = stats.ToolBefore
-				stats.Done = decision.Done
-				stats.Gated = decision.Gated
-				return withoutSelection()
-			}
-		} else {
-			if stats.Reason == "" {
-				stats.Reason = reasonLocalPassthrough
-			}
-			stats.Chosen = "passthrough"
-			stats.ToolAfter = stats.ToolBefore
-			stats.Done = decision.Done
-			stats.Gated = decision.Gated
-			return withoutSelection()
+		if advise && stats.Reason == reasonNoToolNeeded {
+			return adviseClaude(plan.Respond)
 		}
+		if stats.Reason == "" {
+			stats.Reason = reasonLocalPassthrough
+		}
+		stats.Chosen = "passthrough"
+		stats.ToolAfter = stats.ToolBefore
+		stats.Done = decision.Done
+		stats.Gated = decision.Gated
+		return withoutSelection()
 	}
 
 	keep := decision.Set
 	if len(keep) == 0 {
 		keep = []string{decision.Tool}
-	}
-	if h == host.Claude && plan.SequentialLocate(user) {
-		// Why: Sequential Claude tasks alternate reads and shell searches. Keeping Bash
-		// from the first filtered request avoids changing the tool cache prefix mid-run.
-		keep = append(keep, "Bash")
 	}
 	available := map[string]bool{}
 	for _, t := range tools {
@@ -469,6 +486,9 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.ToolsAfter = stats.ToolsBefore
 		stats.Changed = stats.CompactApplied
 		return withoutSelection()
+	}
+	if advise {
+		return adviseClaude(decision.Tool)
 	}
 
 	apply := applyFilter
@@ -2247,4 +2267,86 @@ func cloneMap(m map[string]any) map[string]any {
 		return m
 	}
 	return out
+}
+
+// hintStore remembers the reminder appended to each Claude user message, keyed
+// by the message's first tool_use_id, so later requests can restore it.
+type hintStore struct {
+	mu    sync.Mutex
+	text  map[string]string
+	order []string
+}
+
+// ponytail: FIFO bound of 4096 keys; an evicted hint drops out of history once
+// (one cache rebuild). Key per conversation if that ever shows up in costs.
+const hintStoreMax = 4096
+
+func newHintStore() *hintStore { return &hintStore{text: map[string]string{}} }
+
+// remember records text for key unless a hint is already stored, and returns
+// the stored hint so a retried request carries the same bytes.
+func (s *hintStore) remember(key, text string) string {
+	if s == nil {
+		return text
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if old, ok := s.text[key]; ok {
+		return old
+	}
+	s.text[key] = text
+	s.order = append(s.order, key)
+	if len(s.order) > hintStoreMax {
+		delete(s.text, s.order[0])
+		s.order = s.order[1:]
+	}
+	return text
+}
+
+// reapply appends every stored hint to its user message; true when any was added.
+func (s *hintStore) reapply(root map[string]any) bool {
+	if s == nil {
+		return false
+	}
+	changed := false
+	for _, raw := range asSlice(root["messages"]) {
+		msg, _ := raw.(map[string]any)
+		key := toolResultKey(msg)
+		if key == "" {
+			continue
+		}
+		s.mu.Lock()
+		text, ok := s.text[key]
+		s.mu.Unlock()
+		if ok && appendHintBlock(msg, text) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// toolResultKey is the tool_use_id of a user message's first tool_result, or "".
+func toolResultKey(msg map[string]any) string {
+	if msg == nil || msg["role"] != "user" {
+		return ""
+	}
+	for _, raw := range asSlice(msg["content"]) {
+		if b, ok := raw.(map[string]any); ok && b["type"] == "tool_result" {
+			id, _ := b["tool_use_id"].(string)
+			return id
+		}
+	}
+	return ""
+}
+
+// appendHintBlock adds text as the message's last block unless it already is.
+func appendHintBlock(msg map[string]any, text string) bool {
+	content := asSlice(msg["content"])
+	if n := len(content); n > 0 {
+		if last, ok := content[n-1].(map[string]any); ok && last["type"] == "text" && last["text"] == text {
+			return false
+		}
+	}
+	msg["content"] = append(content, map[string]any{"type": "text", "text": text})
+	return true
 }

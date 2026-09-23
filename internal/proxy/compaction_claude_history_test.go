@@ -70,7 +70,7 @@ func TestClaudeToolReferencePairCannotBeCompacted(t *testing.T) {
 	}
 }
 
-func TestClaudeThinkingHistoryStillCompacts(t *testing.T) {
+func TestClaudeThinkingHistoryNotCompactedPerRequest(t *testing.T) {
 	thinking := map[string]any{"type": "thinking", "thinking": "synthetic", "signature": "synthetic"}
 	msgs := []any{
 		map[string]any{"role": "user", "content": "Run pwd using Bash."},
@@ -90,18 +90,13 @@ func TestClaudeThinkingHistoryStillCompacts(t *testing.T) {
 	opt := DefaultOptions()
 	opt.Reasoning = ReasoningPreserve
 	out, stats, err := RewriteWith(nil, raw, host.Claude, nil, opt)
-	if err != nil || !stats.CompactApplied || stats.CharsAfter >= stats.CharsBefore {
-		t.Fatalf("standard Claude history did not compact: %+v err=%v", stats, err)
+	// Why: per-request rewrites of old turns break Claude prompt caching.
+	if err != nil || stats.CompactApplied || stats.CompactDropped != 0 {
+		t.Fatalf("ordinary Claude request was compacted: %+v err=%v", stats, err)
 	}
 	var got map[string]any
 	_ = json.Unmarshal(out, &got)
-	for _, index := range []int{1, 3, 5, 7} {
-		blocks := asSlice(asSlice(got["messages"])[index].(map[string]any)["content"])
-		if !reflect.DeepEqual(blocks[0], thinking) || len(blocks) != 2 {
-			t.Fatalf("thinking/call altered: %#v", blocks)
-		}
-	}
-	if !reflect.DeepEqual(asSlice(got["messages"])[2], msgs[2]) {
-		t.Fatal("rewrite changed embedded tool references")
+	if !reflect.DeepEqual(asSlice(got["messages"]), msgs) {
+		t.Fatal("ordinary Claude history changed")
 	}
 }

@@ -69,6 +69,88 @@ func nativeCompactionKind(root map[string]any) string {
 	return ""
 }
 
+// Claude Code's compact prompt (full and partial variants) opens with the
+// no-tools preamble and asks for "a detailed summary of ...".
+const (
+	claudeCompactNoTools = "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools."
+	claudeCompactTask    = "Your task is to create a detailed summary of"
+)
+
+// claudeMinReduction mirrors fast-jev-compaction minReductionRatio: below it,
+// Claude Code's own summary is worth more than a barely shorter transcript.
+const claudeMinReduction = 0.25
+
+func lastUserIndex(msgs []any) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if m, ok := msgs[i].(map[string]any); ok && m["role"] == "user" {
+			return i
+		}
+	}
+	return -1
+}
+
+func claudeUserText(m map[string]any) string {
+	switch c := m["content"].(type) {
+	case string:
+		return c
+	case []any:
+		var b strings.Builder
+		for _, raw := range c {
+			part, _ := raw.(map[string]any)
+			if part["type"] == "text" {
+				s, _ := part["text"].(string)
+				b.WriteString(s)
+			}
+		}
+		return b.String()
+	}
+	return ""
+}
+
+func claudeCompactionRequest(root map[string]any) bool {
+	msgs, _ := root["messages"].([]any)
+	i := lastUserIndex(msgs)
+	if i < 0 {
+		return false
+	}
+	text := claudeUserText(msgs[i].(map[string]any))
+	return strings.Contains(text, claudeCompactNoTools) && strings.Contains(text, claudeCompactTask)
+}
+
+// withoutCompactPrompt drops the compaction request's text blocks. The prompt
+// can share a user turn with trailing tool_result blocks, so those stay.
+func withoutCompactPrompt(msgs []any) []any {
+	i := lastUserIndex(msgs)
+	if i < 0 {
+		return msgs
+	}
+	out := append([]any{}, msgs[:i]...)
+	blocks, _ := msgs[i].(map[string]any)["content"].([]any)
+	var keep []any
+	for _, raw := range blocks {
+		if part, _ := raw.(map[string]any); part["type"] != "text" {
+			keep = append(keep, raw)
+		}
+	}
+	if len(keep) > 0 {
+		m := cloneMap(msgs[i].(map[string]any))
+		m["content"] = keep
+		out = append(out, m)
+	}
+	return out
+}
+
+// claudeFallback returns why Claude Code should get its own summary instead.
+func claudeFallback(stats RewriteStats) string {
+	if !stats.CompactApplied {
+		return "retention failed: " + stats.Reason
+	}
+	if stats.CharsBefore == 0 || float64(stats.CharsBefore-stats.CharsAfter)/float64(stats.CharsBefore) < claudeMinReduction {
+		return fmt.Sprintf("reduction below %.0f%% (%d -> %d chars)", claudeMinReduction*100, stats.CharsBefore, stats.CharsAfter)
+	}
+	return ""
+}
+
 func markerKind(s string) string {
 	switch {
 	case strings.Contains(s, "CONTEXT CHECKPOINT COMPACTION"):
@@ -97,9 +179,12 @@ func retainNative(ctx context.Context, raw []byte, client *jev.Client, opt Optio
 	stats.OriginalModel = modelName(root)
 	stats.SentModel = stats.OriginalModel
 	msgs, _ := locateHistory(root)
+	if kind == "claude" {
+		msgs = withoutCompactPrompt(msgs)
+	}
 	items, user := itemsFromMessages(msgs)
 	preserve := 2
-	if len(items) > 16 {
+	if len(items) > 16 || kind == "claude" {
 		preserve = 6
 	}
 	compOpts := compact.Options{Goal: user, PreserveRecent: preserve}
@@ -119,8 +204,11 @@ func retainNative(ctx context.Context, raw []byte, client *jev.Client, opt Optio
 	stats.CharsAfter = len(after)
 	stats.CompactDropped = compaction.Stats.Dropped + compaction.Stats.Truncated
 	users, tools, transcript := renderRetained(compacted)
-	if kind == "grok" {
+	switch kind {
+	case "grok":
 		return grokSummary(users, tools, transcript), stats
+	case "claude":
+		return claudeSummary(transcript), stats
 	}
 	return codexSummary(transcript), stats
 }
@@ -255,10 +343,19 @@ func codexSummary(transcript string) string {
 	return "fast-jev-compaction kept the following transcript verbatim. Stale tool calls were dropped or truncated. User and assistant prose was not summarized.\n\n" + transcript
 }
 
-func nativeCompactionKindJSON(raw []byte) string {
+// claudeSummary fits Claude Code's formatter: <analysis> is stripped and
+// <summary> becomes "Summary:". Blank lines collapse, so entries are one per line.
+func claudeSummary(transcript string) string {
+	return "<analysis>fast-jev-compaction: retained verbatim tool history</analysis>\n<summary>\n" + orNone(transcript) + "\n</summary>"
+}
+
+func nativeCompactionKindJSON(raw []byte, h host.ID) string {
 	var root map[string]any
 	if json.Unmarshal(raw, &root) != nil {
 		return ""
+	}
+	if h == host.Claude && claudeCompactionRequest(root) {
+		return "claude"
 	}
 	return nativeCompactionKind(root)
 }
@@ -293,6 +390,12 @@ func writeNativeCompaction(w http.ResponseWriter, r *http.Request, h host.ID, mo
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(responsesCompactJSON(model, text))
 	case "anthropic":
+		if stream {
+			w.Header().Set("content-type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(anthropicCompactSSE(model, text))
+			return
+		}
 		w.Header().Set("content-type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(anthropicCompactJSON(model, text))
@@ -458,4 +561,27 @@ func anthropicCompactJSON(model, text string) []byte {
 	}
 	raw, _ := json.Marshal(body)
 	return raw
+}
+
+func anthropicCompactSSE(model, text string) []byte {
+	var b strings.Builder
+	event := func(name string, data map[string]any) {
+		data["type"] = name
+		raw, _ := json.Marshal(data)
+		b.WriteString("event: " + name + "\ndata: " + string(raw) + "\n\n")
+	}
+	event("message_start", map[string]any{"message": map[string]any{
+		"id": "msg_fast_jev", "type": "message", "role": "assistant", "model": model,
+		"content": []any{}, "stop_reason": nil, "stop_sequence": nil,
+		"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
+	}})
+	event("content_block_start", map[string]any{"index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
+	event("content_block_delta", map[string]any{"index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
+	event("content_block_stop", map[string]any{"index": 0})
+	event("message_delta", map[string]any{
+		"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+		"usage": map[string]any{"output_tokens": compactUsage(text)["output_tokens"]},
+	})
+	event("message_stop", map[string]any{})
+	return []byte(b.String())
 }

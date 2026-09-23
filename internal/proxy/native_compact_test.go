@@ -2,8 +2,11 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -195,4 +198,146 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+const claudeCompactPrompt = "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\nYour task is to create a detailed summary of the conversation so far."
+
+func claudeHistory(pairs int, last any) map[string]any {
+	msgs := []any{map[string]any{"role": "user", "content": "Fix the auth bug. Never edit vendor/."}}
+	for i := 0; i < pairs; i++ {
+		id, name := fmt.Sprintf("t%d", i), "Read"
+		if i == pairs-1 {
+			name = "Edit" // supersedes the earlier reads
+		}
+		msgs = append(msgs,
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{"path": id + ".go"}}}},
+			map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": "HEAD" + id + "\n" + strings.Repeat("old output\n", 400)}}})
+	}
+	if last != nil {
+		msgs = append(msgs, map[string]any{"role": "user", "content": last})
+	}
+	return map[string]any{"model": "claude-test", "messages": msgs}
+}
+
+func TestClaudeCompactionKind(t *testing.T) {
+	kind := func(root map[string]any, h host.ID) string {
+		raw, _ := json.Marshal(root)
+		return nativeCompactionKindJSON(raw, h)
+	}
+	if k := kind(claudeHistory(1, claudeCompactPrompt), host.Claude); k != "claude" {
+		t.Fatalf("string prompt kind %q", k)
+	}
+	blocks := []any{map[string]any{"type": "text", "text": "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\nYour task is to create a detailed summary of the RECENT portion of the conversation"}}
+	if k := kind(claudeHistory(1, blocks), host.Claude); k != "claude" {
+		t.Fatalf("text block prompt kind %q", k)
+	}
+	earlier := claudeHistory(1, "continue")
+	earlier["messages"].([]any)[0] = map[string]any{"role": "user", "content": claudeCompactPrompt}
+	if k := kind(earlier, host.Claude); k != "" {
+		t.Fatalf("earlier prompt must not trigger: %q", k)
+	}
+	if k := kind(claudeHistory(1, claudeCompactPrompt), host.Grok); k != "" {
+		t.Fatalf("claude prompt on grok host: %q", k)
+	}
+	grok := `{"messages":[{"role":"user","content":"<summary_request>x</summary_request>"}]}`
+	if k := nativeCompactionKindJSON([]byte(grok), host.Grok); k != "grok" {
+		t.Fatalf("grok kind %q", k)
+	}
+}
+
+func claudeCompactServe(t *testing.T, root map[string]any) (*httptest.ResponseRecorder, int64) {
+	t.Helper()
+	raw, _ := json.Marshal(root)
+	s, upstream := testProxy(t, host.Claude, nil, DefaultOptions())
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(string(raw)))
+	req.RemoteAddr = "127.0.0.1:9"
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	return rec, *upstream
+}
+
+func TestClaudeNativeCompactionSSE(t *testing.T) {
+	root := claudeHistory(8, claudeCompactPrompt)
+	root["stream"] = true
+	rec, upstream := claudeCompactServe(t, root)
+	if upstream != 0 {
+		t.Fatal("claude compaction must not call upstream")
+	}
+	if ct := rec.Header().Get("content-type"); ct != "text/event-stream" {
+		t.Fatalf("content-type %q", ct)
+	}
+	var names []string
+	var text string
+	for _, frame := range strings.Split(strings.TrimSpace(rec.Body.String()), "\n\n") {
+		lines := strings.SplitN(frame, "\n", 2)
+		name := strings.TrimPrefix(lines[0], "event: ")
+		var data map[string]any
+		if len(lines) != 2 || json.Unmarshal([]byte(strings.TrimPrefix(lines[1], "data: ")), &data) != nil || data["type"] != name {
+			t.Fatalf("bad frame %q", frame)
+		}
+		names = append(names, name)
+		switch name {
+		case "message_start":
+			msg := data["message"].(map[string]any)
+			if msg["model"] != "claude-test" || msg["role"] != "assistant" || msg["stop_reason"] != nil {
+				t.Fatalf("message_start %v", msg)
+			}
+		case "content_block_delta":
+			text = data["delta"].(map[string]any)["text"].(string)
+		case "message_delta":
+			if data["delta"].(map[string]any)["stop_reason"] != "end_turn" {
+				t.Fatalf("message_delta %v", data)
+			}
+		}
+	}
+	want := "message_start,content_block_start,content_block_delta,content_block_stop,message_delta,message_stop"
+	if strings.Join(names, ",") != want {
+		t.Fatalf("events %v", names)
+	}
+	if !strings.HasPrefix(text, "<analysis>") || !strings.Contains(text, "<summary>\n") || !strings.HasSuffix(text, "\n</summary>") {
+		t.Fatalf("summary shape: %s", text)
+	}
+	if !strings.Contains(text, "Never edit vendor/") || !strings.Contains(text, "HEADt7") || strings.Contains(text, "CRITICAL: Respond") {
+		t.Fatalf("transcript: %s", text)
+	}
+}
+
+func TestClaudeNativeCompactionJSON(t *testing.T) {
+	rec, upstream := claudeCompactServe(t, claudeHistory(8, claudeCompactPrompt))
+	if upstream != 0 {
+		t.Fatal("claude compaction must not call upstream")
+	}
+	var msg map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &msg); err != nil {
+		t.Fatalf("json: %v %s", err, rec.Body.String())
+	}
+	content := msg["content"].([]any)[0].(map[string]any)
+	if msg["type"] != "message" || msg["stop_reason"] != "end_turn" || content["type"] != "text" || !strings.Contains(content["text"].(string), "<summary>") {
+		t.Fatalf("message %v", msg)
+	}
+}
+
+func TestClaudeShortCompactionForwarded(t *testing.T) {
+	if _, upstream := claudeCompactServe(t, claudeHistory(1, claudeCompactPrompt)); upstream != 1 {
+		t.Fatalf("short history must fall back upstream, upstream=%d", upstream)
+	}
+}
+
+func TestClaudeOrdinaryRequestForwardedUnchanged(t *testing.T) {
+	raw, _ := json.Marshal(claudeHistory(8, "continue"))
+	var got []byte
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer up.Close()
+	s, _ := testProxy(t, host.Claude, nil, DefaultOptions())
+	s.Upstream, _ = url.Parse(up.URL)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(string(raw)))
+	req.RemoteAddr = "127.0.0.1:9"
+	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	if string(got) != string(raw) {
+		t.Fatalf("ordinary Claude body changed:\n%s", got)
+	}
 }

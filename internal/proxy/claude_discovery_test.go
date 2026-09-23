@@ -21,25 +21,16 @@ func TestClaudeDiscoverySurvivesFiltering(t *testing.T) {
 	opt := localOpt()
 	opt.Compaction, opt.Reasoning = CompactionOff, ReasoningPreserve
 	out, stats, err := RewriteWith(nil, body, host.Claude, nil, opt)
-	if err != nil || stats.Apply != applyFilter || stats.Chosen != "Read" {
-		t.Fatalf("expected a filtered read: %+v %v", stats, err)
+	if err != nil || stats.Apply != applyNone || stats.Chosen != "Read" {
+		t.Fatalf("expected an unapplied read: %+v %v", stats, err)
 	}
 	var got map[string]any
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatal(err)
 	}
-	names := map[string]any{}
-	for _, raw := range asSlice(got["tools"]) {
-		m := raw.(map[string]any)
-		names[toolNameOf(m)] = m
-	}
-	for name, want := range map[string]any{"Read": read, "ToolSearch": search, "project_lookup": deferred} {
-		if !reflect.DeepEqual(names[name], want) {
-			t.Errorf("lost tool or discovery schema %s: %s", name, out)
-		}
-	}
-	if _, ok := names["Write"]; ok {
-		t.Fatal("unrelated eager tool was not filtered")
+	// Claude keeps its whole catalog, discovery schemas included.
+	if !reflect.DeepEqual(got["tools"], root["tools"]) {
+		t.Fatalf("Claude catalog changed: %s", out)
 	}
 }
 

@@ -556,8 +556,20 @@ func (s *Server) Handler() http.Handler {
 			})
 			stats := RewriteStats{}
 			if err == nil && json.Valid(raw) && nativeCompactionEnabled(s.Options) {
-				if kind := nativeCompactionKindJSON(raw); kind != "" {
-					text, nstats := retainNative(ctx, raw, s.Client, s.Options, kind)
+				kind := nativeCompactionKindJSON(raw, s.Host)
+				var text string
+				var nstats RewriteStats
+				if kind != "" {
+					text, nstats = retainNative(ctx, raw, s.Client, s.Options, kind)
+				}
+				if kind == "claude" {
+					// Like fast-jev-compaction, let Claude Code's own summary run instead.
+					if why := claudeFallback(nstats); why != "" {
+						s.Log.Printf("fast-jev-native: claude compaction forwarded upstream: %s", why)
+						kind = ""
+					}
+				}
+				if kind != "" {
 					stats = nstats
 					s.mu.Lock()
 					s.Last = stats

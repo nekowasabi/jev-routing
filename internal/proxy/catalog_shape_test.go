@@ -120,7 +120,9 @@ func TestRunStatsApplicationCountersAndPrivacy(t *testing.T) {
 			ctrl.Header.Set("Cookie", "session=PRIVATE_COOKIE")
 			handler.ServeHTTP(httptest.NewRecorder(), ctrl)
 			stats := s.RunStats()
-			if stats["totalRequests"] != 3 || stats["requests"] != 1 || stats["selectionApplied"] != 1 || stats["compactionApplied"] != 1 {
+			// Claude history is compacted only on Claude Code's compaction request.
+			compacted := h != host.Claude
+			if stats["totalRequests"] != 3 || stats["requests"] != 1 || stats["selectionApplied"] != 1 || stats["compactionApplied"] != map[bool]int{false: 0, true: 1}[compacted] {
 				t.Fatalf("wrong counters: %+v", stats)
 			}
 			routes := stats["requestRoutes"].(map[string]int)
@@ -128,7 +130,7 @@ func TestRunStatsApplicationCountersAndPrivacy(t *testing.T) {
 				t.Fatalf("missing transport evidence: %+v", routes)
 			}
 			events := stats["events"].([]Event)
-			if len(events) != 2 || events[0].UpstreamStatus == nil || *events[0].UpstreamStatus != 400 || !events[0].CompactApplied || events[0].RequestPath != path {
+			if len(events) != 2 || events[0].UpstreamStatus == nil || *events[0].UpstreamStatus != 400 || events[0].CompactApplied != compacted || events[0].RequestPath != path {
 				t.Fatalf("missing request evidence: %+v", events)
 			}
 			if events[0].Method != http.MethodPost || events[0].JsonValid == nil || !*events[0].JsonValid {

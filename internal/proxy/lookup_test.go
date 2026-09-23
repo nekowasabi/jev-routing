@@ -27,7 +27,11 @@ func TestLocalLookupStripsToolsAndInjectsDefinitions(t *testing.T) {
 		map[string]any{"type": "function", "function": map[string]any{"name": "mcp_search", "description": "mcp"}},
 		map[string]any{"type": "function", "function": map[string]any{"name": "Bash", "description": "shell"}},
 	})
-	out, stats, err := RewriteWith(t.Context(), raw, host.Claude, nil, DefaultOptions())
+	// Claude keeps its catalog: a stripped tools[] would rebuild its prompt cache.
+	if _, stats, _ := RewriteWith(t.Context(), raw, host.Claude, nil, DefaultOptions()); stats.Reason == reasonLocalLookup {
+		t.Fatalf("Claude took the local lookup: %+v", stats)
+	}
+	out, stats, err := RewriteWith(t.Context(), raw, host.Grok, nil, DefaultOptions())
 	if err != nil {
 		t.Fatal(err)
 	}

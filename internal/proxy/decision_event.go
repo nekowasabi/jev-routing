@@ -123,8 +123,8 @@ func FormatEvent(e Event) string {
 	if len(e.HistoryIssues) > 0 {
 		issues = strings.Join(e.HistoryIssues, ",")
 	}
-	return fmt.Sprintf("host=%s tools %d→%d chosen=%s conf=%s needs=%s top=%s connect=%s conc=%s rule=%s compact -%d chars engine=%s history_issues=%s",
-		emptyDash(e.Host), e.ToolBefore, e.ToolAfter, emptyDash(e.Chosen),
+	return fmt.Sprintf("host=%s tools %d→%d chosen=%s apply=%s conf=%s needs=%s top=%s connect=%s conc=%s rule=%s compact -%d chars engine=%s history_issues=%s",
+		emptyDash(e.Host), e.ToolBefore, e.ToolAfter, emptyDash(e.Chosen), emptyDash(e.Apply),
 		formatOptFloat(e.Confidence), formatOptFloat(e.NeedsTool), formatTop(e.Probabilities),
 		emptyDash(e.ConnectStatus), formatOptFloat(e.Concentration), emptyDash(e.RuleVersion),
 		e.CompactDelta, emptyDash(e.Engine), issues)

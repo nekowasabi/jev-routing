@@ -171,21 +171,27 @@ func TestCompactionIndependentOfSelection(t *testing.T) {
 				}
 				raw, _ := json.Marshal(req)
 				out, stats, err := RewriteWith(nil, raw, h, client, opt)
-				wantCompact := scenario != "baseline" && scenario != "off" && scenario != "ineligible"
+				wantCompact := scenario != "baseline" && scenario != "off" && scenario != "ineligible" && h != host.Claude
 				wantReason := map[string]string{
 					"no-catalog": reasonNoCatalog, "respond": reasonNoToolNeeded, "error": reasonCallFailed,
 					"uncertain": reasonNoToolNeeded, "invalid": reasonInvalidJev, "local-passthrough": reasonLocalPassthrough,
 					"baseline": reasonBaseline, "off": reasonNoToolNeeded, "ineligible": reasonExplicitToolChoice,
 				}[scenario]
-				if err != nil || stats.CompactApplied != wantCompact || stats.Changed != wantCompact || stats.Reason != wantReason {
+				// Claude gets a respond reminder instead of a changed catalog.
+				wantAdvise := h == host.Claude && wantReason == reasonNoToolNeeded
+				wantApply := applyNone
+				if wantAdvise {
+					wantApply = applyAdvise
+				}
+				if err != nil || stats.CompactApplied != wantCompact || stats.Changed != (wantCompact || wantAdvise) || stats.Reason != wantReason {
 					t.Fatalf("independent compaction failed: %+v err=%v", stats, err)
 				}
-				if !wantCompact && string(out) != string(raw) {
+				if !wantCompact && !wantAdvise && string(out) != string(raw) {
 					t.Fatal("protected request changed")
 				}
 				var got map[string]any
 				_ = json.Unmarshal(out, &got)
-				if !reflect.DeepEqual(got["tools"], req["tools"]) || !reflect.DeepEqual(got["reasoning"], req["reasoning"]) || stats.ToolBefore != stats.ToolAfter || stats.Apply != applyNone {
+				if !reflect.DeepEqual(got["tools"], req["tools"]) || !reflect.DeepEqual(got["reasoning"], req["reasoning"]) || stats.ToolBefore != stats.ToolAfter || stats.Apply != wantApply {
 					t.Fatalf("compaction changed selection or reasoning: %+v", stats)
 				}
 				if wantCompact && (stats.CompactDropped == 0 || stats.CharsAfter >= stats.CharsBefore) {
@@ -422,7 +428,7 @@ func TestCompactionPreservesEmbeddedAdditionalTools(t *testing.T) {
 }
 
 func TestCompactionStatsMeasureAppliedHistory(t *testing.T) {
-	for _, h := range []host.ID{host.Claude, host.Codex} {
+	for _, h := range []host.ID{host.Codex} {
 		for _, stale := range []bool{false, true} {
 			t.Run(string(h)+"/"+map[bool]string{false: "unchanged", true: "compacted"}[stale], func(t *testing.T) {
 				msgs := []any{map[string]any{"role": "user", "content": "Run pwd using Bash."}}
