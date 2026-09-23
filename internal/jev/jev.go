@@ -354,7 +354,7 @@ func AskCompactContext(ctx context.Context, c *Client, items []compact.Item, o c
 	}
 
 	state := map[string]any{
-		"context": "coding-agent transcript; tool bodies omitted",
+		"context": compact.StateContext,
 		"goal":    o.Goal,
 		"history": fitted.History,
 	}

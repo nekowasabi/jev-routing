@@ -69,6 +69,31 @@ func TestFitStateKeepsPinnedEntries(t *testing.T) {
 	}
 }
 
+func TestFitStateTruncatesToolInputs(t *testing.T) {
+	items := []Item{
+		{ID: "u", Kind: KindText, Chars: 20, Preview: "fix the test"},
+		{ID: "c", Kind: KindCall, PairID: "c", Tool: "Read", Chars: 800, Body: repeat("file_path=src/a.ts ", 40)},
+		{ID: "r", Kind: KindResult, PairID: "c", Tool: "Read", Chars: 20, Body: "ok"},
+	}
+	full := FitState(items, Options{MaxStateTokens: 100000})
+	if full.Stage != "full" {
+		t.Fatalf("stage %s", full.Stage)
+	}
+	var preview string
+	for _, row := range full.History {
+		if row["id"] == "c" {
+			preview, _ = row["preview"].(string)
+		}
+	}
+	if len(preview) < 200 {
+		t.Fatalf("full stage should keep a long input, got %q", preview)
+	}
+	shrunk := FitState(items, Options{MaxStateTokens: full.Tokens - 1, PreserveRecent: 0})
+	if shrunk.Stage != "inputs<=200" && shrunk.Stage != "inputs<=60" && shrunk.Stage != "old calls compacted" {
+		t.Fatalf("stage %q tokens %d budget %d", shrunk.Stage, shrunk.Tokens, full.Tokens-1)
+	}
+}
+
 func TestBatchCandidatesSplitsOnBudget(t *testing.T) {
 	items := longItems(12)
 	cands := CollectCandidates(items, 0)

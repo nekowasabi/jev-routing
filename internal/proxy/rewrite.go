@@ -1591,6 +1591,129 @@ func removeClearThinkingEdit(root map[string]any) {
 	}
 }
 
+func responseCallType(typ string) bool {
+	switch typ {
+	case "function_call", "custom_tool_call", "local_shell_call", "shell_call",
+		"apply_patch_call", "mcp_call", "computer_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func responseOutputType(typ string) bool {
+	switch typ {
+	case "function_call_output", "custom_tool_call_output", "local_shell_call_output", "shell_call_output",
+		"apply_patch_call_output", "mcp_call_output", "computer_call_output":
+		return true
+	default:
+		return false
+	}
+}
+
+func responseToolType(typ string) bool {
+	return responseCallType(typ) || responseOutputType(typ)
+}
+
+func responseToolName(typ string, m map[string]any) string {
+	if n := str(m["name"]); n != "" {
+		return n
+	}
+	switch typ {
+	case "local_shell_call", "local_shell_call_output", "shell_call", "shell_call_output":
+		return "shell"
+	case "apply_patch_call", "apply_patch_call_output":
+		return "apply_patch"
+	case "computer_call", "computer_call_output":
+		return "computer"
+	case "mcp_call", "mcp_call_output":
+		return "mcp"
+	default:
+		return ""
+	}
+}
+
+func callArgs(m map[string]any, typ string) string {
+	switch typ {
+	case "custom_tool_call":
+		if s, ok := m["input"].(string); ok {
+			return s
+		}
+		if m["input"] != nil {
+			if raw, err := json.Marshal(m["input"]); err == nil {
+				return string(raw)
+			}
+		}
+	}
+	if s, ok := m["arguments"].(string); ok {
+		return s
+	}
+	if m["arguments"] != nil {
+		if raw, err := json.Marshal(m["arguments"]); err == nil {
+			return string(raw)
+		}
+	}
+	for _, key := range []string{"action", "call", "input", "command"} {
+		if m[key] == nil {
+			continue
+		}
+		if s, ok := m[key].(string); ok {
+			return s
+		}
+		if raw, err := json.Marshal(m[key]); err == nil {
+			return string(raw)
+		}
+	}
+	return ""
+}
+
+func outputBody(m map[string]any) string {
+	if s := firstString(m, "output", "result"); s != "" {
+		return s
+	}
+	return textOf(m)
+}
+
+func textParts(v any) string {
+	arr, ok := v.([]any)
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	for _, raw := range arr {
+		part, _ := raw.(map[string]any)
+		if t, ok := part["text"].(string); ok {
+			b.WriteString(t)
+		}
+	}
+	return b.String()
+}
+
+func responsesToolItem(m map[string]any, typ, cid string) compact.Item {
+	name := responseToolName(typ, m)
+	if responseOutputType(typ) {
+		body := outputBody(m)
+		return compact.Item{
+			ID: cid + "_r", Kind: compact.KindResult, PairID: cid, Tool: name,
+			Chars: len(body), Preview: clip(body, 200), Body: body,
+		}
+	}
+	args := callArgs(m, typ)
+	return compact.Item{
+		ID: cid, Kind: compact.KindCall, PairID: cid, Tool: name,
+		Chars: len(args), Preview: clip(args, 200), Body: args,
+	}
+}
+
+// setTruncatedOutput rewrites string and text-part outputs in place.
+// An output array with no text (for example an image) stays as-is.
+func setTruncatedOutput(m map[string]any, body string) {
+	if arr, ok := m["output"].([]any); ok && textParts(arr) == "" {
+		return
+	}
+	m["output"] = body
+}
+
 func itemsFromMessages(msgs []any) ([]compact.Item, string) {
 	var items []compact.Item
 	user := ""
@@ -1607,36 +1730,12 @@ func itemsFromMessages(msgs []any) ([]compact.Item, string) {
 		typ, _ := m["type"].(string)
 		role, _ := m["role"].(string)
 		switch {
-		case typ == "function_call" || typ == "custom_tool_call":
+		case responseToolType(typ):
 			cid := firstString(m, "call_id", "id")
 			if cid == "" {
 				cid = id()
 			}
-			name, _ := m["name"].(string)
-			argsValue := m["arguments"]
-			if typ == "custom_tool_call" {
-				argsValue = m["input"]
-			}
-			args, isString := argsValue.(string)
-			if !isString && argsValue != nil {
-				if rawArgs, err := json.Marshal(argsValue); err == nil {
-					args = string(rawArgs)
-				}
-			}
-			items = append(items, compact.Item{
-				ID: cid, Kind: compact.KindCall, PairID: cid, Tool: name,
-				Chars: len(args), Preview: clip(args, 200), Body: args,
-			})
-		case typ == "function_call_output" || typ == "custom_tool_call_output":
-			cid := firstString(m, "call_id", "id")
-			body := firstString(m, "output", "result")
-			if body == "" {
-				body = textOf(m)
-			}
-			items = append(items, compact.Item{
-				ID: cid + "_r", Kind: compact.KindResult, PairID: cid, Chars: len(body),
-				Preview: clip(body, 200), Body: body, Tool: str(m["name"]),
-			})
+			items = append(items, responsesToolItem(m, typ, cid))
 		case typ == "agent_message":
 			text, _ := m["text"].(string)
 			if text != "" {
@@ -1906,7 +2005,7 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 			out = append(out, m)
 			continue
 		}
-		if typ == "function_call" || typ == "custom_tool_call" {
+		if responseCallType(typ) {
 			cid := firstString(m, "call_id", "id")
 			if action[cid] == compact.ActionDrop {
 				continue
@@ -1914,7 +2013,7 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 			out = append(out, m)
 			continue
 		}
-		if typ == "function_call_output" || typ == "custom_tool_call_output" {
+		if responseOutputType(typ) {
 			cid := firstString(m, "call_id", "id")
 			act := action[cid+"_r"]
 			if act == compact.ActionDrop {
@@ -1922,7 +2021,7 @@ func applyCompactToMessages(msgs []any, res compact.Result) []any {
 			}
 			if act == compact.ActionTruncate {
 				if b, ok := body[cid+"_r"]; ok {
-					m["output"] = b
+					setTruncatedOutput(m, b)
 				}
 			}
 			out = append(out, m)

@@ -21,7 +21,6 @@ const (
 	DefaultMaxRequestTokens = 30_000
 	previewChars            = 200
 	requestOverheadTokens   = 20
-	stateContext            = "A coding assistant conversation is being compacted. history is oldest first; tool outputs are notes only. Each question asks whether one item must stay."
 )
 
 type Kind string

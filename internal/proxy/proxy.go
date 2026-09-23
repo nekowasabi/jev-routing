@@ -555,6 +555,47 @@ func (s *Server) Handler() http.Handler {
 				attemptsMu.Unlock()
 			})
 			stats := RewriteStats{}
+			if err == nil && json.Valid(raw) && nativeCompactionEnabled(s.Options) {
+				if kind := nativeCompactionKindJSON(raw); kind != "" {
+					text, nstats := retainNative(ctx, raw, s.Client, s.Options, kind)
+					stats = nstats
+					s.mu.Lock()
+					s.Last = stats
+					s.CharsBefore += len(raw)
+					s.CharsAfter += len(text)
+					s.Rewritten++
+					s.CompactionApplied++
+					s.JevHTTP += jevHTTP
+					s.JevOK += jevOK
+					s.JevFail += jevFail
+					s.JevCacheHits += jevCache
+					s.mu.Unlock()
+					s.Log.Print(FormatStats(stats))
+					ev := EventFromStats(stats)
+					ev.RequestPath = r.URL.Path
+					ev.Method = r.Method
+					ev.ContentType = ct
+					ev.BodyBytes = origBytes
+					ev.JsonValid = &origJSON
+					ev.URLHosts = urlHosts
+					ev.Catalog = shape
+					ev.JevAttempts = attempts
+					ev.JevCalls = jevHTTP
+					ev.SelectionJevCalls = selectionJevCalls(attempts)
+					ev.OtherJevCalls = jevHTTP - selectionJevCalls(attempts)
+					ev.JevCached = jevCache
+					ev.JevFailed = jevFail
+					ev = s.events.Add(ev)
+					s.events.Update(ev.Seq, func(e *Event) {
+						e.UpstreamFinish = "fast-jev-native"
+						zero := 0
+						e.UpstreamStatus = &zero
+						e.UsageMissing = "not_called"
+					})
+					writeNativeCompaction(w, r, s.Host, stats.SentModel, text, nativeStream(raw, r, s.Host))
+					return
+				}
+			}
 			if err == nil && json.Valid(raw) {
 				rewritten, st, rerr := RewriteWith(ctx, raw, s.Host, s.Client, s.Options)
 				stats = st
