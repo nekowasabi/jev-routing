@@ -111,6 +111,22 @@ requires_openai_auth = true
 
 Devin CLI is assumed to use `/messages` and `/sessions` under `DEVIN_API_URL` (default `https://api.devin.ai`), with `prompt`/`message` + `tools[]` JSON. For Codex ChatGPT login, the `functions` namespace is expanded from `additional_tools` inside the Responses Lite `input`, and local tools are narrowed while keeping their original position. External namespaces and provider-side execution tools are left in place.
 
+## Benchmark
+
+`jev-routing bench` runs the chess-engine comparison ported from [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench) (MIT, Copyright (c) 2026 Vinicius Lana). The same task is given to an agent with routing on and with routing off. On is `JEV_ROUTING_MODE=filter` (or `--on-mode forced`). Off is `baseline`: the proxy meters the request and does not rewrite it. Each run gets a new workspace and a new proxy. A hidden verifier scores the workspace. A cheaper run that fails the checks is not a saving.
+
+```bash
+jev-routing bench --list
+jev-routing bench selftest
+jev-routing bench --agent fake --tasks chess-bugfix --reps 1
+jev-routing bench --agent codex --tasks chess-bugfix --reps 1
+jev-routing bench report results/<dir> --prices 1.25,0.125,10
+```
+
+Agents are `codex`, `claude`, `grok`, `devin`, and `fake`. Real agents spend real quota. Start with one task and `--reps 1`. `--agent fake` sends a few requests through the proxy and writes the reference solution, so the pipeline can be checked without a model. With no API key, `hybrid` does not narrow an uncertain request; set `JEV_SELECTION_MODE=local` to measure the on-device classifier. Node.js is required to score the chess tasks. The proxy itself still does not need Node.
+
+Results land in `results/<timestamp>/` (`runs.jsonl`, `summary.md`, and a directory per run). A run that reads a file outside its sandbox that it did not create is marked contaminated and left out of the summary. `bench audit` re-reads agent logs. `bench chart` writes `comparison-light.svg` and `comparison-dark.svg`.
+
 ## Compaction
 
 The history-compaction judgment was ported to Go with reference to [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction) ([MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE), Copyright (c) 2025). It does not summarize; it follows the same drop / truncate contract for `tool_use` / `tool_result`.

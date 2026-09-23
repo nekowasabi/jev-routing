@@ -111,6 +111,22 @@ requires_openai_auth = true
 
 Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`・`/sessions` および `prompt`/`message` + `tools[]` JSON を想定しています。Codex ChatGPT ログインは Responses Lite の `input` 内にある `additional_tools` から `functions` 名前空間を展開し、元の位置を保ってローカルツールを絞ります。外部名前空間と提供側の実行ツールは残します。
 
+## ベンチマーク
+
+`jev-routing bench` は [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench)（MIT、Copyright (c) 2026 Vinicius Lana）のチェス課題を、このプロキシの上で routing on / off として比較します。on は `JEV_ROUTING_MODE=filter`（`--on-mode forced` も可）、off は `baseline` で、計測はしますがリクエストは書き換えません。実行ごとに新しいワークスペースと新しいプロキシを使い、エージェントには見せない検証器で採点します。チェックに落ちた実行は、安くても節約ではありません。
+
+```bash
+jev-routing bench --list
+jev-routing bench selftest
+jev-routing bench --agent fake --tasks chess-bugfix --reps 1
+jev-routing bench --agent codex --tasks chess-bugfix --reps 1
+jev-routing bench report results/<dir> --prices 1.25,0.125,10
+```
+
+エージェントは `codex`、`claude`、`grok`、`devin`、`fake` です。本物のエージェントはクォータを消費します。まずは課題を一つ、`--reps 1` から始めてください。`--agent fake` はプロキシに数回リクエストを送り、参照実装を書き込むので、モデルなしで一連の流れを確認できます。API キーがないとき `hybrid` は不確実な要求を絞りません。端末上の分類器を測るときは `JEV_SELECTION_MODE=local` にしてください。チェス課題の採点には Node.js が必要です。プロキシ自体は Node を必要としません。
+
+結果は `results/<timestamp>/` に出ます（`runs.jsonl`、`summary.md`、実行ごとのディレクトリ）。サンドボックスの外で、自分で作っていないファイルを読んだ実行は contaminated として集計から外します。`bench audit` はエージェントログを読み直します。`bench chart` は `comparison-light.svg` と `comparison-dark.svg` を書きます。
+
 ## Compaction
 
 履歴圧縮の判定は [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)（[MIT License](https://github.com/tamaratran/fast-jev-compaction/blob/main/LICENSE)、Copyright (c) 2025）を参考に Go へ移植した。要約はせず、`tool_use` / `tool_result` の drop / truncate 契約を踏襲する。

@@ -30,10 +30,10 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/nekowasabi/jev-routing/internal/bench"
 	"github.com/nekowasabi/jev-routing/internal/compact"
 	"github.com/nekowasabi/jev-routing/internal/host"
 	"github.com/nekowasabi/jev-routing/internal/jev"
-	"github.com/nekowasabi/jev-routing/internal/plan"
 	"github.com/nekowasabi/jev-routing/internal/proxy"
 )
 
@@ -67,7 +67,8 @@ Commands:
   jev-routing run [--dashboard] [--tmux] claude|codex|grok|devin [-- host-args...]
   jev-routing serve --host claude|codex|grok|devin [--listen 127.0.0.1:8787]
   jev-routing compact < transcript.json
-  jev-routing bench --host grok
+  jev-routing bench [--agent codex|claude|grok|devin|fake] [--tasks chess-bugfix] [--modes on,off]
+  jev-routing bench selftest|report|audit|chart
 
 Environment:
   TYPESAFE_API_KEY / JEV_API_KEY   Jev key (required when JEV_SELECTION_MODE=jev; otherwise optional)
@@ -404,24 +405,7 @@ func cmdCompact(args []string) int {
 }
 
 func cmdBench(args []string) int {
-	fs := flag.NewFlagSet("bench", flag.ExitOnError)
-	hostName := fs.String("host", "claude", "claude | codex | grok | devin")
-	_ = fs.Parse(args)
-	h, err := host.Parse(*hostName)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
-	prompts := []string{
-		"The auth middleware test is failing. Find the test, read it, fix the assertion in place, and re-run the tests.",
-		"There is a typo 'recieve' somewhere in the repo. Grep for it and fix it with an in-place edit.",
-		"Review GitHub PR 842. Fetch the PR, read the changed local files, and leave a review comment. Do not open a new pull request.",
-	}
-	for _, p := range prompts {
-		d := plan.Decide(p, nil, nil, h)
-		fmt.Printf("%s\t%s\tconf=%.2f done=%.2f\n", h, d.Tool, d.Confidence, d.Done)
-	}
-	return 0
+	return bench.Run(args)
 }
 
 func waitHealthy(url string) error {
