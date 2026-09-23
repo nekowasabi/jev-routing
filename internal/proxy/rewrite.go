@@ -51,6 +51,7 @@ const (
 	reasonIneligibleForced   = "ineligible_forced"
 	reasonAliasUnresolved    = "alias_unresolved"
 	reasonLocalLookup        = "local_lookup"
+	reasonFilterOff          = "filter_off"
 
 	sourceLocal       = "local"
 	sourceJev         = "jev"
@@ -185,6 +186,13 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	stats.ToolAfter = len(names)
 	stats.ToolsBefore = names
 	stats.ToolsAfter = names
+	// Why: with filter=off the body goes through untouched, so asking Jev
+	// would cost a call whose selection has no effect.
+	if !opt.Transforms.Filter && !opt.Shadow {
+		stats.Chosen = "passthrough:" + reasonFilterOff
+		stats.Reason = reasonFilterOff
+		return body, stats, nil
+	}
 
 	elig := inspectRequest(root)
 	stats.Protocol = elig.Protocol
@@ -217,56 +225,10 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	actions := actionsFromItems(items)
 	user = plan.WorkRequest(user)
 
-	preserve := 2
-	if len(items) > 16 {
-		preserve = 6
-	}
-	compOpts := compact.Options{Goal: user, PreserveRecent: preserve}
-	compaction := compact.Result{}
-	compactOK := false
-	// Why: Claude history is compacted only when Claude Code asks for it
-	// (native path). Rewriting old turns every request breaks prompt caching.
-	if opt.Compaction != CompactionOff && opt.Transforms.Compact && h != host.Claude {
-		compaction = compact.CompactLocal(items, compOpts)
-		if client != nil && client.Live() && len(items) > 4 {
-			if live, err := jev.AskCompactContext(ctx, client, items, compOpts); err == nil {
-				compaction = live
-			}
-			// On error, AskCompact keeps uncertain items; still use that result if returned.
-			// If the call failed entirely with keep semantics, live still has keeps.
-		}
-		compactOK = true
-	}
-
-	// Why: Apply safe history compaction independently of tool selection;
-	// an uncertain or unnecessary next tool does not invalidate stale history.
+	// Why: History is compacted only when the agent asks for it (native path),
+	// for every host. Rewriting old turns every request breaks prompt caching:
+	// on gpt-5.6-terra it tripled uncached input and cost more than it saved.
 	work := cloneMap(root)
-	if compactOK {
-		workMsgs, writeHist := locateHistory(work)
-		before, _ := json.Marshal(workMsgs)
-		beforeItems, _ := itemsFromMessages(workMsgs)
-		workMsgs = applyCompactToMessages(workMsgs, compaction)
-		if workMsgs != nil {
-			writeHist(workMsgs)
-		}
-		after, _ := json.Marshal(workMsgs)
-		stats.CharsBefore = len(before)
-		stats.CharsAfter = len(after)
-		stats.CompactApplied = string(before) != string(after)
-		afterItems, _ := itemsFromMessages(workMsgs)
-		remaining := map[string]string{}
-		for _, item := range afterItems {
-			remaining[item.ID] = item.Body
-		}
-		for _, item := range beforeItems {
-			if item.Kind != compact.KindCall && item.Kind != compact.KindResult {
-				continue
-			}
-			if body, ok := remaining[item.ID]; !ok || body != item.Body {
-				stats.CompactDropped++
-			}
-		}
-	}
 	// A fully resolved definition lookup is answered from the workspace.
 	// Skill, MCP, and other tools are removed so the model only generates the reply.
 	if h != host.Claude && applyLocalLookup(work, user, actions, opt) {

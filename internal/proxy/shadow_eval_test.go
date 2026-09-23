@@ -109,7 +109,7 @@ func TestShadowRecordsObservedCoverage(t *testing.T) {
 func TestCostGateSkipsClassifierAtProductionThreshold(t *testing.T) {
 	var calls int64
 	client := fakeNextToolClient(t, "grep", 0.9, &calls)
-	opt := DefaultOptions()
+	opt := steerOpt()
 	opt.SelectionMode = SelectionJev
 	opt.CostGateMax = decidedCostGateMaxCandidates
 
@@ -157,7 +157,7 @@ type shadowEvalRow struct {
 func runShadowEval(t *testing.T, c shadowEvalCase) (filter, shadow shadowEvalRow) {
 	t.Helper()
 	raw := evalCatalogBody(c.user, c.tools)
-	filterOpt := DefaultOptions()
+	filterOpt := steerOpt()
 	filterOpt.CostGateMax = 0
 	shadowOpt := filterOpt
 	shadowOpt.Shadow = true

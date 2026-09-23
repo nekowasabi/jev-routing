@@ -77,7 +77,7 @@ Environment:
   JEV_ROUTING_MODE                 baseline | filter | forced (default filter)
   JEV_COMPACTION                   off | on (default on)
   JEV_SHADOW                       on to score the candidate set without rewriting the request
-  JEV_TRANSFORMS                   compact|filter|criteria=on|off (criteria stays off until a confused pair is registered)
+  JEV_TRANSFORMS                   compact|filter|criteria=on|off (default compact and filter on; criteria off until a confused pair is registered)
   JEV_COST_GATE_MAX                skip the classifier when N<=this (default 3)
   JEV_REASONING                    preserve | legacy (default legacy)
   JEV_ARGS_MODEL / JEV_ARGS_TOOLS  optional forced-only arg model split

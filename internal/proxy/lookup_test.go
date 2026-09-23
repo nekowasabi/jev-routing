@@ -28,10 +28,10 @@ func TestLocalLookupStripsToolsAndInjectsDefinitions(t *testing.T) {
 		map[string]any{"type": "function", "function": map[string]any{"name": "Bash", "description": "shell"}},
 	})
 	// Claude keeps its catalog: a stripped tools[] would rebuild its prompt cache.
-	if _, stats, _ := RewriteWith(t.Context(), raw, host.Claude, nil, DefaultOptions()); stats.Reason == reasonLocalLookup {
+	if _, stats, _ := RewriteWith(t.Context(), raw, host.Claude, nil, steerOpt()); stats.Reason == reasonLocalLookup {
 		t.Fatalf("Claude took the local lookup: %+v", stats)
 	}
-	out, stats, err := RewriteWith(t.Context(), raw, host.Grok, nil, DefaultOptions())
+	out, stats, err := RewriteWith(t.Context(), raw, host.Grok, nil, steerOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestLocalLookupStripsToolsAndInjectsDefinitions(t *testing.T) {
 func TestLocalLookupLeavesOpenTasksAlone(t *testing.T) {
 	t.Setenv("JEV_LOOKUP_ROOT", t.TempDir())
 	raw := chatReq("fix the failing test", workTools())
-	out, stats, err := RewriteWith(t.Context(), raw, host.Grok, nil, DefaultOptions())
+	out, stats, err := RewriteWith(t.Context(), raw, host.Grok, nil, steerOpt())
 	if err != nil {
 		t.Fatal(err)
 	}

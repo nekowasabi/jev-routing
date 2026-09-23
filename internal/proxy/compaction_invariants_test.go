@@ -125,7 +125,7 @@ func TestCompactionIndependentOfSelection(t *testing.T) {
 				if scenario != "no-catalog" {
 					req["tools"] = []any{map[string]any{"type": "function", "name": "mystery"}}
 				}
-				opt := DefaultOptions()
+				opt := steerOpt()
 				if scenario == "baseline" {
 					opt.Mode = ModeBaseline
 				}
@@ -171,7 +171,7 @@ func TestCompactionIndependentOfSelection(t *testing.T) {
 				}
 				raw, _ := json.Marshal(req)
 				out, stats, err := RewriteWith(nil, raw, h, client, opt)
-				wantCompact := scenario != "baseline" && scenario != "off" && scenario != "ineligible" && h != host.Claude
+				// History is never compacted per request; only native compaction rewrites it.
 				wantReason := map[string]string{
 					"no-catalog": reasonNoCatalog, "respond": reasonNoToolNeeded, "error": reasonCallFailed,
 					"uncertain": reasonNoToolNeeded, "invalid": reasonInvalidJev, "local-passthrough": reasonLocalPassthrough,
@@ -183,26 +183,23 @@ func TestCompactionIndependentOfSelection(t *testing.T) {
 				if wantAdvise {
 					wantApply = applyAdvise
 				}
-				if err != nil || stats.CompactApplied != wantCompact || stats.Changed != (wantCompact || wantAdvise) || stats.Reason != wantReason {
-					t.Fatalf("independent compaction failed: %+v err=%v", stats, err)
+				if err != nil || stats.CompactApplied || stats.CompactDropped != 0 || stats.Changed != wantAdvise || stats.Reason != wantReason {
+					t.Fatalf("history rewritten without native compaction: %+v err=%v", stats, err)
 				}
-				if !wantCompact && !wantAdvise && string(out) != string(raw) {
+				if !wantAdvise && string(out) != string(raw) {
 					t.Fatal("protected request changed")
 				}
 				var got map[string]any
 				_ = json.Unmarshal(out, &got)
 				if !reflect.DeepEqual(got["tools"], req["tools"]) || !reflect.DeepEqual(got["reasoning"], req["reasoning"]) || stats.ToolBefore != stats.ToolAfter || stats.Apply != wantApply {
-					t.Fatalf("compaction changed selection or reasoning: %+v", stats)
-				}
-				if wantCompact && (stats.CompactDropped == 0 || stats.CharsAfter >= stats.CharsBefore) {
-					t.Fatalf("no actual history reduction: %+v", stats)
+					t.Fatalf("selection or reasoning changed: %+v", stats)
 				}
 			})
 		}
 	}
 }
 
-func TestGrokLiveHistoryCompactsWithObservedTypes(t *testing.T) {
+func TestGrokLiveHistoryUnchangedWithObservedTypes(t *testing.T) {
 	fn := func(name string) any {
 		return map[string]any{
 			"type": "function", "name": name, "description": "tool",
@@ -261,47 +258,23 @@ func TestGrokLiveHistoryCompactsWithObservedTypes(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"answers": answers})
 			})
 			raw, _ := json.Marshal(req)
-			out, stats, err := RewriteWith(nil, raw, host.Grok, client, DefaultOptions())
+			out, stats, err := RewriteWith(nil, raw, host.Grok, client, steerOpt())
 			if err != nil {
 				t.Fatal(err)
 			}
 			if stats.Reason == reasonUnrecognizedFormat || stats.Reason == reasonUnknownHistory {
 				t.Fatalf("observed grok history/catalog ineligible: %+v", stats)
 			}
-			if !stats.CompactApplied || stats.CompactDropped == 0 || stats.CharsAfter >= stats.CharsBefore {
-				t.Fatalf("compaction did not rewrite history: %+v", stats)
+			if stats.CompactApplied || stats.CompactDropped != 0 {
+				t.Fatalf("history compacted without native compaction: %+v", stats)
 			}
-			var got map[string]any
+			var got, want map[string]any
 			if err := json.Unmarshal(out, &got); err != nil {
 				t.Fatal(err)
 			}
-			hist := asSlice(got["input"])
-			calls, results, extras := map[string]bool{}, map[string]bool{}, map[string]bool{}
-			for _, rawItem := range hist {
-				m, _ := rawItem.(map[string]any)
-				typ, _ := m["type"].(string)
-				switch typ {
-				case "function_call":
-					calls[firstString(m, "call_id", "id")] = true
-				case "function_call_output":
-					results[firstString(m, "call_id", "id")] = true
-				}
-				if v, _ := m["extra_keep"].(string); v != "" {
-					extras[v] = true
-				}
-			}
-			for id := range calls {
-				if !results[id] {
-					t.Fatalf("call %s missing result after compact", id)
-				}
-			}
-			for id := range results {
-				if !calls[id] {
-					t.Fatalf("result %s missing call after compact", id)
-				}
-			}
-			if !extras["user"] || !extras["reasoning"] {
-				t.Fatalf("unknown fields on kept items dropped: %v", extras)
+			_ = json.Unmarshal(raw, &want)
+			if !reflect.DeepEqual(got["input"], want["input"]) {
+				t.Fatalf("history changed: %v", got["input"])
 			}
 			if scenario == "filter" && (stats.Apply != applyFilter || stats.ToolAfter >= stats.ToolBefore) {
 				t.Fatalf("want filter shrink with compact, got %+v", stats)
@@ -427,7 +400,7 @@ func TestCompactionPreservesEmbeddedAdditionalTools(t *testing.T) {
 	}
 }
 
-func TestCompactionStatsMeasureAppliedHistory(t *testing.T) {
+func TestSelectionLeavesStaleHistoryUnchanged(t *testing.T) {
 	for _, h := range []host.ID{host.Codex} {
 		for _, stale := range []bool{false, true} {
 			t.Run(string(h)+"/"+map[bool]string{false: "unchanged", true: "compacted"}[stale], func(t *testing.T) {
@@ -458,15 +431,16 @@ func TestCompactionStatsMeasureAppliedHistory(t *testing.T) {
 				req := map[string]any{key: msgs, "tools": []any{tool}}
 				raw, _ := json.Marshal(req)
 				out, stats, err := RewriteWith(nil, raw, h, nil, localOpt())
-				if err != nil || !stats.Changed || stats.CompactApplied != stale {
+				if err != nil || !stats.Changed || stats.CompactApplied || stats.CompactDropped != 0 {
 					t.Fatalf("unexpected application: stats=%+v err=%v", stats, err)
 				}
+				// Stale history is left as sent; only native compaction rewrites it.
 				var got map[string]any
 				_ = json.Unmarshal(out, &got)
 				before, _ := json.Marshal(msgs)
 				after, _ := json.Marshal(got[key])
-				if stats.CharsBefore != len(before) || stats.CharsAfter != len(after) || (stats.CompactDropped > 0) != stale {
-					t.Fatalf("stats do not describe applied history: %+v bytes=%d->%d", stats, len(before), len(after))
+				if string(before) != string(after) {
+					t.Fatalf("history changed: %d->%d bytes", len(before), len(after))
 				}
 			})
 		}

@@ -110,12 +110,41 @@ func TestFilterTransformOffLeavesCatalog(t *testing.T) {
 	}
 }
 
+func TestFilterOffPassesCodexRequestThroughWithoutJev(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"model": "gpt-5.6-terra",
+		"input": []any{map[string]any{"role": "user", "content": "The auth middleware test is failing. Find it."}},
+		"tools": []any{
+			map[string]any{"type": "function", "name": "shell"},
+			map[string]any{"type": "function", "name": "read_file"},
+			map[string]any{"type": "function", "name": "grep_files"},
+			map[string]any{"type": "function", "name": "apply_patch"},
+		},
+	})
+	var calls int64
+	client := fakeNextToolClient(t, "grep_files", 0.1, &calls)
+	off := DefaultOptions()
+	off.Transforms.Filter = false
+	out, stats, err := RewriteWith(t.Context(), raw, host.Codex, client, off)
+	if err != nil || string(out) != string(raw) || stats.Changed {
+		t.Fatalf("filter=off must forward the body unchanged: %+v err=%v\n%s", stats, err, out)
+	}
+	if stats.Chosen != "passthrough:"+reasonFilterOff || calls != 0 {
+		t.Fatalf("filter=off must not ask Jev: chosen=%s calls=%d", stats.Chosen, calls)
+	}
+	opt := steerOpt()
+	opt.SelectionMode = SelectionJev
+	if _, _, err := RewriteWith(t.Context(), raw, host.Codex, client, opt); err != nil || calls == 0 {
+		t.Fatalf("filter=on must reach Jev (guards the zero-call check): calls=%d err=%v", calls, err)
+	}
+}
+
 func TestAppliedTransformsRecordedIndependently(t *testing.T) {
 	raw := evalCatalogBody(
 		"Do not parallel. Sequential search and read the definition of RewriteWith.",
 		[]string{"read_file", "grep", "search_replace", "run_terminal_cmd", "web_search", "send_feedback"},
 	)
-	opt := DefaultOptions()
+	opt := steerOpt()
 	_, stats, err := RewriteWith(t.Context(), raw, host.Grok, nil, opt)
 	if err != nil {
 		t.Fatal(err)

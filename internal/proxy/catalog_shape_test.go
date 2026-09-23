@@ -36,7 +36,7 @@ func TestCatalogFromRequestDoesNotLaunch(t *testing.T) {
 	raw := chatReq("find a symbol", []any{
 		map[string]any{"type": "function", "function": map[string]any{"name": "grep", "description": "search"}},
 	})
-	_, stats, err := Rewrite(raw, host.Grok, nil)
+	_, stats, err := rewriteSteer(raw, host.Grok, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,9 +120,8 @@ func TestRunStatsApplicationCountersAndPrivacy(t *testing.T) {
 			ctrl.Header.Set("Cookie", "session=PRIVATE_COOKIE")
 			handler.ServeHTTP(httptest.NewRecorder(), ctrl)
 			stats := s.RunStats()
-			// Claude history is compacted only on Claude Code's compaction request.
-			compacted := h != host.Claude
-			if stats["totalRequests"] != 3 || stats["requests"] != 1 || stats["selectionApplied"] != 1 || stats["compactionApplied"] != map[bool]int{false: 0, true: 1}[compacted] {
+			// History is compacted only on the agent's own compaction request.
+			if stats["totalRequests"] != 3 || stats["requests"] != 1 || stats["selectionApplied"] != 1 || stats["compactionApplied"] != 0 {
 				t.Fatalf("wrong counters: %+v", stats)
 			}
 			routes := stats["requestRoutes"].(map[string]int)
@@ -130,7 +129,7 @@ func TestRunStatsApplicationCountersAndPrivacy(t *testing.T) {
 				t.Fatalf("missing transport evidence: %+v", routes)
 			}
 			events := stats["events"].([]Event)
-			if len(events) != 2 || events[0].UpstreamStatus == nil || *events[0].UpstreamStatus != 400 || events[0].CompactApplied != compacted || events[0].RequestPath != path {
+			if len(events) != 2 || events[0].UpstreamStatus == nil || *events[0].UpstreamStatus != 400 || events[0].CompactApplied || events[0].RequestPath != path {
 				t.Fatalf("missing request evidence: %+v", events)
 			}
 			if events[0].Method != http.MethodPost || events[0].JsonValid == nil || !*events[0].JsonValid {
@@ -156,7 +155,7 @@ func TestRunStatsApplicationCountersAndPrivacy(t *testing.T) {
 
 func TestRunStatsPreservesJevAttempts(t *testing.T) {
 	c := jevAnswers(t, "grep", 0.9, 0.9, 0.9, nil)
-	s, _ := testProxy(t, host.Grok, c, DefaultOptions())
+	s, _ := testProxy(t, host.Grok, c, steerOpt())
 	raw := chatReq("summarize this repo's architecture for me", workTools())
 	s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(raw)))
 	stats := s.RunStats()

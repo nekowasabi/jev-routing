@@ -153,7 +153,7 @@ func TestGatewayEligibility(t *testing.T) {
 	mustPassthrough := func(t *testing.T, req map[string]any, reason string) {
 		t.Helper()
 		raw, _ := json.Marshal(req)
-		out, stats, err := Rewrite(raw, host.Grok, nil)
+		out, stats, err := rewriteSteer(raw, host.Grok, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -198,7 +198,7 @@ func TestGatewayEligibility(t *testing.T) {
 			map[string]any{"name": "mcp__slack__post_message"},
 		}
 		raw, _ := json.Marshal(req)
-		_, stats, err := Rewrite(raw, host.Grok, nil)
+		_, stats, err := rewriteSteer(raw, host.Grok, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,7 +219,7 @@ func TestGatewayEligibility(t *testing.T) {
 		mustPassthrough(t, req, reasonNamespacedTools)
 	})
 	t.Run("invalid-json", func(t *testing.T) {
-		out, stats, err := Rewrite([]byte("{"), host.Grok, nil)
+		out, stats, err := rewriteSteer([]byte("{"), host.Grok, nil)
 		if err == nil {
 			t.Fatal("want error")
 		}

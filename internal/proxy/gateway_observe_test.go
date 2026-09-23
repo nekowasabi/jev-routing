@@ -75,7 +75,7 @@ func TestGatewayJevTrace(t *testing.T) {
 			},
 		})
 	})
-	s, _ := testProxy(t, host.Grok, c, DefaultOptions())
+	s, _ := testProxy(t, host.Grok, c, steerOpt())
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(string(chatReq(unknown, workTools()))))
 	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 	events, _, _, _ := s.Events().Snapshot(0)

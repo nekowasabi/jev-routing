@@ -71,7 +71,7 @@ func TestCodexAstraReasoningPassesThrough(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, _, err := Rewrite(raw, host.Codex, nil)
+			out, _, err := rewriteSteer(raw, host.Codex, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -90,8 +90,20 @@ func TestCodexAstraReasoningPassesThrough(t *testing.T) {
 	}
 }
 
-func localOpt() Options {
+// Why: these helpers pin tool steering (filter=on) for tests that exercise
+// selection, filtering, or Claude advice, independent of the default.
+func steerOpt() Options {
 	o := DefaultOptions()
+	o.Transforms.Filter = true
+	return o
+}
+
+func rewriteSteer(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, error) {
+	return RewriteWith(nil, body, h, client, steerOpt())
+}
+
+func localOpt() Options {
+	o := steerOpt()
 	o.SelectionMode = SelectionLocal
 	return o
 }
@@ -271,7 +283,7 @@ func TestRewriteSplitsJevConnectStatus(t *testing.T) {
 	}
 	raw, _ := json.Marshal(req)
 
-	_, stats, err := RewriteWith(nil, raw, host.Grok, nil, DefaultOptions())
+	_, stats, err := RewriteWith(nil, raw, host.Grok, nil, steerOpt())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +291,7 @@ func TestRewriteSplitsJevConnectStatus(t *testing.T) {
 		t.Fatalf("nil client connect=%s reason=%s", stats.ConnectStatus, stats.Reason)
 	}
 
-	opt := DefaultOptions()
+	opt := steerOpt()
 	opt.SelectionMode = SelectionLocal
 	_, stats, err = RewriteWith(nil, raw, host.Grok, &jev.Client{APIKey: "k"}, opt)
 	if err != nil {
@@ -293,7 +305,7 @@ func TestRewriteSplitsJevConnectStatus(t *testing.T) {
 		http.Error(w, "down", http.StatusInternalServerError)
 	}))
 	defer fail.Close()
-	opt = DefaultOptions()
+	opt = steerOpt()
 	opt.SelectionMode = SelectionJev
 	opt.Compaction = CompactionOff
 	_, stats, err = RewriteWith(nil, raw, host.Grok, &jev.Client{APIKey: "k", BaseURL: fail.URL, Model: "fake", HTTP: fail.Client()}, opt)
@@ -356,7 +368,7 @@ func TestGrokRewriteDoesNotSendReasoningNone(t *testing.T) {
 		"reasoning_effort": "high",
 	}
 	raw, _ := json.Marshal(req)
-	out, _, err := Rewrite(raw, host.Grok, nil)
+	out, _, err := rewriteSteer(raw, host.Grok, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +439,7 @@ func TestClaudeRespondStripsAll(t *testing.T) {
 		"thinking": map[string]any{"type": "enabled", "budget_tokens": 8000},
 	}
 	raw, _ := json.Marshal(req)
-	_, stats, err := Rewrite(raw, host.Claude, nil)
+	_, stats, err := rewriteSteer(raw, host.Claude, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +490,7 @@ func TestUnknownToolNameFailsOpen(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Claude, nil)
+	out, stats, err := rewriteSteer(raw, host.Claude, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +504,7 @@ func TestUnknownToolNameFailsOpen(t *testing.T) {
 	}
 }
 
-func TestCompactTruncatesStaleToolResult(t *testing.T) {
+func TestStaleToolResultNotCompactedPerRequest(t *testing.T) {
 	fat := strings.Repeat("line of grep output\n", 200)
 	req := map[string]any{
 		"model": "grok-4",
@@ -517,12 +529,13 @@ func TestCompactTruncatesStaleToolResult(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, nil)
+	out, stats, err := rewriteSteer(raw, host.Grok, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.CharsAfter >= stats.CharsBefore && stats.CompactDropped == 0 {
-		t.Fatalf("compaction did nothing %+v outlen=%d inlen=%d", stats, len(out), len(raw))
+	// History is compacted only on the agent's own compaction request.
+	if stats.CompactApplied || stats.CompactDropped != 0 || string(out) != string(raw) {
+		t.Fatalf("history rewritten without native compaction %+v outlen=%d inlen=%d", stats, len(out), len(raw))
 	}
 }
 
@@ -554,7 +567,7 @@ func TestGrokMissingCatalogDoesNotWriteEmptyTools(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, nil)
+	out, stats, err := rewriteSteer(raw, host.Grok, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,7 +596,7 @@ func TestFibonacciWithCatalogDoesNotStrip(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, nil)
+	out, stats, err := rewriteSteer(raw, host.Grok, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +625,7 @@ func TestMCPToolsSurviveUnknownPrompt(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Claude, nil)
+	out, stats, err := rewriteSteer(raw, host.Claude, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,7 +670,7 @@ func TestRewriteSkipsLiveWhenLocalConfident(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	_, stats, err := Rewrite(raw, host.Grok, client)
+	_, stats, err := rewriteSteer(raw, host.Grok, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -755,7 +768,7 @@ func TestGrokPreambleDoesNotPinSendFeedbackAndFitsJevBudget(t *testing.T) {
 		"tools": tools,
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, client)
+	out, stats, err := rewriteSteer(raw, host.Grok, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -838,7 +851,7 @@ func grokRewrite(t *testing.T, user string, tools []any, client *jev.Client) (ma
 		"tools": tools,
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, client)
+	out, stats, err := rewriteSteer(raw, host.Grok, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1007,7 +1020,7 @@ func TestRewriteUsesLastUserQueryNotFirstExplore(t *testing.T) {
 		"tools": tools,
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, nil)
+	out, stats, err := rewriteSteer(raw, host.Grok, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1046,7 +1059,7 @@ func TestRewriteSecondUserQueryDoesNotShrinkToSpawnSubagent(t *testing.T) {
 		"tools": tools,
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := Rewrite(raw, host.Grok, nil)
+	out, stats, err := rewriteSteer(raw, host.Grok, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1073,7 +1086,7 @@ func rewriteTwoSequentialTurns(t *testing.T) (RewriteStats, RewriteStats) {
 		"tools": tools,
 	}
 	raw1, _ := json.Marshal(turn1)
-	_, stats1, err := Rewrite(raw1, host.Grok, nil)
+	_, stats1, err := rewriteSteer(raw1, host.Grok, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1087,7 +1100,7 @@ func rewriteTwoSequentialTurns(t *testing.T) (RewriteStats, RewriteStats) {
 		"tools": tools,
 	}
 	raw2, _ := json.Marshal(turn2)
-	out2, stats2, err := Rewrite(raw2, host.Grok, nil)
+	out2, stats2, err := rewriteSteer(raw2, host.Grok, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1324,7 +1337,7 @@ func TestRewriteXCellKeepsGrepAndRead(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := RewriteWith(t.Context(), raw, host.Devin, nil, DefaultOptions())
+	out, stats, err := RewriteWith(t.Context(), raw, host.Devin, nil, steerOpt())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -371,7 +371,7 @@ func devinNativeGetChatMessageWithHistory() []byte {
 	return raw
 }
 
-func TestRewriteConnectDevinNativeProtoCompactsHistory(t *testing.T) {
+func TestRewriteConnectDevinNativeProtoKeepsHistory(t *testing.T) {
 	raw := devinNativeGetChatMessageWithHistory()
 	frame := connectFrame(0, raw)
 	out, stats, catalog, processed := rewriteConnectDevinFrame(t.Context(), frame, host.Devin, nil, localOpt())
@@ -401,11 +401,12 @@ func TestRewriteConnectDevinNativeProtoCompactsHistory(t *testing.T) {
 	if stats.Protocol == "prompt" {
 		t.Fatalf("history lifted as prompt: %+v", stats)
 	}
-	if !stats.CompactApplied {
-		t.Fatalf("want CompactApplied, got %+v", stats)
+	// History is compacted only on the agent's own compaction request.
+	if stats.CompactApplied {
+		t.Fatalf("history compacted without native compaction: %+v", stats)
 	}
 	if !stats.Changed || stats.ToolAfter >= stats.ToolBefore {
-		t.Fatalf("want tool filter + compact, got %+v", stats)
+		t.Fatalf("want tool filter, got %+v", stats)
 	}
 	encoded, _ := json.Marshal(stats)
 	if bytes.Contains(encoded, []byte("SECRET_RESULT")) || bytes.Contains(encoded, []byte("FIND_THIS_PROMPT")) {
@@ -441,28 +442,23 @@ func TestRewriteConnectDevinNativeProtoCompactsHistory(t *testing.T) {
 	if len(tools) == 0 || len(tools) >= 4 {
 		t.Fatalf("field 10 tools after=%d", len(tools))
 	}
-	truncated := false
-	for _, item := range hist {
-		if bytes.Contains(item, []byte("jev-compaction truncated")) {
-			truncated = true
-			break
-		}
-	}
 	origFields, ok := parseProtoFields(raw)
 	if !ok {
 		t.Fatal("parse original proto")
 	}
-	origHist := 0
+	var origHist [][]byte
 	for _, f := range origFields {
 		if f.field == 3 && f.wire == 2 {
-			origHist++
+			origHist = append(origHist, f.raw)
 		}
 	}
-	if len(hist) != origHist {
-		t.Fatalf("hist count changed: before=%d after=%d", origHist, len(hist))
+	if len(hist) != len(origHist) {
+		t.Fatalf("hist count changed: before=%d after=%d", len(origHist), len(hist))
 	}
-	if !truncated {
-		t.Fatal("dropped/truncated hist item missing jev-compaction truncated")
+	for i := range hist {
+		if !bytes.Equal(hist[i], origHist[i]) {
+			t.Fatalf("hist item %d changed", i)
+		}
 	}
 }
 
@@ -689,7 +685,7 @@ func TestHandlerConnectDevinRecordsJevAttempt(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("DEVIN_UPSTREAM", upstream.URL)
 
-	srv, err := New("127.0.0.1:0", host.Devin, client, io.Discard)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Devin, client, io.Discard, steerOpt())
 	if err != nil {
 		t.Fatal(err)
 	}

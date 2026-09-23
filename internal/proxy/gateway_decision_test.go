@@ -67,7 +67,7 @@ func TestGatewayDecision(t *testing.T) {
 
 	t.Run("adopt-boundary-0.85", func(t *testing.T) {
 		c := jevAnswers(t, "grep", 0.85, 0.8, 0.8, nil)
-		_, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
+		_, stats, err := rewriteSteer(chatReq(unknown, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -77,7 +77,7 @@ func TestGatewayDecision(t *testing.T) {
 	})
 	t.Run("just-below-confidence-still-covers", func(t *testing.T) {
 		c := jevAnswers(t, "grep", 0.849, 0.8, 0.8, nil)
-		_, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
+		_, stats, err := rewriteSteer(chatReq(unknown, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestGatewayDecision(t *testing.T) {
 	})
 	t.Run("needs-mid-still-covers", func(t *testing.T) {
 		c := jevAnswers(t, "grep", 0.9, 0.5, 0.9, nil)
-		_, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
+		_, stats, err := rewriteSteer(chatReq(unknown, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,7 +97,7 @@ func TestGatewayDecision(t *testing.T) {
 	})
 	t.Run("needs-no-still-covers", func(t *testing.T) {
 		c := jevAnswers(t, "grep", 0.9, 0.2, 0.9, nil)
-		_, stats, err := Rewrite(chatReq(unknown, tools), host.Grok, c)
+		_, stats, err := rewriteSteer(chatReq(unknown, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +110,7 @@ func TestGatewayDecision(t *testing.T) {
 			http.Error(w, "nope", 500)
 		})
 		raw := chatReq(unknown, tools)
-		out, stats, err := Rewrite(raw, host.Grok, c)
+		out, stats, err := rewriteSteer(raw, host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +124,7 @@ func TestGatewayDecision(t *testing.T) {
 			atomic.AddInt64(&calls, 1)
 			http.Error(w, "nope", 500)
 		})
-		_, stats, err := Rewrite(chatReq("Do not parallel. Sequential search and read the definition of RewriteWith.", tools), host.Grok, c)
+		_, stats, err := rewriteSteer(chatReq("Do not parallel. Sequential search and read the definition of RewriteWith.", tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,7 +145,7 @@ func TestGatewayDecision(t *testing.T) {
 			})
 		})
 		raw := chatReq(unknown, tools)
-		out, stats, _ := Rewrite(raw, host.Grok, c)
+		out, stats, _ := rewriteSteer(raw, host.Grok, c)
 		if string(out) != string(raw) || stats.Reason != reasonInvalidJev {
 			t.Fatalf("%+v", stats)
 		}
@@ -167,7 +167,7 @@ func TestHybridDefersHeuristics(t *testing.T) {
 				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
 			}})
 		})
-		_, stats, err := Rewrite(chatReq(heuristic, tools), host.Grok, c)
+		_, stats, err := rewriteSteer(chatReq(heuristic, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +184,7 @@ func TestHybridDefersHeuristics(t *testing.T) {
 			atomic.AddInt64(&calls, 1)
 			http.Error(w, "unexpected", http.StatusInternalServerError)
 		})
-		_, stats, err := Rewrite(chatReq(selected, tools), host.Grok, c)
+		_, stats, err := rewriteSteer(chatReq(selected, tools), host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,7 +197,7 @@ func TestHybridDefersHeuristics(t *testing.T) {
 	})
 	t.Run("unconnected-keeps-catalog", func(t *testing.T) {
 		raw := chatReq(heuristic, tools)
-		out, stats, err := Rewrite(raw, host.Grok, nil)
+		out, stats, err := rewriteSteer(raw, host.Grok, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -212,7 +212,7 @@ func TestHybridDefersHeuristics(t *testing.T) {
 			})
 		})
 		raw := chatReq(heuristic, tools)
-		out, stats, err := Rewrite(raw, host.Grok, c)
+		out, stats, err := rewriteSteer(raw, host.Grok, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,7 +231,7 @@ func TestSelectionModes(t *testing.T) {
 			atomic.AddInt64(&calls, 1)
 			http.Error(w, "unexpected", http.StatusInternalServerError)
 		})
-		o := DefaultOptions()
+		o := steerOpt()
 		o.SelectionMode = SelectionLocal
 		_, stats, err := RewriteWith(nil, chatReq(unknown, tools), host.Grok, c, o)
 		if err != nil || stats.Source != sourceLocal || atomic.LoadInt64(&calls) != 0 {
@@ -247,7 +247,7 @@ func TestSelectionModes(t *testing.T) {
 				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
 			}})
 		})
-		o := DefaultOptions()
+		o := steerOpt()
 		o.SelectionMode = SelectionJev
 		_, stats, err := RewriteWith(nil, chatReq("The auth middleware test is failing. Find it.", tools), host.Grok, c, o)
 		if err != nil || stats.Source != sourceJev || atomic.LoadInt64(&calls) != 1 {
@@ -255,7 +255,7 @@ func TestSelectionModes(t *testing.T) {
 		}
 	})
 	t.Run("jev coverage-short passes full catalog", func(t *testing.T) {
-		o := DefaultOptions()
+		o := steerOpt()
 		o.SelectionMode = SelectionJev
 		raw := chatReq(unknown, tools)
 		c := jevAnswers(t, "grep", 0.6, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
@@ -278,12 +278,12 @@ func TestAnalysisDecision(t *testing.T) {
 func TestGatewayForced(t *testing.T) {
 	unknown := "summarize this repo's architecture for me"
 	tools := workTools()
-	opt := DefaultOptions()
+	opt := steerOpt()
 	opt.Mode = ModeForced
 
 	t.Run("off-default-filter", func(t *testing.T) {
 		c := jevAnswers(t, "grep", 0.9, 0.9, 0.9, nil)
-		out, stats, err := RewriteWith(nil, chatReq(unknown, tools), host.Grok, c, DefaultOptions())
+		out, stats, err := RewriteWith(nil, chatReq(unknown, tools), host.Grok, c, steerOpt())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -352,7 +352,7 @@ func TestAnalysisForced(t *testing.T) {
 }
 
 func TestGatewayArgsModel(t *testing.T) {
-	opt := DefaultOptions()
+	opt := steerOpt()
 	opt.Mode = ModeForced
 	opt.ArgsModel = "cheap-arg"
 	opt.ArgsTools = map[string]bool{"grep": true}
@@ -395,7 +395,7 @@ func TestGatewayDirect(t *testing.T) {
 	tools := []any{map[string]any{"type": "function", "function": map[string]any{
 		"name": "status", "parameters": schema,
 	}}}
-	opt := DefaultOptions()
+	opt := steerOpt()
 	opt.Mode = ModeForced
 	opt.DirectTools = map[string]bool{"status": true}
 	unknown := "summarize this repo's architecture for me"
@@ -420,7 +420,7 @@ func TestGatewayDirect(t *testing.T) {
 		t.Fatal("allOf must not be direct")
 	}
 
-	off := DefaultOptions()
+	off := steerOpt()
 	off.Mode = ModeForced
 	_, stats, _ = RewriteWith(nil, chatReq(unknown, tools), host.Grok, c, off)
 	if stats.Direct {
@@ -448,7 +448,7 @@ func TestGatewayDirectHTTP(t *testing.T) {
 			"name": "ping", "parameters": schema,
 		}}},
 	})
-	opt := DefaultOptions()
+	opt := steerOpt()
 	opt.Mode = ModeForced
 	opt.DirectTools = map[string]bool{"ping": true}
 	c := jevAnswers(t, "ping", 0.9, 0.9, 0.9, nil)
@@ -487,7 +487,7 @@ func TestGatewayDirectHTTP(t *testing.T) {
 }
 
 func TestGatewayDirectSSEUsage(t *testing.T) {
-	opt := DefaultOptions()
+	opt := steerOpt()
 	opt.Mode = ModeForced
 	opt.DirectTools = map[string]bool{"status": true}
 	srv, _ := testProxy(t, host.Grok, jevAnswers(t, "status", 0.9, 0.9, 0.9, nil), opt)

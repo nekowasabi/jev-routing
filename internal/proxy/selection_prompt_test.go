@@ -73,7 +73,7 @@ func uncertainChoice(probabilities map[string]float64, extra map[string]any) map
 
 func TestUncertainChoiceKeepsConfidentTopSet(t *testing.T) {
 	client := jevRaw(t, uncertainChoice(map[string]float64{"grep": 0.55, "read_file": 0.38, "run_terminal_command": 0.07}, nil))
-	_, stats, err := Rewrite(chatReq("summarize this repo's architecture for me", workTools()), host.Grok, client)
+	_, stats, err := rewriteSteer(chatReq("summarize this repo's architecture for me", workTools()), host.Grok, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestUncertainChoiceKeepsConfidentTopSet(t *testing.T) {
 
 func TestUncertainChoiceWithSpreadMassPassesThrough(t *testing.T) {
 	client := jevRaw(t, uncertainChoice(map[string]float64{"grep": 0.5, "read_file": 0.3, "run_terminal_command": 0.2}, nil))
-	_, stats, err := Rewrite(chatReq("summarize this repo's architecture for me", workTools()), host.Grok, client)
+	_, stats, err := rewriteSteer(chatReq("summarize this repo's architecture for me", workTools()), host.Grok, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestSelectionStateCarriesAssistantPlan(t *testing.T) {
 		},
 		"tools": workTools(),
 	})
-	if _, _, err := Rewrite(body, host.Grok, client); err != nil {
+	if _, _, err := rewriteSteer(body, host.Grok, client); err != nil {
 		t.Fatal(err)
 	}
 	if got != "I'll now edit foo.go" {

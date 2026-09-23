@@ -19,7 +19,7 @@ func TestAdoptCandidatesSeq5NoLongerNeedsToolGate(t *testing.T) {
 		t.Fatalf("seq5-style high choice must keep coverage set: kept=%v why=%s", kept, why)
 	}
 
-	opt := DefaultOptions()
+	opt := steerOpt()
 	opt.SelectionMode = SelectionJev
 	opt.Compaction = CompactionOff
 	client := jevRaw(t, map[string]any{

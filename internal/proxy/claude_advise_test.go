@@ -49,7 +49,7 @@ func jsonOf(v any) string {
 
 func TestClaudeAdviseKeepsRequestAndHistoryStable(t *testing.T) {
 	for choice, want := range map[string]string{"Grep": "suggested next step: Grep (other tools remain available).", plan.Respond: "suggested next step: reply to the user without calling a tool."} {
-		opt := DefaultOptions()
+		opt := steerOpt()
 		opt.SelectionMode = SelectionJev
 		prompt := map[string]any{"role": "user", "content": "find where sessions are stored"}
 		turn1 := append([]any{prompt}, claudeToolTurn("toolu_1")...)
@@ -90,7 +90,7 @@ func TestClaudeAdviseKeepsRequestAndHistoryStable(t *testing.T) {
 }
 
 func TestClaudeFirstTurnGetsNoHint(t *testing.T) {
-	opt := DefaultOptions()
+	opt := steerOpt()
 	opt.SelectionMode = SelectionJev
 	req := claudeAdviseReq(map[string]any{"role": "user", "content": "find where sessions are stored"})
 	raw, _ := json.Marshal(req)
