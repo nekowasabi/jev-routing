@@ -125,6 +125,8 @@ jev-routing bench report results/<dir> --prices 1.25,0.125,10
 
 エージェントは `codex`、`claude`、`grok`、`devin`、`fake` です。本物のエージェントはクォータを消費します。まずは課題を一つ、`--reps 1` から始めてください。`--agent fake` はプロキシに数回リクエストを送り、参照実装を書き込むので、モデルなしで一連の流れを確認できます。API キーがないとき `hybrid` は不確実な要求を絞りません。端末上の分類器を測るときは `JEV_SELECTION_MODE=local` にしてください。チェス課題の採点には Node.js が必要です。プロキシ自体は Node を必要としません。
 
+`--prices` は 100 万トークンあたりの USD を `in,cached,out[,cachewrite]` で受け取ります。cache write を省くと input の 1.25 倍とみなし、`claude` にだけ適用します。入力トークン数はキャッシュ込みです。`claude` では Anthropic が input と別に報告する cache read と cache write を足し、`codex` と `grok` では cached が input に含まれています。
+
 結果は `results/<timestamp>/` に出ます（`runs.jsonl`、`summary.md`、実行ごとのディレクトリ）。サンドボックスの外で、自分で作っていないファイルを読んだ実行は contaminated として集計から外します。`bench audit` はエージェントログを読み直します。`bench chart` は `comparison-light.svg` と `comparison-dark.svg` を書きます。
 
 ## Compaction
@@ -143,7 +145,7 @@ Codex と Grok Build は、Claude Code の `session.compact` のように `PreCo
 - Codex のローカル圧縮（`codex-rs/core/src/compact.rs`）は、provider が OpenAI / Azure でないとき（`RemoteCompactionSupport::Unsupported`）に動く。`CONTEXT CHECKPOINT COMPACTION` の要約を求め、直近のユーザーメッセージとその要約だけを残す。ツール結果は置換後の履歴項目にならない。
 - Grok Build の full-replace（`xai-grok-compaction` の `code_compaction`）は `[system, user prefix, AGENTS.md, 最後のクエリ, 直近の尾, summary]` を組み直す。summary は番号付き節の `<summary>` で、掃除後 500 文字未満は退化する。それより古いツール呼び出しは summary の中にしか残らない。
 
-これらの圧縮プロンプトが届いたとき、jev-routing は要約モデルへ転送しない。同じ fast-jev 判定を行い、ホストが保存するアシスタントメッセージとして残ったトランスクリプトを返す。Codex は Responses の SSE、Grok は `<summary>` ブロック。通常ターンではツール結果をその場で drop / truncate し、Codex の `local_shell_call`、`shell_call`、`apply_patch_call`、`mcp_call` も対象にする。
+これらの圧縮プロンプトが届いたとき、jev-routing は要約モデルへ転送しない。同じ fast-jev 判定を行い、ホストが保存するアシスタントメッセージとして残ったトランスクリプトを返す。Codex は Responses の SSE、Grok は `<summary>` ブロック。Claude は Claude Code 自身が圧縮リクエストを送ったときだけ圧縮し、同じく残したトランスクリプトを `<summary>` で返す。削減が 25% 未満なら上流へ転送し、Claude Code 自身の要約に任せる。Claude の通常ターンは圧縮しないので、プロンプトキャッシュが保たれる。Codex と Grok の通常ターンではツール結果をその場で drop / truncate し、Codex の `local_shell_call`、`shell_call`、`apply_patch_call`、`mcp_call` も対象にする。
 
 ツール選択が不確実でも、安全に適用できる履歴圧縮は実行します。Claude の `system` 境界、署名付き思考、ツール参照、呼び出しと結果の対応は維持します。
 
@@ -169,7 +171,7 @@ jev-routing compact < transcript.json
 
 ### 製品別の範囲
 
-- [Claude Code](https://code.claude.com/docs/en/tools-reference): `tool_use` / `tool_result` の履歴形式を受理します。組み込み名は実行環境・機能フラグで変化するため、固定の許可リストにはしません。
+- [Claude Code](https://code.claude.com/docs/en/tools-reference): `tool_use` / `tool_result` の履歴形式を受理します。組み込み名は実行環境・機能フラグで変化するため、固定の許可リストにはしません。ツール定義は Anthropic のプロンプトキャッシュの先頭に位置するため、Claude ではツールカタログを絞らず、判定を最後のツール結果メッセージへリマインダーとして追記します。
 - Codex: `functions.*`、`custom_tool_call`、Responsesの組み込みツールおよびMCP呼び出しの履歴形式を受理します。
 - [Grok Build](https://docs.x.ai/build/features/permissions): `read_file`、`search_replace`、`grep_search`、`list_dir`、`run_terminal_cmd`、`web_search`、`web_fetch`、`todo_write`、`task`、`kill_task`、`get_task_output`、`memory_search`、`memory_get`、`search_tool`、`use_tool`、`lsp`、条件付きの`write`を実行時カタログから扱います。
 - [Devin CLI](https://docs.devin.ai/cli/reference/permissions#tool-based-permissions): `read`、`write`、`edit`、`apply_patch`、ノートブック、検索、シェル、`webfetch`、タスク、Skills、サブエージェント、権限、MCP管理ツールを実行時カタログから扱います。ATIFエクスポート形式は公開スキーマが確認できるまで履歴判定へ推測追加しません。

@@ -125,6 +125,8 @@ jev-routing bench report results/<dir> --prices 1.25,0.125,10
 
 Agents are `codex`, `claude`, `grok`, `devin`, and `fake`. Real agents spend real quota. Start with one task and `--reps 1`. `--agent fake` sends a few requests through the proxy and writes the reference solution, so the pipeline can be checked without a model. With no API key, `hybrid` does not narrow an uncertain request; set `JEV_SELECTION_MODE=local` to measure the on-device classifier. Node.js is required to score the chess tasks. The proxy itself still does not need Node.
 
+`--prices` takes `in,cached,out[,cachewrite]` in USD per million tokens; cache write defaults to 1.25× input and applies only to `claude`. Input totals include cache: for `claude` that adds the cache reads and cache writes Anthropic reports apart from input; for `codex` and `grok` cached tokens are already inside input.
+
 Results land in `results/<timestamp>/` (`runs.jsonl`, `summary.md`, and a directory per run). A run that reads a file outside its sandbox that it did not create is marked contaminated and left out of the summary. `bench audit` re-reads agent logs. `bench chart` writes `comparison-light.svg` and `comparison-dark.svg`.
 
 ## Compaction
@@ -143,7 +145,7 @@ Codex and Grok Build cannot return a replacement transcript from `PreCompact` th
 - Codex local compaction (`codex-rs/core/src/compact.rs`) runs when the provider is not OpenAI/Azure (`RemoteCompactionSupport::Unsupported` in `model-provider`). It asks for a `CONTEXT CHECKPOINT COMPACTION` summary, then keeps recent user messages plus that summary. Tool results are not items in the replacement history.
 - Grok Build full-replace (`xai-grok-compaction` `code_compaction`) rebuilds `[system, user prefix, AGENTS.md, last query, recent tail, summary]`. The summary must be one `<summary>` block of numbered sections, at least 500 characters after cleaning. Older tool calls survive only inside that block.
 
-When one of those compaction prompts arrives, jev-routing does not forward it to a summarizer. It runs the same fast-jev decisions and returns the retained transcript as the assistant message the host will store: Responses SSE for Codex, a `<summary>` block for Grok. Ordinary turns still drop or truncate tool payloads in place, including Codex `local_shell_call`, `shell_call`, `apply_patch_call`, and `mcp_call` pairs.
+When one of those compaction prompts arrives, jev-routing does not forward it to a summarizer. It runs the same fast-jev decisions and returns the retained transcript as the assistant message the host will store: Responses SSE for Codex, a `<summary>` block for Grok. Claude is compacted only when Claude Code sends its own compaction request; the answer is likewise a `<summary>` of the retained transcript, and when the reduction is under 25% the request goes upstream for Claude Code's own summary. Ordinary Claude turns are not compacted, so the prompt cache stays intact. Ordinary Codex and Grok turns still drop or truncate tool payloads in place, including Codex `local_shell_call`, `shell_call`, `apply_patch_call`, and `mcp_call` pairs.
 
 Even when tool selection is uncertain, history compaction is still applied where it is safe to do so. Claude's `system` boundary, signed thinking, tool references, and the pairing of calls with their results are all preserved.
 
@@ -169,7 +171,7 @@ The proxy treats the runtime catalog included in the request as the source of tr
 
 ### Scope per product
 
-- [Claude Code](https://code.claude.com/docs/en/tools-reference): the `tool_use` / `tool_result` history shapes are accepted. Built-in names vary with the runtime and feature flags, so they are not kept as a fixed allow list.
+- [Claude Code](https://code.claude.com/docs/en/tools-reference): the `tool_use` / `tool_result` history shapes are accepted. Built-in names vary with the runtime and feature flags, so they are not kept as a fixed allow list. The tool catalog is not narrowed for Claude, because tool definitions sit at the head of Anthropic's prompt cache; the decision is appended to the last tool-result message as a reminder instead.
 - Codex: the history shapes for `functions.*`, `custom_tool_call`, the Responses built-in tools, and MCP calls are accepted.
 - [Grok Build](https://docs.x.ai/build/features/permissions): `read_file`, `search_replace`, `grep_search`, `list_dir`, `run_terminal_cmd`, `web_search`, `web_fetch`, `todo_write`, `task`, `kill_task`, `get_task_output`, `memory_search`, `memory_get`, `search_tool`, `use_tool`, `lsp`, and conditionally `write` are handled from the runtime catalog.
 - [Devin CLI](https://docs.devin.ai/cli/reference/permissions#tool-based-permissions): `read`, `write`, `edit`, `apply_patch`, notebooks, search, shell, `webfetch`, tasks, Skills, subagents, permissions, and MCP management tools are handled from the runtime catalog. The ATIF export format will not be added to the history judgment on speculation until its public schema can be confirmed.
