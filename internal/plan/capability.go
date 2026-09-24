@@ -202,9 +202,33 @@ func InventoryFromSkillDir(dir string) (Inventory, map[string]string, error) {
 }
 
 func skillDirDesc(raw []byte) string {
-	for _, line := range strings.Split(string(raw), "\n") {
+	lines := strings.Split(string(raw), "\n")
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+		for i, line := range lines[1:] {
+			if strings.TrimSpace(line) == "---" {
+				break
+			}
+			if value, ok := strings.CutPrefix(strings.TrimSpace(line), "description:"); ok {
+				value = strings.TrimSpace(value)
+				if value == ">" || value == "|-" || value == "|" || value == ">-" {
+					var parts []string
+					for _, following := range lines[i+2:] {
+						if strings.TrimSpace(following) == "---" || following != "" && following[0] != ' ' && following[0] != '\t' {
+							break
+						}
+						if part := strings.TrimSpace(following); part != "" {
+							parts = append(parts, part)
+						}
+					}
+					return strings.Join(parts, " ")
+				}
+				return strings.Trim(value, `"'`)
+			}
+		}
+	}
+	for _, line := range lines {
 		line = strings.TrimSpace(strings.TrimPrefix(line, "#"))
-		if line != "" {
+		if line != "" && line != "---" && !strings.Contains(line, ":") {
 			return line
 		}
 	}
@@ -296,7 +320,7 @@ func capabilityFromSpec(s Spec, h host.ID) Capability {
 	case isAgent(s.Name):
 		kind, provider = KindSubagent, "host"
 		target = Target{SubagentLauncher: s.Name}
-	case n == "skill" || strings.HasPrefix(n, "skill"):
+	case strings.HasPrefix(n, "skill") && n != "skill":
 		kind, provider = KindSkill, "host"
 		target = Target{SkillBodyRef: "host-skill:" + s.Name}
 	case isExec(s.Name):

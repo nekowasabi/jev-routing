@@ -89,8 +89,8 @@ type Response struct {
 
 // Usage is reported Jev-side usage when the service includes it. Missing is nil.
 type Usage struct {
-	InputTokens  *int `json:"inputTokens,omitempty"`
-	OutputTokens *int `json:"outputTokens,omitempty"`
+	InputTokens  *int `json:"input_tokens,omitempty"`
+	OutputTokens *int `json:"output_tokens,omitempty"`
 }
 
 // Attempt records one real HTTP try. Request-scoped; never stored on Client.

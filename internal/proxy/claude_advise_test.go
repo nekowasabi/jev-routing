@@ -99,3 +99,31 @@ func TestClaudeFirstTurnGetsNoHint(t *testing.T) {
 		t.Fatalf("first turn changed: %+v err=%v\n%s", stats, err, out)
 	}
 }
+
+func TestClaudeAdviseBeforeTrailingSystemMessage(t *testing.T) {
+	opt := steerOpt()
+	opt.SelectionMode = SelectionJev
+	msgs := append(claudeToolTurn("toolu_1"), map[string]any{"role": "system", "content": "runtime note"})
+	got, _, stats := rewriteClaude(t, opt, "Read", claudeAdviseReq(msgs...))
+	if stats.Apply != applyAdvise {
+		t.Fatalf("advice was not applied: %+v", stats)
+	}
+	out := asSlice(got["messages"])
+	result := asSlice(out[1].(map[string]any)["content"])
+	if len(result) != 2 || !strings.Contains(jsonOf(result[1]), "suggested next step: Read") {
+		t.Fatalf("tool result has no advice: %s", jsonOf(result))
+	}
+	if jsonOf(out[2]) != jsonOf(msgs[2]) {
+		t.Fatalf("trailing system message changed: %s", jsonOf(out[2]))
+	}
+}
+
+func TestClaudeAdviseDoesNotAttachToOldToolResult(t *testing.T) {
+	opt := steerOpt()
+	opt.SelectionMode = SelectionJev
+	msgs := append(claudeToolTurn("toolu_1"), map[string]any{"role": "user", "content": "new request"})
+	_, _, stats := rewriteClaude(t, opt, "Read", claudeAdviseReq(msgs...))
+	if stats.Apply == applyAdvise {
+		t.Fatalf("advice attached to an earlier turn: %+v", stats)
+	}
+}

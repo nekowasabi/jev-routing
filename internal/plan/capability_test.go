@@ -206,3 +206,15 @@ func TestInventoryFromSkillDir(t *testing.T) {
 		t.Fatalf("skill body not bound %+v bodies=%v", item, bodies)
 	}
 }
+
+func TestSkillFrontmatterDescriptionAndHostToolClassification(t *testing.T) {
+	if got := skillDirDesc([]byte("---\nname: review\ndescription: Reviews code changes\n---\n# Review\n")); got != "Reviews code changes" {
+		t.Fatalf("frontmatter description = %q", got)
+	}
+	if got := skillDirDesc([]byte("---\ndescription: >\n  Reviews code changes\n  using the current diff\n---\n# Review\n")); got != "Reviews code changes using the current diff" {
+		t.Fatalf("folded frontmatter description = %q", got)
+	}
+	if got := capabilityFromSpec(Spec{Name: "Skill", Desc: "Run a named skill"}, host.Claude); got.Kind == KindSkill {
+		t.Fatalf("host Skill tool misclassified as injected skill: %+v", got)
+	}
+}

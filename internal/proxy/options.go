@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -45,7 +46,7 @@ type Options struct {
 	AutoApply         bool
 	ApplicationPolicy string
 	KindModes         map[string]string
-	AfterRewrite      func([]byte) []byte
+	AfterRewrite      func(context.Context, []byte) []byte
 	Shadow            bool
 	Transforms        TransformOptions
 	CostGateMax       int

@@ -110,6 +110,56 @@ func TestGatewayUsage(t *testing.T) {
 	}
 }
 
+func TestClaudeFixedMessagesAndCountTokens(t *testing.T) {
+	seen := make(chan struct{ path, body string }, 2)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		seen <- struct{ path, body string }{r.URL.Path, string(raw)}
+		w.Header().Set("content-type", "application/json")
+		if r.URL.Path == "/v1/messages/count_tokens" {
+			_, _ = io.WriteString(w, `{"input_tokens":123}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"usage":{"input_tokens":10,"cache_read_input_tokens":20,"cache_creation_input_tokens":30,"output_tokens":5}}`)
+	}))
+	defer up.Close()
+	opt := DefaultOptions()
+	opt.Mode = ModeBaseline
+	s, err := NewWithOptions("127.0.0.1:8787", host.Claude, nil, io.Discard, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Upstream, _ = url.Parse(up.URL)
+	body := `{"model":"claude-sonnet-5","output_config":{"effort":"medium"},"max_tokens":128,"messages":[{"role":"user","content":"Read the file"}],"tools":[{"name":"Read","description":"Read a file","input_schema":{"type":"object"}}]}`
+	for _, path := range []string{"/v1/messages/count_tokens", "/v1/messages"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		if path == "/v1/messages/count_tokens" && rec.Body.String() != `{"input_tokens":123}` {
+			t.Fatalf("count_tokens response=%s", rec.Body.String())
+		}
+		forwarded := <-seen
+		if forwarded.path != path || forwarded.body != body {
+			t.Fatalf("forwarded=%+v", forwarded)
+		}
+	}
+	events, _, _, _ := s.Events().Snapshot(0)
+	if s.RequestCount() != 1 || len(events) != 2 || events[0].Reason != reasonNotLLMPath {
+		t.Fatalf("requests=%d events=%+v", s.RequestCount(), events)
+	}
+	if events[0].Usage != nil || events[1].Usage == nil {
+		t.Fatalf("usage events=%+v", events)
+	}
+	u := events[1].Usage
+	if u.InputTokens == nil || *u.InputTokens != 10 || u.CachedTokens == nil || *u.CachedTokens != 20 || u.CacheWriteTokens == nil || *u.CacheWriteTokens != 30 || u.OutputTokens == nil || *u.OutputTokens != 5 {
+		t.Fatalf("Claude usage=%+v", u)
+	}
+}
+
 func TestGatewayStreaming(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
@@ -170,6 +220,9 @@ func TestGatewayDashboard(t *testing.T) {
 	}
 	if _, ok := payload["router"]; !ok {
 		t.Fatalf("%v", payload)
+	}
+	if _, ok := payload["jevHTTP"].(float64); !ok {
+		t.Fatalf("dashboard omitted Jev request count: %v", payload)
 	}
 	metrics, _ := payload["metrics"].(map[string]any)
 	byClass, _ := metrics["by_class"].([]any)

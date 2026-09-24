@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
 	"github.com/nekowasabi/jev-routing/internal/plan"
 )
 
@@ -24,6 +26,13 @@ type fakeExec struct {
 	calls  []HostCall
 	nextID string
 	err    error
+}
+
+func TestPublicApplicationsKeepsDecisionSource(t *testing.T) {
+	rows := publicApplications([]*Application{{DecisionID: "d", Source: "jev", Kind: "skill", State: AppDelivered}})
+	if len(rows) != 1 || rows[0]["source"] != "jev" {
+		t.Fatalf("decision source lost: %+v", rows)
+	}
 }
 
 func TestAppStoreCopiesApplications(t *testing.T) {
@@ -127,6 +136,111 @@ func TestAutoApplyUsesRequestCatalog(t *testing.T) {
 	out, err := ApplyHostContext(host.Claude, body, s.LastDelivered)
 	if err != nil || !strings.Contains(string(out), "review") {
 		t.Fatalf("writeback %s %v", out, err)
+	}
+}
+
+func TestAutoApplyReturnsDeliveryForItsOwnRequest(t *testing.T) {
+	s := &Server{
+		Host:        host.Claude,
+		Options:     Options{AutoApply: true, KindModes: map[string]string{"skill": KindApply}},
+		Catalog:     lifecycleCatalog(t),
+		SkillBodies: map[string]string{"skill://review/SKILL.md": "review-only-marker"},
+		Apps:        NewAppStore(), Executor: &recordingExec{},
+	}
+	first := s.autoApply([]byte(`{"messages":[{"role":"user","content":"use the review skill"}]}`))
+	second := s.autoApply([]byte(`{"messages":[{"role":"user","content":"say pong"}]}`))
+	if !strings.Contains(first, "review-only-marker") || second != "" {
+		t.Fatalf("request deliveries: first=%q second=%q", first, second)
+	}
+}
+
+func TestSkillSelectionReportsJevUsage(t *testing.T) {
+	cat := lifecycleCatalog(t)
+	skillID := ""
+	for _, item := range cat.Items {
+		if item.Kind == plan.KindSkill {
+			skillID = item.ID
+		}
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"answers": map[string]any{"capability": map[string]any{"type": "choice", "choice": skillID, "confidence": 0.99}},
+			"usage":   map[string]any{"input_tokens": 12, "output_tokens": 3},
+		})
+	}))
+	defer upstream.Close()
+	s := &Server{Host: host.Claude, Options: Options{AutoApply: true, KindModes: map[string]string{"skill": KindApply}},
+		Client:  &jev.Client{APIKey: "fixture", BaseURL: upstream.URL, Model: "fixture", HTTP: upstream.Client()},
+		Catalog: cat, SkillBodies: map[string]string{"skill://review/SKILL.md": "review-only-marker"}, Apps: NewAppStore(), Executor: &recordingExec{}}
+	var attempts []jev.Attempt
+	ctx := jev.WithAttemptHook(context.Background(), func(a jev.Attempt) { attempts = append(attempts, a) })
+	if delivered := s.autoApplyContext(ctx, []byte(`{"messages":[{"role":"user","content":"Read go.mod and report module and version"}],"tools":[{"name":"Read","description":"read a file"}]}`)); !strings.Contains(delivered, "review-only-marker") {
+		t.Fatalf("skill not selected: %q", delivered)
+	}
+	followup := []byte(`{"messages":[{"role":"user","content":"Read go.mod and report module and version"},{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read"}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"module example"}]}],"tools":[{"name":"Read","description":"read a file"}]}`)
+	if delivered := s.autoApplyContext(ctx, followup); !strings.Contains(delivered, "review-only-marker") {
+		t.Fatalf("selected skill did not persist to tool follow-up: %q", delivered)
+	}
+	if len(attempts) != 1 || attempts[0].Purpose != "selection" || attempts[0].Usage == nil || *attempts[0].Usage.InputTokens != 12 {
+		t.Fatalf("missing capability usage attempt: %+v", attempts)
+	}
+}
+
+func TestSkillSelectionUsageIncludedInRunStats(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":5,"output_tokens":1}}`))
+	}))
+	defer upstream.Close()
+	t.Setenv("ANTHROPIC_UPSTREAM", upstream.URL)
+	cat := lifecycleCatalog(t)
+	var skillID string
+	for _, item := range cat.Items {
+		if item.Kind == plan.KindSkill {
+			skillID = item.ID
+		}
+	}
+	jevServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{"capability": map[string]any{"type": "choice", "choice": skillID, "confidence": 0.99}}, "usage": map[string]any{"input_tokens": 12, "output_tokens": 3}})
+	}))
+	defer jevServer.Close()
+	opt := localOpt()
+	opt.AutoApply = true
+	opt.KindModes = map[string]string{"skill": KindApply}
+	s, err := NewWithOptions("127.0.0.1:0", host.Claude, &jev.Client{APIKey: "fixture", BaseURL: jevServer.URL, Model: "fixture", HTTP: jevServer.Client()}, io.Discard, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Catalog = cat
+	s.SkillBodies = map[string]string{"skill://review/SKILL.md": "review-only-marker"}
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude","messages":[{"role":"user","content":"summarize this change"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("proxy response status %d", rec.Code)
+	}
+	stats := s.RunStats()
+	usage := stats["selectionJevTokens"].(map[string]any)
+	if usage["inputTokens"] != 12 || usage["outputTokens"] != 3 {
+		t.Fatalf("capability usage omitted: %+v", usage)
+	}
+	if stats["jevHTTP"] != 1 {
+		t.Fatalf("capability request counted incorrectly: %+v", stats["jevHTTP"])
+	}
+}
+
+func TestClaudeSkillDeliveredAsSystemInstruction(t *testing.T) {
+	input := []byte(`{"system":[{"type":"text","text":"original","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"do the task"}]}`)
+	out, err := ApplyHostContext(host.Claude, input, "review-only-marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(jsonOf(got["system"]), "review-only-marker") || strings.Contains(jsonOf(got["messages"]), "review-only-marker") {
+		t.Fatalf("skill not in system instruction: %s", out)
 	}
 }
 
@@ -555,7 +669,11 @@ func TestHandlerRequiredSkillWriteback(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status=%d", rec.Code)
 			}
-			if !bytes.Contains(forwarded, []byte("jev-routing context")) {
+			marker := "jev-routing context"
+			if tc.host == host.Claude {
+				marker = "Locally selected skill instructions"
+			}
+			if !bytes.Contains(forwarded, []byte(marker)) {
 				t.Fatalf("upstream missing applied skill context: %s", forwarded)
 			}
 			if srv.LastDelivered == "" {

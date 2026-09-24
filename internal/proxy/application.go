@@ -38,6 +38,7 @@ type HostExecutor interface {
 
 type Application struct {
 	DecisionID    string
+	Source        string
 	State         string
 	Kind          string
 	CapabilityID  string
@@ -107,7 +108,7 @@ func (s *AppStore) incStart(id string) {
 }
 
 func Apply(store *AppStore, route plan.RouteResult, cat plan.Catalog, bodies map[string]string, generated []string, exec HostExecutor) (*Application, error) {
-	app := &Application{DecisionID: route.DecisionID, State: AppSelected, CapabilityID: route.CapabilityID}
+	app := &Application{DecisionID: route.DecisionID, Source: route.Source, State: AppSelected, CapabilityID: route.CapabilityID}
 	if route.Outcome != plan.RouteSelected {
 		app.State = AppFailed
 		store.put(app)

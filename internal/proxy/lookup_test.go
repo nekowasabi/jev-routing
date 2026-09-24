@@ -21,7 +21,7 @@ func TestLocalLookupStripsToolsAndInjectsDefinitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("JEV_LOOKUP_ROOT", root)
-	prompt := "RewriteWith、extractTools の定義を調べてください。検索して読んで、並列化せず確認してください。"
+	prompt := "Where are RewriteWith and extractTools defined?"
 	raw := chatReq(prompt, []any{
 		map[string]any{"type": "function", "function": map[string]any{"name": "Skill", "description": "run a skill"}},
 		map[string]any{"type": "function", "function": map[string]any{"name": "mcp_search", "description": "mcp"}},
@@ -49,6 +49,26 @@ func TestLocalLookupStripsToolsAndInjectsDefinitions(t *testing.T) {
 	content := msgs[0].(map[string]any)["content"].(string)
 	if !strings.Contains(content, "internal/proxy/rewrite.go:3") || !strings.Contains(content, "internal/proxy/rewrite.go:4") {
 		t.Fatalf("note %q", content)
+	}
+}
+
+func TestLocalLookupKeepsToolsForRequiredSequence(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "proxy")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "rewrite.go"), []byte("package proxy\nfunc RewriteWith() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JEV_LOOKUP_ROOT", root)
+	raw := chatReq("Find RewriteWith. Search and then read its definition in separate sequential tool calls. Write answer.json.", workTools())
+	_, stats, err := RewriteWith(t.Context(), raw, host.Grok, nil, steerOpt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Reason == reasonLocalLookup || stats.ToolAfter == 0 {
+		t.Fatalf("required tool sequence was bypassed: %+v", stats)
 	}
 }
 

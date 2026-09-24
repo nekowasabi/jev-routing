@@ -266,10 +266,16 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.Gated = decision.Gated
 		msgs := asSlice(work["messages"])
 		var last map[string]any
-		if len(msgs) > 0 {
-			last, _ = msgs[len(msgs)-1].(map[string]any)
+		var key string
+		for i := len(msgs) - 1; i >= 0; i-- {
+			last, _ = msgs[i].(map[string]any)
+			if key = toolResultKey(last); key != "" {
+				break
+			}
+			if last == nil || last["role"] != "system" {
+				break
+			}
 		}
-		key := toolResultKey(last)
 		if key == "" {
 			return withoutSelection()
 		}

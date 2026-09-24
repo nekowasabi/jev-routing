@@ -171,6 +171,16 @@ func TestAskFitsOversizedState(t *testing.T) {
 	}
 }
 
+func TestOfficialUsageFields(t *testing.T) {
+	var response Response
+	if err := json.Unmarshal([]byte(`{"usage":{"input_tokens":11,"output_tokens":3}}`), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Usage == nil || response.Usage.InputTokens == nil || *response.Usage.InputTokens != 11 || response.Usage.OutputTokens == nil || *response.Usage.OutputTokens != 3 {
+		t.Fatalf("usage %+v", response.Usage)
+	}
+}
+
 func TestRoutingBatchBudget(t *testing.T) {
 	var calls int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +206,7 @@ func TestRoutingBatchBudget(t *testing.T) {
 				"q-mcp": map[string]any{"type": "choice", "choice": "mcp_tool:slack:search@1", "confidence": 0.9, "probabilities": map[string]float64{"mcp_tool:slack:search@1": 0.9}},
 				"q-cli": map[string]any{"type": "choice", "choice": "cli:test:rg@1", "confidence": 0.9, "probabilities": map[string]float64{"cli:test:rg@1": 0.9}},
 			},
-			"usage": map[string]any{"inputTokens": inTok, "outputTokens": outTok},
+			"usage": map[string]any{"input_tokens": inTok, "output_tokens": outTok},
 		})
 	}))
 	t.Cleanup(srv.Close)

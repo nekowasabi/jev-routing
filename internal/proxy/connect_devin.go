@@ -126,7 +126,7 @@ func rewriteConnectDevinFrame(ctx context.Context, frame []byte, h host.ID, clie
 		return frame, stats, shape, true
 	}
 	if opt.AfterRewrite != nil {
-		rewritten = opt.AfterRewrite(rewritten)
+		rewritten = opt.AfterRewrite(ctx, rewritten)
 	}
 	if !stats.Changed && string(rewritten) == original {
 		return frame, stats, shape, true
@@ -448,7 +448,7 @@ func rewriteConnectDevinNativeProto(ctx context.Context, frame []byte, flags byt
 		return frame, stats, shape, true
 	}
 	if opt.AfterRewrite != nil {
-		rewritten = opt.AfterRewrite(rewritten)
+		rewritten = opt.AfterRewrite(ctx, rewritten)
 	}
 	if !stats.Changed && bytes.Equal(rewritten, lifted) {
 		return frame, stats, shape, true
@@ -585,6 +585,51 @@ func liftDevinChatMessage(item []byte) (map[string]any, bool) {
 	if !ok {
 		return nil, false
 	}
+	var calls []any
+	resultID, resultText := "", ""
+	for _, f := range fields {
+		if f.wire != 2 {
+			continue
+		}
+		switch f.field {
+		case 3:
+			resultText = string(f.raw)
+		case 7:
+			if strings.HasPrefix(string(f.raw), "call_") {
+				resultID = string(f.raw)
+			}
+		case 6:
+			nested, ok := parseProtoFields(f.raw)
+			if !ok {
+				continue
+			}
+			id, name, args := "", "", ""
+			for _, part := range nested {
+				if part.wire != 2 {
+					continue
+				}
+				switch part.field {
+				case 1:
+					id = string(part.raw)
+				case 2:
+					name = string(part.raw)
+				case 3:
+					args = string(part.raw)
+				}
+			}
+			if strings.HasPrefix(id, "call_") && isToolIdentName(name) {
+				calls = append(calls, map[string]any{
+					"id": id, "type": "function", "function": map[string]any{"name": name, "arguments": args},
+				})
+			}
+		}
+	}
+	if len(calls) > 0 {
+		return map[string]any{"role": "assistant", "tool_calls": calls}, true
+	}
+	if resultID != "" && resultText != "" {
+		return map[string]any{"role": "tool", "tool_call_id": resultID, "content": resultText}, true
+	}
 	role := ""
 	content := ""
 	toolName := ""
@@ -610,6 +655,14 @@ func liftDevinChatMessage(item []byte) (map[string]any, bool) {
 	}
 	if content == "" {
 		return nil, false
+	}
+	if role == "" {
+		// Native messages carry a UUID in field 1 without a role label.
+		// Treat it as text history unless field 6 or 7 identified a call.
+		toolName = ""
+		if resultText != "" {
+			content = resultText
+		}
 	}
 	if toolName != "" {
 		switch role {

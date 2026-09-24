@@ -10,9 +10,8 @@ import (
 
 const contextDelimiter = "\n\n--- jev-routing context ---\n"
 
-// ApplyHostContext writes delivered application text back into the last user
-// message. Devin uses the same JSON fields already rewritten by the existing
-// Connect lifts; this does not invent tool_choice or hooks.
+// ApplyHostContext supplies a selected skill as a Claude system instruction or
+// as host conversation text. Devin uses the existing Connect JSON fields.
 func ApplyHostContext(h host.ID, body []byte, extra string) ([]byte, error) {
 	if strings.TrimSpace(extra) == "" {
 		return body, nil
@@ -21,14 +20,35 @@ func ApplyHostContext(h host.ID, body []byte, extra string) ([]byte, error) {
 	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, fmt.Errorf("%s: body is not JSON: %w", h, err)
 	}
-	if !injectUserText(root, extra) {
-		return nil, fmt.Errorf("%s: no user text field to write back", h)
+	applied := false
+	if h == host.Claude {
+		applied = appendClaudeSystem(root, extra)
+	} else {
+		applied = injectUserText(root, extra)
+	}
+	if !applied {
+		return nil, fmt.Errorf("%s: no supported context field", h)
 	}
 	out, err := json.Marshal(root)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func appendClaudeSystem(root map[string]any, extra string) bool {
+	block := map[string]any{"type": "text", "text": "Locally selected skill instructions for this task:\n" + extra}
+	switch system := root["system"].(type) {
+	case nil:
+		root["system"] = []any{block}
+	case string:
+		root["system"] = []any{map[string]any{"type": "text", "text": system}, block}
+	case []any:
+		root["system"] = append(system, block)
+	default:
+		return false
+	}
+	return true
 }
 
 func injectUserText(root map[string]any, extra string) bool {

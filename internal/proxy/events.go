@@ -16,6 +16,7 @@ type Event struct {
 	InstanceID         string             `json:"instanceId"`
 	Ts                 time.Time          `json:"ts"`
 	Host               string             `json:"host"`
+	SessionKey         string             `json:"sessionKey,omitempty"`
 	Source             string             `json:"source"`
 	Reason             string             `json:"reason"`
 	Apply              string             `json:"apply"`

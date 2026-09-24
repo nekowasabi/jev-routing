@@ -123,6 +123,9 @@ func (s *Server) RunStats() map[string]any {
 	snap := s.StatsSnapshot()
 	events, _, _, truncated := s.events.Snapshot(0)
 	apps := s.Apps.Snapshot()
+	s.applyMu.Lock()
+	lastDelivered, applyErr := s.LastDelivered, s.ApplyErr
+	s.applyMu.Unlock()
 	// Compatible keys first.
 	return map[string]any{
 		"requests":            snap["requests"],
@@ -152,8 +155,8 @@ func (s *Server) RunStats() map[string]any {
 		"events":              events,
 		"selectionJevTokens":  selectionJevTokens(events),
 		"eventsTruncated":     truncated || snap["requests"].(int) > len(events),
-		"lastDelivered":       s.LastDelivered,
-		"applyErr":            s.ApplyErr,
+		"lastDelivered":       lastDelivered,
+		"applyErr":            applyErr,
 		"applications":        publicApplications(apps),
 		"class_map":           ClassMap(apps, events, s.Options, string(s.Host)),
 	}
@@ -167,6 +170,7 @@ func publicApplications(apps []*Application) []map[string]any {
 		}
 		row := map[string]any{
 			"decisionId":    a.DecisionID,
+			"source":        a.Source,
 			"state":         a.State,
 			"kind":          a.Kind,
 			"capabilityId":  a.CapabilityID,
@@ -340,15 +344,17 @@ func (s *Server) bindAfterRewrite() {
 	if s == nil || !s.Options.AutoApply {
 		return
 	}
-	s.Options.AfterRewrite = func(body []byte) []byte {
-		s.autoApply(body)
-		if s.LastDelivered == "" {
+	s.Options.AfterRewrite = func(ctx context.Context, body []byte) []byte {
+		extra := s.autoApplyContext(ctx, body)
+		if extra == "" {
 			return body
 		}
-		out, err := ApplyHostContext(s.Host, body, s.LastDelivered)
+		out, err := ApplyHostContext(s.Host, body, extra)
 		if err != nil {
 			if s.Options.ApplicationPolicy == PolicyRequired {
+				s.applyMu.Lock()
 				s.ApplyErr = err.Error()
+				s.applyMu.Unlock()
 			}
 			return body
 		}
@@ -362,9 +368,9 @@ type recordingExec struct {
 	n      int
 }
 
-func (r *recordingExec) DeliverSkill(_ string, body, source string) error {
+func (r *recordingExec) DeliverSkill(_ string, body, _ string) error {
 	r.mu.Lock()
-	r.skills = append(r.skills, "source: "+source+"\n"+body)
+	r.skills = append(r.skills, body)
 	r.mu.Unlock()
 	return nil
 }
@@ -526,6 +532,7 @@ func (s *Server) Handler() http.Handler {
 			}
 			origBytes := len(raw)
 			origJSON := json.Valid(raw)
+			sessionKey := sessionKeyFromBody(raw, s.events.InstanceID)
 			shape := catalogShape(raw)
 			var urlHosts []string
 			if !origJSON {
@@ -584,6 +591,7 @@ func (s *Server) Handler() http.Handler {
 					s.mu.Unlock()
 					s.Log.Print(FormatStats(stats))
 					ev := EventFromStats(stats)
+					ev.SessionKey = sessionKey
 					ev.RequestPath = r.URL.Path
 					ev.Method = r.Method
 					ev.ContentType = ct
@@ -620,10 +628,6 @@ func (s *Server) Handler() http.Handler {
 					} else {
 						s.Passthrough++
 					}
-					s.JevHTTP += jevHTTP
-					s.JevOK += jevOK
-					s.JevFail += jevFail
-					s.JevCacheHits += jevCache
 					if stats.Apply != "" && stats.Apply != applyNone {
 						s.SelectionApplied++
 						if s.SelectionSources == nil {
@@ -640,13 +644,21 @@ func (s *Server) Handler() http.Handler {
 					}
 					s.mu.Unlock()
 					s.Log.Print(FormatStats(stats))
-					s.autoApply(raw)
+					extra := s.autoApplyContext(ctx, raw)
+					s.mu.Lock()
+					s.JevHTTP += jevHTTP
+					s.JevOK += jevOK
+					s.JevFail += jevFail
+					s.JevCacheHits += jevCache
+					s.mu.Unlock()
 					s.observeLastUserResult(raw)
-					if extra := s.LastDelivered; extra != "" {
+					if extra != "" {
 						if withCtx, err := ApplyHostContext(s.Host, rewritten, extra); err == nil {
 							rewritten = withCtx
 						} else if s.Options.ApplicationPolicy == PolicyRequired {
+							s.applyMu.Lock()
 							s.ApplyErr = err.Error()
+							s.applyMu.Unlock()
 						}
 					}
 					raw = rewritten
@@ -666,6 +678,7 @@ func (s *Server) Handler() http.Handler {
 				s.mu.Unlock()
 			}
 			ev := EventFromStats(stats)
+			ev.SessionKey = sessionKey
 			ev.RequestPath = r.URL.Path
 			ev.Method = r.Method
 			ev.ContentType = ct
@@ -780,6 +793,7 @@ func (s *Server) connectJevAttemptHook(seq int64) func(jev.Attempt) {
 		ja := JevAttempt{
 			Purpose: a.Purpose, Ms: a.Duration.Seconds() * 1000,
 			OK: a.OK, Cached: a.Cached, ErrKind: a.ErrKind, Status: a.Status, Questions: a.Questions,
+			InputTokens: usageInputTokens(a.Usage), OutputTokens: usageOutputTokens(a.Usage),
 		}
 		s.mu.Lock()
 		if a.Cached {
@@ -800,6 +814,11 @@ func (s *Server) connectJevAttemptHook(seq int64) func(jev.Attempt) {
 				return
 			}
 			e.JevCalls++
+			if a.Purpose == "selection" {
+				e.SelectionJevCalls++
+			} else {
+				e.OtherJevCalls++
+			}
 			if !a.OK {
 				e.JevFailed++
 			}
@@ -817,6 +836,14 @@ func looksDevinInference(path string) bool {
 
 func looksLikeLLM(path string) bool {
 	p := strings.ToLower(path)
+	// Why: CountTokens is a control request with no usage block, not a model completion.
+	if strings.HasSuffix(p, "/messages/count_tokens") {
+		return false
+	}
+	// Grok session signals and turn deltas contain no model usage.
+	if strings.Contains(p, "/sessions/") && (strings.HasSuffix(p, "/signals") || strings.HasSuffix(p, "/turn-deltas")) {
+		return false
+	}
 	return strings.Contains(p, "/messages") ||
 		strings.Contains(p, "/chat/completions") ||
 		strings.Contains(p, "/responses") ||
@@ -825,9 +852,13 @@ func looksLikeLLM(path string) bool {
 		strings.Contains(p, "/complete")
 }
 
-func (s *Server) autoApply(body []byte) {
+func (s *Server) autoApply(body []byte) string {
+	return s.autoApplyContext(context.Background(), body)
+}
+
+func (s *Server) autoApplyContext(ctx context.Context, body []byte) string {
 	if s == nil || !s.Options.AutoApply {
-		return
+		return ""
 	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
@@ -840,7 +871,7 @@ func (s *Server) autoApply(body []byte) {
 	}
 	var root map[string]any
 	if json.Unmarshal(body, &root) != nil {
-		return
+		return ""
 	}
 	if tools, _ := extractTools(root); len(tools) > 0 {
 		s.catalogMu.Lock()
@@ -849,16 +880,29 @@ func (s *Server) autoApply(body []byte) {
 	}
 	cat, bodies := s.catalogSnapshot()
 	if len(cat.Items) == 0 {
-		return
+		return ""
 	}
 	msgs, _ := locateHistory(root)
+	followup := false
+	if len(msgs) > 0 {
+		for i := len(msgs) - 1; i >= 0; i-- {
+			last, _ := msgs[i].(map[string]any)
+			if last == nil || last["role"] == "system" {
+				continue
+			}
+			if last["role"] != "user" || toolResultKey(last) != "" {
+				followup = true
+			}
+			break
+		}
+	}
 	_, user := itemsFromMessages(msgs)
 	if user == "" {
 		user = fallbackUser(root)
 	}
 	user = plan.WorkRequest(user)
 	if strings.TrimSpace(user) == "" {
-		return
+		return ""
 	}
 	s.ensureSkillBodies()
 	cat, bodies = s.catalogSnapshot()
@@ -866,7 +910,7 @@ func (s *Server) autoApply(body []byte) {
 	if s.Client != nil && s.Client.Live() {
 		ask = func(text string, criteria map[string]string) (string, float64, error) {
 			qs := map[string]jev.Question{"capability": {Type: "choice", Instructions: "pick one capability id", Criteria: criteria}}
-			res, err := s.Client.AskSelectionContext(nil, map[string]any{"request": text}, qs)
+			res, err := s.Client.AskSelectionContext(ctx, map[string]any{"request": text}, qs)
 			if err != nil {
 				return "", 0, err
 			}
@@ -883,9 +927,43 @@ func (s *Server) autoApply(body []byte) {
 	}
 	var explicit []string
 	low := strings.ToLower(user)
+	var skills []plan.Capability
 	for _, item := range cat.Items {
-		if strings.Contains(low, strings.ToLower(item.Name)) && (item.Kind == plan.KindSkill || item.Kind == plan.KindCLI || item.Kind == plan.KindMCP || item.Explicit) {
-			explicit = append(explicit, item.ID)
+		if item.Kind == plan.KindSkill {
+			skills = append(skills, item)
+			if s.Options.KindMode(item.Kind) == KindApply && strings.Contains(low, strings.ToLower(item.Name)) {
+				explicit = append(explicit, item.ID)
+			}
+		}
+	}
+	if len(explicit) == 0 {
+		for _, item := range cat.Items {
+			if item.Kind != plan.KindSkill && item.Provider != "host" && s.Options.KindMode(item.Kind) == KindApply && strings.Contains(low, strings.ToLower(item.Name)) && (item.Kind == plan.KindCLI || item.Kind == plan.KindMCP || item.Explicit) {
+				explicit = append(explicit, item.ID)
+			}
+		}
+	}
+	filterSkills := len(skills) > 0 && len(explicit) == 0
+	if len(explicit) > 0 {
+		item, ok := plan.Lookup(cat, explicit[0])
+		filterSkills = ok && item.Kind == plan.KindSkill
+	}
+	if filterSkills {
+		cat.Items = skills
+		cat.Revision = cat.ComputeRevision()
+	}
+	if app := s.Apps.Get(plan.DecisionIDFor(plan.RouteRequest{Text: user, Host: s.Host, Catalog: cat, NewRequest: true})); app != nil && app.State == AppDelivered && app.Kind == plan.KindSkill {
+		if item, ok := plan.Lookup(cat, app.CapabilityID); ok && bodies[item.Target.SkillBodyRef] != "" {
+			s.LastDelivered = "source: " + item.Target.SkillBodyRef + "\n" + bodies[item.Target.SkillBodyRef]
+			return s.LastDelivered
+		}
+	}
+	if followup {
+		return ""
+	}
+	if len(explicit) == 0 {
+		if len(skills) == 0 {
+			return ""
 		}
 	}
 	route := plan.Route(plan.RouteRequest{Text: user, Host: s.Host, Catalog: cat, Explicit: explicit, NewRequest: true}, ask)
@@ -893,18 +971,18 @@ func (s *Server) autoApply(body []byte) {
 		if s.Options.ApplicationPolicy == PolicyRequired && len(explicit) > 0 {
 			s.ApplyErr = "required application: no selection (" + route.ReasonCode + ")"
 		}
-		return
+		return ""
 	}
 	item, ok := plan.Lookup(cat, route.CapabilityID)
 	if !ok {
 		if s.Options.ApplicationPolicy == PolicyRequired {
 			s.ApplyErr = "required application: unknown capability"
 		}
-		return
+		return ""
 	}
 	mode := s.Options.KindMode(item.Kind)
 	if mode == KindOff || mode == KindFixed || mode == KindObserve {
-		return
+		return ""
 	}
 	if item.Kind != plan.KindSkill {
 		named := false
@@ -915,15 +993,15 @@ func (s *Server) autoApply(body []byte) {
 			}
 		}
 		if !named {
-			return
+			return ""
 		}
 		if reason := inspectBlocksCalls(body); reason != "" {
 			if s.Options.ApplicationPolicy == PolicyRequired {
 				s.ApplyErr = "required application: unsupported " + reason
 			}
-			return
+			return ""
 		}
-		return
+		return ""
 	}
 	app, err := Apply(s.Apps, route, cat, bodies, nil, s.Executor)
 	if err != nil || !Success(app) && s.Options.ApplicationPolicy == PolicyRequired {
@@ -943,6 +1021,7 @@ func (s *Server) autoApply(body []byte) {
 			exec.mu.Unlock()
 		}
 	}
+	return s.LastDelivered
 }
 
 func (s *Server) ensureSkillBodies() {
@@ -1228,27 +1307,6 @@ func (s *Server) observeLastUserResult(raw []byte) {
 	observeJSONResults(s.Apps, raw)
 }
 
-func collectProtoLeafTexts(body []byte, depth int) []string {
-	if depth > 6 || len(body) == 0 {
-		return nil
-	}
-	if protoLikelyLeafText(body) {
-		return []string{string(body)}
-	}
-	fields, ok := parseProtoFields(body)
-	if !ok {
-		return nil
-	}
-	var out []string
-	for _, f := range fields {
-		if f.wire != 2 {
-			continue
-		}
-		out = append(out, collectProtoLeafTexts(f.raw, depth+1)...)
-	}
-	return out
-}
-
 func (s *Server) observeHostFrames(frame []byte) {
 	if s == nil || s.Apps == nil {
 		return
@@ -1264,8 +1322,11 @@ func (s *Server) observeHostFrames(frame []byte) {
 	}
 	if lift, ok := liftDevinNativeProto(payload); ok {
 		s.observeLiftedHostTurns(lift.root)
+	} else {
+		// A lifted request includes the whole tool catalog. Scanning its leaf
+		// strings would mistake a catalog entry for an executed call.
+		s.observeProtoExecLeaves(payload)
 	}
-	s.observeProtoExecLeaves(payload)
 	if inner := firstLD(payload, 1); json.Valid(inner) {
 		s.observeJSONCalls(inner)
 		observeJSONResults(s.Apps, inner)
@@ -1279,7 +1340,7 @@ func (s *Server) observeHostFrames(frame []byte) {
 
 func observedExecName(name string) bool {
 	n := strings.ToLower(strings.TrimSpace(name))
-	if n == "" || strings.ContainsAny(n, " \n\t") {
+	if n == "" || name != strings.TrimSpace(name) || strings.ContainsAny(n, " \n\t") {
 		return false
 	}
 	if n == "get_output" || n == "exec" || n == "exec_command" || n == "bash" || n == "rg" {
@@ -1290,7 +1351,7 @@ func observedExecName(name string) bool {
 
 func observedSubagentName(name string) bool {
 	n := strings.ToLower(strings.TrimSpace(name))
-	if n == "" || strings.ContainsAny(n, " \n\t") {
+	if n == "" || name != strings.TrimSpace(name) || strings.ContainsAny(n, " \n\t") {
 		return false
 	}
 	return n == "agent" || n == "task" || n == "spawn_agent" || n == "spawn_subagent" || n == "run_subagent" || strings.Contains(n, "subagent")
@@ -1301,6 +1362,46 @@ func (s *Server) observeLiftedHostTurns(root map[string]any) {
 		return
 	}
 	msgs, _ := locateHistory(root)
+	known := map[string]bool{}
+	for _, raw := range asSlice(root["tools"]) {
+		if tool, ok := raw.(map[string]any); ok {
+			known[strings.ToLower(toolNameOf(tool))] = true
+		}
+	}
+	for _, msg := range msgs {
+		m, _ := msg.(map[string]any)
+		if m == nil || len(asSlice(m["tool_calls"])) == 0 {
+			continue
+		}
+		// The native lift also sees provider and call IDs. Only catalog names
+		// are tool calls; each accepted call/result keeps its synthetic ID.
+		accepted := map[string]bool{}
+		filtered := make([]any, 0, len(msgs))
+		for _, raw := range msgs {
+			item, _ := raw.(map[string]any)
+			if item == nil {
+				continue
+			}
+			for _, tc := range asSlice(item["tool_calls"]) {
+				call, _ := tc.(map[string]any)
+				fn, _ := call["function"].(map[string]any)
+				name := firstString(fn, "name")
+				id := firstString(call, "id", "call_id")
+				if id != "" && known[strings.ToLower(name)] {
+					accepted[id] = true
+					filtered = append(filtered, map[string]any{"tool_calls": []any{call}})
+				}
+			}
+			if id := firstString(item, "tool_call_id"); accepted[id] {
+				filtered = append(filtered, item)
+			}
+		}
+		if raw, err := json.Marshal(map[string]any{"messages": filtered}); err == nil {
+			s.observeJSONCalls(raw)
+			observeJSONResults(s.Apps, raw)
+		}
+		return
+	}
 	var lastID, lastName, lastResult string
 	for _, m := range msgs {
 		obj, _ := m.(map[string]any)
@@ -1405,44 +1506,36 @@ func (s *Server) observeProtoExecLeaves(raw []byte) {
 	if s == nil || s.Apps == nil {
 		return
 	}
-	leaves := collectProtoLeafTexts(raw, 0)
-	if t := firstLD(raw, 1); protoLikelyText(t) {
-		leaves = append(leaves, string(t))
-	}
-	if protoLikelyText(raw) {
-		leaves = append(leaves, string(raw))
-	}
-	if len(leaves) == 0 {
+	fields, ok := parseProtoFields(raw)
+	if !ok {
 		return
 	}
 	var name, id, result string
-	hits := 0
-	seen := map[string]bool{}
-	for _, t := range leaves {
-		if observedExecName(t) || observedSubagentName(t) {
-			key := strings.ToLower(strings.TrimSpace(t))
-			if !seen[key] {
-				seen[key] = true
-				hits++
-				name = t
+	for _, field := range fields {
+		if field.wire != 2 || !protoLikelyLeafText(field.raw) {
+			continue
+		}
+		text := string(field.raw)
+		switch field.field {
+		case 1:
+			if observedExecName(text) || observedSubagentName(text) {
+				name = text
+			} else if looksExecResult(text) {
+				result = text
 			}
-			continue
-		}
-		if looksCallID(t) {
-			id = t
-			continue
-		}
-		if looksExecResult(t) {
-			result = t
+		case 12:
+			if looksCallID(text) {
+				id = text
+			}
 		}
 	}
-	if hits == 1 && name != "" {
+	if name != "" && id != "" {
 		s.startObservedCall(id, name)
 	}
 	if result != "" {
-		if err := ObserveHostCall(s.Apps, id, result, 0); err != nil {
-			_ = ObserveHostCall(s.Apps, "", result, 0)
-		}
+		// Legacy native exec frames omit the result ID; AppStore accepts it
+		// only when exactly one call is pending.
+		_ = ObserveHostCall(s.Apps, id, result, 0)
 	}
 }
 

@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -371,6 +372,92 @@ func devinNativeGetChatMessageWithHistory() []byte {
 	return raw
 }
 
+func TestObserveDevinNativeHistoryPairsEveryCallAndResult(t *testing.T) {
+	s := &Server{Host: host.Devin, Apps: NewAppStore(), Executor: &recordingExec{}}
+	s.observeHostFrames(connectFrame(0, devinNativeGetChatMessageWithHistory()))
+	for _, id := range []string{"c1", "c2", "c3"} {
+		app := s.Apps.Get(id)
+		if app == nil || app.State != AppVerified || app.CallID != id {
+			t.Fatalf("%s was not paired with its result: %+v", id, app)
+		}
+	}
+	app := s.Apps.Get("c4")
+	if app == nil || app.State != AppStarted {
+		t.Fatalf("unfinished call must remain started: %+v", app)
+	}
+}
+
+func TestObserveDevinNativeHistoryRejectsNonCatalogCallIDAsToolName(t *testing.T) {
+	var raw []byte
+	raw = append(raw, protoString(1, "Read go.mod")...)
+	raw = append(raw, protoRepeated(3, [][]byte{
+		devinNativeChatItem("assistant", "path=go.mod", "call_abc123"),
+		devinNativeChatItem("tool", "module example.org/test", "call_abc123"),
+	})...)
+	raw = append(raw, protoRepeated(10, [][]byte{
+		devinNativeProtoTool("Read", "Read a file"),
+		devinNativeProtoTool("Write", "Write a file"),
+		devinNativeProtoTool("Shell", "Run a command"),
+	})...)
+	s := &Server{Host: host.Devin, Apps: NewAppStore(), Executor: &recordingExec{}}
+	s.observeHostFrames(connectFrame(0, raw))
+	if got := s.Apps.Snapshot(); len(got) != 0 {
+		t.Fatalf("non-catalog call ID was misclassified as a tool: %+v", *got[0])
+	}
+}
+
+func TestObserveDevinNativeWireToolCallAndResult(t *testing.T) {
+	const id = "call_abcdefghijklmnop"
+	call := append(protoString(1, id), protoString(2, "read")...)
+	call = append(call, protoString(3, `{"path":"go.mod"}`)...)
+	assistant := append(protoString(1, "11111111-1111-1111-1111-111111111111"), protoBytes(6, call)...)
+	result := append(protoString(1, "22222222-2222-2222-2222-222222222222"), protoString(3, "module example.org/test")...)
+	result = append(result, protoString(7, id)...)
+	var raw []byte
+	raw = append(raw, protoString(1, "Read go.mod")...)
+	raw = append(raw, protoRepeated(3, [][]byte{assistant, result})...)
+	raw = append(raw, protoRepeated(10, [][]byte{
+		devinNativeProtoTool("read", "Read a file"),
+		devinNativeProtoTool("write", "Write a file"),
+		devinNativeProtoTool("exec", "Run command"),
+	})...)
+	s := &Server{Host: host.Devin, Apps: NewAppStore(), Executor: &recordingExec{}}
+	s.observeHostFrames(connectFrame(0, raw))
+	app := s.Apps.Get(id)
+	if app == nil || app.State != AppVerified || app.CallID != id || !strings.Contains(app.Result, "module example.org/test") {
+		t.Fatalf("real native wire pair not observed: %+v", app)
+	}
+}
+
+func TestLiftDevinNativeTextDoesNotTreatMessageIDAsTool(t *testing.T) {
+	item := append(protoString(1, "a1111111-1111-1111-1111-111111111111"), protoString(3, "Read the module file")...)
+	got, ok := liftDevinChatMessage(item)
+	if !ok || len(asSlice(got["tool_calls"])) != 0 || got["_tool"] != nil || got["content"] != "Read the module file" {
+		t.Fatalf("message ID became tool call: %+v", got)
+	}
+}
+
+func TestObserveDevinProtoLeafRequiresCallID(t *testing.T) {
+	s := &Server{Host: host.Devin, Apps: NewAppStore(), Executor: &recordingExec{}}
+	s.observeHostFrames(connectFrame(0, protoString(1, "task")))
+	if got := s.Apps.Snapshot(); len(got) != 0 {
+		t.Fatalf("tool name without call ID was recorded: %+v", *got[0])
+	}
+}
+
+func TestObserveDevinProtoLeafRejectsPaddedNames(t *testing.T) {
+	s := &Server{Host: host.Devin, Apps: NewAppStore(), Executor: &recordingExec{}}
+	for _, name := range []string{" task", " bash"} {
+		raw := append(protoString(1, name), protoString(12, "f1becc7a-3c48-4004-b4c0-9e2ea2894417")...)
+		s.observeHostFrames(connectFrame(0, raw))
+	}
+	// Catalog and history leaves must not be paired with a top-level message ID.
+	s.observeHostFrames(connectFrame(0, append(protoString(2, "task"), protoString(12, "f1becc7a-3c48-4004-b4c0-9e2ea2894417")...)))
+	if got := s.Apps.Snapshot(); len(got) != 0 {
+		t.Fatalf("padded proto leaves became tool calls: %+v", got)
+	}
+}
+
 func TestRewriteConnectDevinNativeProtoKeepsHistory(t *testing.T) {
 	raw := devinNativeGetChatMessageWithHistory()
 	frame := connectFrame(0, raw)
@@ -669,6 +756,7 @@ func TestHandlerConnectDevinRecordsJevAttempt(t *testing.T) {
 	jevSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"model": "fake",
+			"usage": map[string]any{"input_tokens": 31, "output_tokens": 7},
 			"answers": map[string]any{
 				"next_tool":  map[string]any{"type": "choice", "choice": "grep", "confidence": 0.9, "probabilities": adoptTestProbs("grep")},
 				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
@@ -708,6 +796,12 @@ func TestHandlerConnectDevinRecordsJevAttempt(t *testing.T) {
 	}
 	if e.JevAttempts[0].Purpose != "selection" || !e.JevAttempts[0].OK {
 		t.Fatalf("attempt=%+v", e.JevAttempts[0])
+	}
+	if got := e.JevAttempts[0].InputTokens; got == nil || *got != 31 {
+		t.Fatalf("jev input tokens=%v", got)
+	}
+	if got := e.JevAttempts[0].OutputTokens; got == nil || *got != 7 {
+		t.Fatalf("jev output tokens=%v", got)
 	}
 	if e.Confidence == nil || e.NeedsTool == nil {
 		t.Fatalf("confidence=%v needsTool=%v", e.Confidence, e.NeedsTool)
@@ -1008,7 +1102,7 @@ func TestHandlerConnectDevinAutoAppliesSkill(t *testing.T) {
 func TestConnectDevinWritesExistingPromptContext(t *testing.T) {
 	extra := "source: skill://review/SKILL.md"
 	opt := localOpt()
-	opt.AfterRewrite = func(body []byte) []byte {
+	opt.AfterRewrite = func(_ context.Context, body []byte) []byte {
 		out, err := ApplyHostContext(host.Devin, body, extra)
 		if err != nil {
 			t.Fatalf("writeback %v body=%s", err, body)

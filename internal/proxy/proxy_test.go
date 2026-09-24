@@ -41,7 +41,10 @@ func TestLooksLikeLLM(t *testing.T) {
 		"/v1/messages", "/v1/chat/completions", "/v1/responses",
 		"/v3/organizations/org/sessions", "/v1/inference",
 	}
-	no := []string{"/healthz", "/stats"}
+	no := []string{
+		"/healthz", "/stats",
+		"/v1/sessions/session-id/signals", "/v1/sessions/session-id/turn-deltas",
+	}
 	for _, p := range yes {
 		if !looksLikeLLM(p) {
 			t.Fatalf("want true for %s", p)
@@ -50,6 +53,34 @@ func TestLooksLikeLLM(t *testing.T) {
 	for _, p := range no {
 		if looksLikeLLM(p) {
 			t.Fatalf("want false for %s", p)
+		}
+	}
+}
+
+func TestGrokSessionControlDoesNotCountAsInference(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_OAUTH_UPSTREAM", upstream.URL)
+	srv, err := New("127.0.0.1:0", host.Grok, nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/v1/sessions/session-id/signals", "/v1/sessions/session-id/turn-deltas"} {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d", path, rec.Code)
+		}
+	}
+	if srv.RequestCount() != 0 {
+		t.Fatalf("session control counted as %d inference requests", srv.RequestCount())
+	}
+	events, _, _, _ := srv.Events().Snapshot(0)
+	for _, event := range events {
+		if event.Reason != reasonNotLLMPath {
+			t.Fatalf("control event %+v", event)
 		}
 	}
 }

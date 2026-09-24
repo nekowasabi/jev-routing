@@ -17,7 +17,9 @@ import (
 // removes the tool catalog. The model then only generates the reply. Skill,
 // MCP, and other tools are not offered for that turn.
 func applyLocalLookup(root map[string]any, user string, actions []plan.Action, opt Options) bool {
-	if opt.Shadow || !opt.Transforms.Filter || len(actions) > 0 {
+	// Why: A task requiring search and read calls needs those calls as evidence;
+	// answering from a local lookup would hide a failed tool sequence.
+	if opt.Shadow || !opt.Transforms.Filter || len(actions) > 0 || plan.SequentialLocate(user) {
 		return false
 	}
 	names := plan.DefinitionSymbols(user)

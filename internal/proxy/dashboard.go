@@ -68,6 +68,7 @@ func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
 	all, _, _, _ := s.events.Snapshot(0)
 	s.mu.Lock()
 	counts := s.events.Counts()
+	jevHTTP := s.JevHTTP
 	s.mu.Unlock()
 	apps := s.Apps.Snapshot()
 	metrics := MergeMetrics(MetricsFromEvents(all), MetricsFromApps(apps))
@@ -89,8 +90,10 @@ func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
 			"compaction": s.Options.Compaction,
 		},
 		"events":           events,
+		"jevHTTP":          jevHTTP,
 		"metrics":          metrics,
 		"applications":     publicApplications(apps),
+		"eventsTruncated":  truncated,
 		"historyTruncated": truncated,
 	})
 }

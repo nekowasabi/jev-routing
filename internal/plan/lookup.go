@@ -1,6 +1,9 @@
 package plan
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // mixedIdent matches a single camel-case identifier. All-caps tokens such as
 // JSON do not match, so a definition task does not treat them as symbols.
@@ -13,7 +16,7 @@ func DefinitionSymbols(task string) []string {
 	// Keep the text before the locate marker. The names usually sit there,
 	// and taskText drops that prefix.
 	task = WorkRequest(task)
-	if !sequentialLocate(task) {
+	if !sequentialLocate(task) && !strings.Contains(strings.ToLower(task), "where are") {
 		return nil
 	}
 	seen := map[string]bool{}
