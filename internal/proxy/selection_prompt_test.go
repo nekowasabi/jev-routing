@@ -43,7 +43,7 @@ func TestSelectionUsesCompleteCandidateCapabilities(t *testing.T) {
 			"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
 		}})
 	})
-	decision, reason, err := askNextTool(context.Background(), client, "Find the function definition", nil,
+	decision, reason, err := askNextTool(context.Background(), client, host.Grok, "Find the function definition", nil,
 		[]plan.Spec{{Name: "exec", Desc: description}, {Name: "wait"}}, "", nil)
 	if err != nil || reason != reasonCoverage || decision.Tool != "exec" {
 		t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
@@ -107,7 +107,7 @@ func TestUncertainChoiceRestrictsToTaskPhase(t *testing.T) {
 	client := jevRaw(t, uncertainChoice(map[string]float64{"grep": 0.5, "read_file": 0.3, "run_terminal_command": 0.2}, map[string]any{
 		"task_phase": map[string]any{"type": "choice", "choice": plan.PhaseExecute, "confidence": 0.9},
 	}))
-	decision, reason, err := askNextTool(context.Background(), client, "run the tests", nil, phaseSpecs(), "", nil)
+	decision, reason, err := askNextTool(context.Background(), client, host.Grok, "run the tests", nil, phaseSpecs(), "", nil)
 	if err != nil || reason != reasonCoverageShort || !decision.Passthrough {
 		t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
 	}
@@ -118,7 +118,7 @@ func TestPhaseSetKeepsRepeatedTool(t *testing.T) {
 		"task_phase":       map[string]any{"type": "choice", "choice": plan.PhaseExecute, "confidence": 0.9},
 		"repeat_same_tool": map[string]any{"type": "noul", "noul": 0.9},
 	}))
-	decision, reason, err := askNextTool(context.Background(), client, "run the tests",
+	decision, reason, err := askNextTool(context.Background(), client, host.Grok, "run the tests",
 		[]plan.Action{{Tool: "grep", Result: "no match"}}, phaseSpecs(), "", nil)
 	if err != nil || reason != reasonCoverageShort || !decision.Passthrough {
 		t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)
@@ -181,7 +181,7 @@ func TestSelectionAcceptsOfficialNoulWithoutConfidence(t *testing.T) {
 					"needs_tool": map[string]any{"type": "noul", "noul": tc.probability},
 				}})
 			})
-			decision, reason, err := askNextTool(context.Background(), client, "Find the function definition", nil,
+			decision, reason, err := askNextTool(context.Background(), client, host.Grok, "Find the function definition", nil,
 				[]plan.Spec{{Name: "exec", Desc: "Run shell commands to search and read files"}}, "", nil)
 			if err != nil || reason != tc.wantReason || decision.Tool != tc.wantTool || decision.Confidence != tc.confidence || decision.Done != tc.probability {
 				t.Fatalf("decision=%+v reason=%s err=%v", decision, reason, err)

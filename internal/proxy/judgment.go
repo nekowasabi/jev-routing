@@ -116,9 +116,6 @@ func judgmentExtras(user string, actions []plan.Action, items []compact.Item, na
 	if rel := relatedHistory(items, 6); len(rel) > 0 {
 		extra["related_history"] = rel
 	}
-	if len(actions) > 0 {
-		extra["recent_tool_results"] = actions
-	}
 	if cons := explicitConstraints(root, user); len(cons) > 0 {
 		extra["explicit_constraints"] = cons
 	}

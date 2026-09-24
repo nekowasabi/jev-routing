@@ -2,12 +2,32 @@ package proxy
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
 	"github.com/nekowasabi/jev-routing/internal/plan"
 )
+
+// countingJevAnswers wraps jevAnswers with a call counter so tests can assert
+// Jev was (or was not) invoked, not just how the response was applied.
+func countingJevAnswers(t *testing.T, choice string) (*jev.Client, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	c := jevAnswers(t, choice, 0.95, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"answers": map[string]any{
+				"next_tool":  map[string]any{"type": "choice", "choice": choice, "confidence": 0.95, "probabilities": adoptTestProbs(choice)},
+				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
+			},
+		})
+	})
+	return c, &calls
+}
 
 func claudeAdviseReq(msgs ...any) map[string]any {
 	return map[string]any{
@@ -125,5 +145,113 @@ func TestClaudeAdviseDoesNotAttachToOldToolResult(t *testing.T) {
 	_, _, stats := rewriteClaude(t, opt, "Read", claudeAdviseReq(msgs...))
 	if stats.Apply == applyAdvise {
 		t.Fatalf("advice attached to an earlier turn: %+v", stats)
+	}
+}
+
+// TestClaudeAdviseSkipsJevWithoutTarget covers change 1: a Claude request
+// with no trailing tool_result has nowhere for adviseClaude to attach its
+// hint, so Jev must not be called at all. Once a tool_use/tool_result pair
+// exists, Jev is asked and the advice is inserted as before.
+func TestClaudeAdviseSkipsJevWithoutTarget(t *testing.T) {
+	opt := steerOpt()
+	opt.SelectionMode = SelectionJev
+	client, calls := countingJevAnswers(t, "Grep")
+
+	prompt := map[string]any{"role": "user", "content": "find where sessions are stored"}
+	req1 := claudeAdviseReq(prompt)
+	raw1, _ := json.Marshal(req1)
+	out1, stats1, err := RewriteWith(t.Context(), raw1, host.Claude, client, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("jev called with no advise target: %d calls", calls.Load())
+	}
+	if stats1.Apply == applyAdvise || stats1.Reason != reasonNoAdviseTarget || string(out1) != string(raw1) {
+		t.Fatalf("turn1: unexpected stats/output: %+v out=%s", stats1, out1)
+	}
+
+	turn2 := append([]any{prompt}, claudeToolTurn("toolu_1")...)
+	raw2, _ := json.Marshal(claudeAdviseReq(turn2...))
+	out2, stats2, err := RewriteWith(t.Context(), raw2, host.Claude, client, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("jev not called with an advise target: %d calls", calls.Load())
+	}
+	if stats2.Apply != applyAdvise || !strings.Contains(string(out2), "jev-routing") {
+		t.Fatalf("turn2: advice not applied: %+v out=%s", stats2, out2)
+	}
+}
+
+// TestClaudeAdviseOffByDefaultSkipsJev covers the decision recorded in
+// docs/MEMO.md: a Jev judgment for Claude's advise path costs a median
+// 7,406 input tokens but never narrows tools[], so it must not fire unless
+// JEV_CLAUDE_ADVISE=on (Options.ClaudeAdvise) is explicitly set.
+func TestClaudeAdviseOffByDefaultSkipsJev(t *testing.T) {
+	opt := steerOpt()
+	opt.SelectionMode = SelectionJev
+	opt.ClaudeAdvise = false
+	client, calls := countingJevAnswers(t, "Grep")
+
+	prompt := map[string]any{"role": "user", "content": "find where sessions are stored"}
+	turn2 := append([]any{prompt}, claudeToolTurn("toolu_1")...)
+	raw, _ := json.Marshal(claudeAdviseReq(turn2...))
+	out, stats, err := RewriteWith(t.Context(), raw, host.Claude, client, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("jev called despite advise off: %d calls", calls.Load())
+	}
+	if stats.Apply == applyAdvise || stats.Reason != reasonClaudeAdviseOff || string(out) != string(raw) {
+		t.Fatalf("unexpected stats/output: %+v out=%s", stats, out)
+	}
+}
+
+// TestClaudeAdviseOnCallsJev is the counterpart of
+// TestClaudeAdviseOffByDefaultSkipsJev: with the option enabled, Jev is
+// asked and the advice is inserted exactly as before this change.
+func TestClaudeAdviseOnCallsJev(t *testing.T) {
+	opt := steerOpt()
+	opt.SelectionMode = SelectionJev
+	opt.ClaudeAdvise = true
+	client, calls := countingJevAnswers(t, "Grep")
+
+	prompt := map[string]any{"role": "user", "content": "find where sessions are stored"}
+	turn2 := append([]any{prompt}, claudeToolTurn("toolu_1")...)
+	raw, _ := json.Marshal(claudeAdviseReq(turn2...))
+	out, stats, err := RewriteWith(t.Context(), raw, host.Claude, client, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("jev not called with advise on: %d calls", calls.Load())
+	}
+	if stats.Apply != applyAdvise || !strings.Contains(string(out), "jev-routing") {
+		t.Fatalf("advice not applied: %+v out=%s", stats, out)
+	}
+}
+
+// TestCodexFirstTurnStillAsksJev guards change 1's scope: only Claude's
+// advise path skips Jev when there is no insertion target. Codex has no
+// advise mechanism, so its first turn must ask Jev exactly as before.
+func TestCodexFirstTurnStillAsksJev(t *testing.T) {
+	opt := steerOpt()
+	opt.SelectionMode = SelectionJev
+	client, calls := countingJevAnswers(t, "grep")
+	body, _ := json.Marshal(map[string]any{
+		"model": "gpt-5.6-terra",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "find where sessions are stored"},
+		},
+		"tools": workTools(),
+	})
+	if _, _, err := rewriteSteer(body, host.Codex, client); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("codex first turn should still ask jev once: %d calls", calls.Load())
 	}
 }

@@ -442,6 +442,17 @@ func (s *Server) Handler() http.Handler {
 				})
 			}
 		})
+		if s.Host == host.Claude && s.Options.ClaudeClearToolUses {
+			res.Body = wrapClearEdits(res.Body, ct, func(toolUses, inputTokens int, found bool) {
+				if !found {
+					return
+				}
+				s.events.Update(seq, func(e *Event) {
+					e.ClearedToolUses = toolUses
+					e.ClearedInputTokens = inputTokens
+				})
+			})
+		}
 		res.Body = wrapUsage(res.Body, ct, func(u *NormalizedUsage, partial bool, missing, finish string) {
 			bodyMs := time.Since(started).Seconds() * 1000
 			s.events.Update(seq, func(e *Event) {
@@ -676,6 +687,14 @@ func (s *Server) Handler() http.Handler {
 				s.CharsBefore += len(raw)
 				s.CharsAfter += len(raw)
 				s.mu.Unlock()
+			}
+			// Why: applied independently of RewriteWith's outcome (including the
+			// claude_advise_disabled early return, rewrite.go's reasonClaudeAdviseOff)
+			// so the clear-tool-uses condition does not require advise to be on too.
+			if origJSON && s.Host == host.Claude {
+				if edited, ok := applyClaudeClearToolUses(raw, r.Header, s.Options); ok {
+					raw = edited
+				}
 			}
 			ev := EventFromStats(stats)
 			ev.SessionKey = sessionKey

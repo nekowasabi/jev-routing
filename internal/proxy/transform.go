@@ -1,6 +1,9 @@
 package proxy
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 const (
 	transformCompact  = "compact"
@@ -78,6 +81,42 @@ type contrastSpec struct {
 	Covers   string   `json:"covers"`
 	NotFor   string   `json:"not_for"`
 	Examples []string `json:"examples"`
+}
+
+const criteriaByteLimit = 300
+
+// shortenCriteria trims a Jev judgment candidate description to its first
+// paragraph, then to at most criteriaByteLimit bytes, cutting at the last
+// sentence end within that budget so the meaning stays intact. This only
+// changes what is sent to Jev for the next_tool choice; the upstream tool
+// definition itself is untouched.
+func shortenCriteria(desc string) string {
+	if i := strings.Index(desc, "\n\n"); i >= 0 {
+		desc = desc[:i]
+	}
+	if len(desc) <= criteriaByteLimit {
+		return desc
+	}
+	cut := criteriaByteLimit
+	for cut > 0 && !utf8.RuneStart(desc[cut]) {
+		cut--
+	}
+	window := desc[:cut]
+	end := -1
+	if i := strings.LastIndex(window, "。"); i >= 0 {
+		if e := i + len("。"); e > end {
+			end = e
+		}
+	}
+	if i := strings.LastIndex(window, ". "); i >= 0 {
+		if e := i + 1; e > end { // keep the period, drop the trailing space
+			end = e
+		}
+	}
+	if end > 0 {
+		return window[:end]
+	}
+	return window + "…"
 }
 
 func criteriaFor(name, desc string, enabled bool) string {

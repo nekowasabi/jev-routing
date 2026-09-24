@@ -95,6 +95,7 @@ func TestCodexAstraReasoningPassesThrough(t *testing.T) {
 func steerOpt() Options {
 	o := DefaultOptions()
 	o.Transforms.Filter = true
+	o.ClaudeAdvise = true
 	return o
 }
 

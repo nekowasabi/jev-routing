@@ -2,10 +2,12 @@ package proxy
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
 )
 
 func TestParseTransformsIndependent(t *testing.T) {
@@ -46,6 +48,130 @@ func TestCriteriaForRegisteredPair(t *testing.T) {
 	}
 	if criteriaFor("read", "raw", true) != "raw" {
 		t.Fatal("unregistered neighbor must stay raw")
+	}
+}
+
+func TestShortenCriteriaFirstParagraphAndByteLimit(t *testing.T) {
+	desc := strings.Repeat("Do a thing carefully. ", 20) + "\n\nSecond paragraph with implementation detail Jev does not need."
+	got := shortenCriteria(desc)
+	if strings.Contains(got, "Second paragraph") {
+		t.Fatalf("second paragraph must be dropped: %q", got)
+	}
+	if len(got) > criteriaByteLimit {
+		t.Fatalf("must stay within %d bytes: %d bytes: %q", criteriaByteLimit, len(got), got)
+	}
+	if !strings.HasSuffix(got, ".") {
+		t.Fatalf("must cut at a sentence end: %q", got)
+	}
+
+	noSentence := strings.Repeat("x", 400)
+	got2 := shortenCriteria(noSentence)
+	if !strings.HasSuffix(got2, "…") || len(got2) != criteriaByteLimit+len("…") {
+		t.Fatalf("must fall back to a hard cut with an ellipsis: %d bytes: %q", len(got2), got2)
+	}
+
+	short := "Search files with a regex."
+	if got := shortenCriteria(short); got != short {
+		t.Fatalf("short single-paragraph description must stay unchanged: %q", got)
+	}
+}
+
+func toolDescByName(root map[string]any, name string) string {
+	for _, raw := range asSlice(root["tools"]) {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if n, _ := m["name"].(string); n == name {
+			d, _ := m["description"].(string)
+			return d
+		}
+		if fn, ok := m["function"].(map[string]any); ok {
+			if n, _ := fn["name"].(string); n == name {
+				d, _ := fn["description"].(string)
+				return d
+			}
+		}
+	}
+	return ""
+}
+
+// TestClaudeCriteriaShortenedNotCodexNorUpstream covers change 3: only
+// Claude's Jev judgment criteria is shortened, Codex's is sent unchanged, and
+// neither host's forwarded tool definition is altered.
+func TestClaudeCriteriaShortenedNotCodexNorUpstream(t *testing.T) {
+	longDesc := strings.Repeat("Run a shell command safely and capture its output. ", 12) +
+		"\n\nSecond paragraph with implementation detail that Jev does not need to pick the tool."
+	opt := steerOpt()
+	opt.SelectionMode = SelectionJev
+
+	captureCriteria := func(t *testing.T, choice string, got *string) *jev.Client {
+		return jevAnswers(t, choice, 0.9, 0.9, 0.9, func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Questions map[string]jev.Question `json:"questions"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			*got = req.Questions["next_tool"].Criteria["Bash"]
+			_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{
+				"next_tool":  map[string]any{"type": "choice", "choice": choice, "confidence": 0.9, "probabilities": adoptTestProbs(choice)},
+				"needs_tool": map[string]any{"type": "noul", "noul": 0.9, "confidence": 0.9},
+			}})
+		})
+	}
+
+	// Claude: criteria sent to Jev is shortened; the forwarded body keeps the full description.
+	var gotClaude string
+	claudeClient := captureCriteria(t, "Read", &gotClaude)
+	claudeReq := claudeAdviseReq(claudeToolTurn("toolu_1")...)
+	claudeReq["tools"] = []any{
+		map[string]any{"name": "Bash", "description": longDesc},
+		map[string]any{"name": "Read", "description": "Read a file from disk."},
+	}
+	rawClaude, _ := json.Marshal(claudeReq)
+	outClaude, statsClaude, err := RewriteWith(t.Context(), rawClaude, host.Claude, claudeClient, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gotClaude, "Second paragraph") || len(gotClaude) > criteriaByteLimit {
+		t.Fatalf("claude criteria must be shortened: %d bytes: %q", len(gotClaude), gotClaude)
+	}
+	if statsClaude.Apply != applyAdvise {
+		t.Fatalf("claude advice must still apply: %+v", statsClaude)
+	}
+	var gotClaudeBody map[string]any
+	if err := json.Unmarshal(outClaude, &gotClaudeBody); err != nil {
+		t.Fatal(err)
+	}
+	if toolDescByName(gotClaudeBody, "Bash") != longDesc {
+		t.Fatalf("claude upstream tool description changed: %q", toolDescByName(gotClaudeBody, "Bash"))
+	}
+
+	// Codex: same description reaches Jev and upstream unshortened.
+	var gotCodex string
+	codexClient := captureCriteria(t, "Bash", &gotCodex)
+	rawCodex, _ := json.Marshal(map[string]any{
+		"model": "gpt-5.6-terra",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "run the build"},
+		},
+		"tools": []any{
+			grokFn("Bash", longDesc),
+			grokFn("Read", "Read a file from disk."),
+		},
+	})
+	outCodex, _, err := RewriteWith(t.Context(), rawCodex, host.Codex, codexClient, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotCodex != longDesc {
+		t.Fatalf("codex criteria must stay unchanged: %d bytes: %q", len(gotCodex), gotCodex)
+	}
+	var gotCodexBody map[string]any
+	if err := json.Unmarshal(outCodex, &gotCodexBody); err != nil {
+		t.Fatal(err)
+	}
+	if toolDescByName(gotCodexBody, "Bash") != longDesc {
+		t.Fatalf("codex upstream tool description changed: %q", toolDescByName(gotCodexBody, "Bash"))
 	}
 }
 

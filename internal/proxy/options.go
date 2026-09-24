@@ -48,24 +48,42 @@ type Options struct {
 	KindModes         map[string]string
 	AfterRewrite      func(context.Context, []byte) []byte
 	Shadow            bool
-	Transforms        TransformOptions
-	CostGateMax       int
+	// ClaudeAdvise enables the Jev call on Claude's advise path (reminder-only
+	// hint, no tool_choice narrowing). Off by default: it costs a Jev judgment
+	// without narrowing tools[], a net token cost. See docs/MEMO.md.
+	ClaudeAdvise bool
+	// ClaudeClearToolUses adds the clear_tool_uses_20250919 context-management
+	// edit to Claude requests so old tool_use/tool_result pairs are cleared
+	// server-side once the trigger is hit. Off by default; see docs/MEMO.md.
+	ClaudeClearToolUses bool
+	ClaudeClearTrigger  int
+	ClaudeClearAtLeast  int
+	ClaudeClearKeep     int
+	// ClaudeClearExclude names tools the clear_tool_uses_20250919 edit must
+	// never clear (Anthropic's exclude_tools field). Empty by default, which
+	// omits the key entirely; see docs/MEMO.md.
+	ClaudeClearExclude []string
+	Transforms         TransformOptions
+	CostGateMax        int
 	// hints is shared by every copy of these Options (one per proxy server).
 	hints *hintStore
 }
 
 func DefaultOptions() Options {
 	return Options{
-		Mode:              ModeFilter,
-		Compaction:        CompactionOn,
-		Reasoning:         ReasoningLegacy,
-		SelectionMode:     SelectionHybrid,
-		ArgsTools:         map[string]bool{},
-		DirectTools:       map[string]bool{},
-		ApplicationPolicy: "",
-		KindModes:         defaultKindModes(),
-		Transforms:        defaultTransforms(),
-		hints:             newHintStore(),
+		Mode:               ModeFilter,
+		Compaction:         CompactionOn,
+		Reasoning:          ReasoningLegacy,
+		SelectionMode:      SelectionHybrid,
+		ArgsTools:          map[string]bool{},
+		DirectTools:        map[string]bool{},
+		ApplicationPolicy:  "",
+		KindModes:          defaultKindModes(),
+		Transforms:         defaultTransforms(),
+		ClaudeClearTrigger: defaultClearTrigger,
+		ClaudeClearAtLeast: defaultClearAtLeast,
+		ClaudeClearKeep:    defaultClearKeep,
+		hints:              newHintStore(),
 	}
 }
 
@@ -125,6 +143,46 @@ func OptionsFromEnv() (Options, error) {
 		default:
 			return o, fmt.Errorf("invalid JEV_SHADOW %q (on|off)", v)
 		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_CLAUDE_ADVISE")); v != "" {
+		switch v {
+		case "1", "true", "on":
+			o.ClaudeAdvise = true
+		case "0", "false", "off":
+			o.ClaudeAdvise = false
+		default:
+			return o, fmt.Errorf("invalid JEV_CLAUDE_ADVISE %q (on|off)", v)
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_CLAUDE_CLEAR_TOOL_USES")); v != "" {
+		switch v {
+		case "1", "true", "on":
+			o.ClaudeClearToolUses = true
+		case "0", "false", "off":
+			o.ClaudeClearToolUses = false
+		default:
+			return o, fmt.Errorf("invalid JEV_CLAUDE_CLEAR_TOOL_USES %q (on|off)", v)
+		}
+	}
+	for env, dst := range map[string]*int{
+		"JEV_CLAUDE_CLEAR_TRIGGER":  &o.ClaudeClearTrigger,
+		"JEV_CLAUDE_CLEAR_AT_LEAST": &o.ClaudeClearAtLeast,
+		"JEV_CLAUDE_CLEAR_KEEP":     &o.ClaudeClearKeep,
+	} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return o, fmt.Errorf("invalid %s %q", env, v)
+			}
+			*dst = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_CLAUDE_CLEAR_EXCLUDE")); v != "" {
+		names, err := parseToolNameList(v)
+		if err != nil {
+			return o, fmt.Errorf("invalid JEV_CLAUDE_CLEAR_EXCLUDE %q: %w", v, err)
+		}
+		o.ClaudeClearExclude = names
 	}
 	if v := strings.TrimSpace(os.Getenv("JEV_TRANSFORMS")); v != "" {
 		tr, err := parseTransforms(v)
@@ -233,6 +291,25 @@ func parseNameList(s string) (map[string]bool, error) {
 			return nil, fmt.Errorf("duplicate tool name %q", name)
 		}
 		out[name] = true
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("empty tool list")
+	}
+	return out, nil
+}
+
+// parseToolNameList splits a comma-separated tool name list, trimming
+// whitespace and dropping empty entries. Unlike parseNameList it returns an
+// ordered slice (exclude_tools is a JSON array, not a set) and allows
+// duplicates.
+func parseToolNameList(s string) ([]string, error) {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("empty tool list")

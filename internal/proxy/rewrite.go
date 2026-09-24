@@ -52,6 +52,8 @@ const (
 	reasonAliasUnresolved    = "alias_unresolved"
 	reasonLocalLookup        = "local_lookup"
 	reasonFilterOff          = "filter_off"
+	reasonNoAdviseTarget     = "no_advise_target"
+	reasonClaudeAdviseOff    = "claude_advise_disabled"
 
 	sourceLocal       = "local"
 	sourceJev         = "jev"
@@ -193,6 +195,14 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.Reason = reasonFilterOff
 		return body, stats, nil
 	}
+	// Why: a Jev call for Claude advise costs ~7,406 median input tokens per
+	// judgment but doesn't narrow Claude's tool set (advise only appends a
+	// reminder), so it's a net token cost. Off by default; see docs/MEMO.md.
+	if h == host.Claude && !opt.ClaudeAdvise {
+		stats.Chosen = "passthrough:" + reasonClaudeAdviseOff
+		stats.Reason = reasonClaudeAdviseOff
+		return body, stats, nil
+	}
 
 	elig := inspectRequest(root)
 	stats.Protocol = elig.Protocol
@@ -264,18 +274,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		stats.Chosen = tool
 		stats.Done = decision.Done
 		stats.Gated = decision.Gated
-		msgs := asSlice(work["messages"])
-		var last map[string]any
-		var key string
-		for i := len(msgs) - 1; i >= 0; i-- {
-			last, _ = msgs[i].(map[string]any)
-			if key = toolResultKey(last); key != "" {
-				break
-			}
-			if last == nil || last["role"] != "system" {
-				break
-			}
-		}
+		last, key := adviseInsertTarget(work)
 		if key == "" {
 			return withoutSelection()
 		}
@@ -333,6 +332,15 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	// Hybrid skips Jev only for selected/constraint outcomes, never for word-match defer.
 	shouldAskJev := opt.SelectionMode == SelectionJev ||
 		(opt.SelectionMode == SelectionHybrid && decision.Outcome != plan.OutcomeSelected)
+	// Why: advise has nowhere to attach its hint on this turn (no trailing
+	// tool_result), so a Jev call here would be paid for and never applied.
+	if shouldAskJev && advise {
+		if _, key := adviseInsertTarget(work); key == "" {
+			stats.Reason = reasonNoAdviseTarget
+			stats.Chosen = "passthrough:" + stats.Reason
+			return withoutSelection()
+		}
+	}
 	if shouldAskJev && skipClassifier(len(names), stats.MissingFlags, opt.CostGateMax) {
 		if len(stats.MissingFlags) > 0 {
 			stats.Reason = reasonMissing
@@ -361,7 +369,7 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 	}
 	if shouldAskJev && client != nil && client.Live() {
 		asked = true
-		live, verr, err := askNextTool(ctx, client, user, actions, toolSpecs, lastAssistantText(msgs), func() map[string]any {
+		live, verr, err := askNextTool(ctx, client, h, user, actions, toolSpecs, lastAssistantText(msgs), func() map[string]any {
 			extra := judgmentExtras(user, actions, items, names, root, stats.MustKeep, stats.MissingFlags)
 			extra["criteria_enabled"] = opt.Transforms.Criteria
 			return extra
@@ -1245,7 +1253,7 @@ func historySlots(root map[string]any) []historySlot {
 	return slots
 }
 
-func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan.Action, specs []plan.Spec, assistantPlan string, extra map[string]any) (plan.Decision, string, error) {
+func askNextTool(ctx context.Context, c *jev.Client, h host.ID, user string, actions []plan.Action, specs []plan.Spec, assistantPlan string, extra map[string]any) (plan.Decision, string, error) {
 	criteria := map[string]string{}
 	for _, s := range specs {
 		if plan.HostMeta(s.Name) {
@@ -1255,10 +1263,15 @@ func askNextTool(ctx context.Context, c *jev.Client, user string, actions []plan
 		if desc == "" {
 			desc = s.Name
 		}
-		// Why: Preserve the supplied capability description; a byte prefix can
-		// omit the operations exposed by a code-execution tool or split UTF-8.
+		// Why: Preserve the supplied capability description for other hosts; a
+		// byte prefix can omit the operations exposed by a code-execution tool
+		// or split UTF-8. Claude Code's tool descriptions dominate Jev input
+		// (~78% of request bytes), so only Claude's judgment criteria are shortened.
 		criteriaEnabled, _ := extra["criteria_enabled"].(bool)
 		criteria[s.Name] = criteriaFor(s.Name, desc, criteriaEnabled)
+		if h == host.Claude {
+			criteria[s.Name] = shortenCriteria(criteria[s.Name])
+		}
 	}
 	criteria[plan.Respond] = "stop calling tools and answer the user. Pick this only when no available tool is needed to make progress on the remaining request."
 	qs := map[string]jev.Question{
@@ -2291,6 +2304,23 @@ func (s *hintStore) reapply(root map[string]any) bool {
 		}
 	}
 	return changed
+}
+
+// adviseInsertTarget finds the message where a Claude advise hint would be
+// appended: the last message carrying a tool_result, scanning back past any
+// trailing system messages. Returns nil, "" when there is nowhere to attach it.
+func adviseInsertTarget(work map[string]any) (map[string]any, string) {
+	msgs := asSlice(work["messages"])
+	for i := len(msgs) - 1; i >= 0; i-- {
+		last, _ := msgs[i].(map[string]any)
+		if key := toolResultKey(last); key != "" {
+			return last, key
+		}
+		if last == nil || last["role"] != "system" {
+			return nil, ""
+		}
+	}
+	return nil, ""
 }
 
 // toolResultKey is the tool_use_id of a user message's first tool_result, or "".

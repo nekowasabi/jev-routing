@@ -76,6 +76,8 @@ type Event struct {
 	ShadowHit          *bool              `json:"shadowHit,omitempty"`
 	Misexcluded        []string           `json:"misexcluded,omitempty"`
 	Transforms         []string           `json:"transforms,omitempty"`
+	ClearedToolUses    int                `json:"clearedToolUses,omitempty"`
+	ClearedInputTokens int                `json:"clearedInputTokens,omitempty"`
 }
 
 // SavedTokens is an estimate of input tokens avoided before an upstream call.
