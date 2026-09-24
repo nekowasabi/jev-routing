@@ -64,7 +64,12 @@
     .status.failed { color: #b00020; }
     .status.unobserved, .status.off, .status.unsupported { color: #65708a; }
     #updated.disconnected { color: #b00020; }
+    #bench-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin: 0.75rem 0; }
+    #bench-kpis div { border: 1px solid var(--line); border-radius: 8px; padding: 0.7rem; }
+    #bench-kpis dt { color: var(--muted); font-size: 0.75rem; }
+    #bench-kpis dd { margin: 0.25rem 0 0; font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
     @media (max-width: 760px) { #overview, #overview-apply { grid-template-columns: 1fr; } #counts { grid-template-columns: repeat(2, 1fr); } table { min-width: 980px; } section { overflow-x: auto; } }
+    @media (max-width: 760px) { #bench-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   </style>
 </head>
 <body>
@@ -73,6 +78,15 @@
     <label><span data-i18n="language">表示言語</span> <select id="language" aria-label="表示言語"><option value="ja">日本語</option><option value="en">English</option></select></label>
   </header>
   <p id="status" role="status">読み込み中…</p>
+  <section aria-labelledby="bench-h">
+    <h2 id="bench-h">ベンチマーク：トークン削減量</h2>
+    <label>保存済みの比較結果 <input id="bench-file" type="file" accept="application/json,.json"></label>
+    <p id="bench-status" role="status"><code>jev-routing bench</code> が保存した比較結果を選択してください。ファイルは送信されません。</p>
+    <p class="kind-help">表示値は読み込んだランの実測差です。施策の採否には、条件を固定した反復比較が必要です。</p>
+    <dl id="bench-kpis"></dl>
+    <table><thead><tr><th scope="col">課題</th><th scope="col">品質</th><th scope="col">子セッション／使用量</th><th scope="col">計測出典</th><th scope="col">対照</th><th scope="col">介入</th><th scope="col">削減量</th><th scope="col">比較不能の理由</th></tr></thead><tbody id="bench-rows"></tbody></table>
+    <h3>反復した効果判定</h3><div id="bench-effects" aria-live="polite"></div>
+  </section>
   <div id="overview">
     <section aria-labelledby="counts-h">
       <h2 id="counts-h" data-i18n="routingOverview">ルーティング概要</h2>
@@ -175,14 +189,6 @@
       <tbody id="rows"></tbody>
     </table>
   </section>
-  <section aria-labelledby="cmp-h">
-    <h2 id="cmp-h">Comparison JSON</h2>
-    <p>Local file only. Nothing is uploaded.</p>
-    <label>Paste comparison JSON
-      <textarea id="cmp" aria-label="Comparison JSON"></textarea>
-    </label>
-    <pre id="cmp-out"></pre>
-  </section>
-  <script src="/dashboard/assets/dashboard.js"></script>
+<script src="/dashboard/assets/dashboard.js"></script>
 </body>
 </html>

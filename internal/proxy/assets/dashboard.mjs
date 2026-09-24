@@ -15,6 +15,7 @@ export const summarizeEvents = api.summarizeEvents;
 export const overviewGroups = api.overviewGroups;
 export const t = api.t;
 export const formatComparison = api.formatComparison;
+export const benchComparisonView = api.benchComparisonView;
 export const mergeEvents = api.mergeEvents;
 export const summarizeApplication = api.summarizeApplication;
 export const unappliedReasons = api.unappliedReasons;

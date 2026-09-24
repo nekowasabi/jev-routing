@@ -54,6 +54,45 @@ func Audit(agent, agentLog, sandbox, home string) Isolation {
 	return inspect(calls, sandbox, home)
 }
 
+// codexDualFactEvidence checks completed MCP results in the host's JSONL trace.
+// Responses Lite does not always expose these calls through proxy applications.
+func codexDualFactEvidence(agentLog string) bool {
+	raw, err := os.ReadFile(agentLog)
+	if err != nil {
+		return false
+	}
+	seen := map[string]string{}
+	want := map[string]string{"bench_left_fact": "left=17", "bench_right_fact": "right=23"}
+	for _, line := range strings.Split(string(raw), "\n") {
+		var event struct {
+			Type string `json:"type"`
+			Item struct {
+				ID     string          `json:"id"`
+				Type   string          `json:"type"`
+				Server string          `json:"server"`
+				Tool   string          `json:"tool"`
+				Status string          `json:"status"`
+				Error  json.RawMessage `json:"error"`
+				Result struct {
+					Content []struct {
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"result"`
+			} `json:"item"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil || event.Type != "item.completed" || event.Item.Type != "mcp_tool_call" ||
+			event.Item.Server != "bench" || event.Item.Status != "completed" || event.Item.ID == "" ||
+			(len(event.Item.Error) > 0 && string(event.Item.Error) != "null") {
+			continue
+		}
+		if expected, ok := want[event.Item.Tool]; ok && len(event.Item.Result.Content) == 1 && event.Item.Result.Content[0].Text == expected {
+			seen[event.Item.Tool] = event.Item.ID
+		}
+	}
+	left, right := seen["bench_left_fact"], seen["bench_right_fact"]
+	return left != "" && right != "" && left != right
+}
+
 func inspect(calls []toolCall, sandbox, home string) Isolation {
 	seen := map[string]string{}
 	var order []string

@@ -67,20 +67,53 @@ func TestServeMCP(t *testing.T) {
 	}
 }
 
+func TestBenchEvidenceToolsReturnSeparateFacts(t *testing.T) {
+	in := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bench_left_fact","arguments":{"request":"left"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bench_right_fact","arguments":{"request":"right"}}}`,
+	}, "\n") + "\n"
+	var out bytes.Buffer
+	if err := serveMCP(strings.NewReader(in), &out, 2); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"left=17", "right=23"} {
+		var response struct {
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(strings.Split(strings.TrimSpace(out.String()), "\n")[i]), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Result.IsError || len(response.Result.Content) != 1 || response.Result.Content[0].Text != want {
+			t.Fatalf("tool %d: %+v", i, response)
+		}
+	}
+}
+
 func TestAgentCommandCatalog(t *testing.T) {
 	for _, agent := range []string{"codex", "claude"} {
-		plain, err := agentCommand(agent, "127.0.0.1:1", "/w", "p", "", false, 0)
+		plain, err := agentCommand(agent, "127.0.0.1:1", "/w", "p", "", "medium", false, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(strings.Join(plain.Args, " "), "bench-mcp") {
 			t.Errorf("%s: catalog 0 must not add the stub: %q", agent, plain.Args)
 		}
-		with, err := agentCommand(agent, "127.0.0.1:1", "/w", "p", "", false, 40)
+		with, err := agentCommand(agent, "127.0.0.1:1", "/w", "p", "", "medium", false, 40, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		joined := strings.Join(with.Args, " ")
+		if agent == "claude" && !strings.Contains(joined, "--effort medium") {
+			t.Errorf("claude effort was not fixed: %q", with.Args)
+		}
+		if agent == "codex" && !strings.Contains(joined, `model_reasoning_effort="medium"`) {
+			t.Errorf("codex effort was not fixed: %q", with.Args)
+		}
 		want := map[string]string{"codex": `mcp_servers={bench={command=`, "claude": `"mcpServers":{"bench":`}[agent]
 		if !strings.Contains(joined, want) || !strings.Contains(joined, `"bench-mcp","40"`) {
 			t.Errorf("%s: missing stub server: %q", agent, with.Args)
@@ -89,7 +122,7 @@ func TestAgentCommandCatalog(t *testing.T) {
 			t.Errorf("claude: mcp__bench should be allowed: %q", with.Args)
 		}
 	}
-	if _, err := agentCommand("grok", "127.0.0.1:1", "/w", "p", "", false, 40); err == nil {
+	if _, err := agentCommand("grok", "127.0.0.1:1", "/w", "p", "", "", false, 40, false); err == nil {
 		t.Error("grok with --catalog should fail")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,9 +21,10 @@ import (
 )
 
 type gateway struct {
-	srv    *proxy.Server
-	http   *http.Server
-	origin string
+	srv      *proxy.Server
+	http     *http.Server
+	origin   string
+	snapshot []byte
 }
 
 func routingMode(on bool, onMode string) string {
@@ -154,6 +156,10 @@ type dashUsage struct {
 }
 
 type dashEvent struct {
+	Seq            int64      `json:"seq"`
+	SessionKey     string     `json:"sessionKey"`
+	Source         string     `json:"source"`
+	Reason         string     `json:"reason"`
 	Apply          string     `json:"apply"`
 	Changed        bool       `json:"changed"`
 	OriginalModel  string     `json:"originalModel"`
@@ -162,10 +168,16 @@ type dashEvent struct {
 	HeaderMs       *float64   `json:"headerMs"`
 	BodyMs         *float64   `json:"bodyMs"`
 	Usage          *dashUsage `json:"usage"`
+	UsagePartial   bool       `json:"usagePartial"`
+	UsageMissing   string     `json:"usageMissing"`
+	Canceled       bool       `json:"canceled"`
+	UpstreamFinish string     `json:"upstreamFinish"`
 	JevCalls       int        `json:"jevCalls"`
 	JevAttempts    []struct {
-		Ms          float64 `json:"ms"`
-		InputTokens *int    `json:"inputTokens"`
+		Ms           float64 `json:"ms"`
+		InputTokens  *int    `json:"inputTokens"`
+		OutputTokens *int    `json:"outputTokens"`
+		Cached       bool    `json:"cached"`
 	} `json:"jevAttempts"`
 	CompactApplied bool `json:"compactApplied"`
 	CompactDropped int  `json:"compactDropped"`
@@ -174,7 +186,16 @@ type dashEvent struct {
 	} `json:"savedTokens"`
 }
 
-func (g *gateway) meter() (RunRecord, error) {
+type dashApplication struct {
+	Source       string `json:"source"`
+	Kind         string `json:"kind"`
+	State        string `json:"state"`
+	CapabilityID string `json:"capabilityId"`
+	CallID       string `json:"callId"`
+	HasResult    bool   `json:"hasResult"`
+}
+
+func (g *gateway) meter(tasks ...string) (RunRecord, error) {
 	// Requests are logged when their reply ends; give the last one a moment to land.
 	time.Sleep(1500 * time.Millisecond)
 	res, err := http.Get(g.origin + "/dashboard/events")
@@ -186,28 +207,60 @@ func (g *gateway) meter() (RunRecord, error) {
 	if err != nil {
 		return RunRecord{}, err
 	}
+	g.snapshot = append([]byte(nil), raw...)
 	if res.StatusCode != 200 {
 		return RunRecord{}, fmt.Errorf("dashboard %s: %s", res.Status, truncate(raw, 200))
 	}
 	var body struct {
-		Events []dashEvent `json:"events"`
+		Events           []dashEvent       `json:"events"`
+		Applications     []dashApplication `json:"applications"`
+		EventsTruncated  bool              `json:"eventsTruncated"`
+		HistoryTruncated bool              `json:"historyTruncated"`
+		JevHTTP          *int              `json:"jevHTTP"`
+		Router           struct {
+			OldestSeq int64 `json:"oldestSeq"`
+		} `json:"router"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return RunRecord{}, fmt.Errorf("meter decode: %s: %w", truncate(raw, 300), err)
 	}
+	if body.EventsTruncated || body.HistoryTruncated || body.Router.OldestSeq > 1 {
+		return RunRecord{}, fmt.Errorf("meter history truncated (oldestSeq=%d)", body.Router.OldestSeq)
+	}
 	var out RunRecord
 	out.Modes = map[string]int{}
+	out.ModelUsage = map[string]ModelUsage{}
+	out.SessionUsage = map[string]SessionUsage{}
 	models := map[string]bool{}
-	for _, event := range body.Events {
-		out.Requests++
+	var incomplete []string
+	usageMissingIssues := 0
+	hostInferences := 0
+	for i, event := range body.Events {
+		if event.Reason == "not_llm_path" {
+			out.ControlRequests++
+			continue
+		}
+		if event.Source == "jev" {
+			switch event.Apply {
+			case "filter", "forced", "advise", "direct":
+				out.JevApplied++
+			}
+		}
+		hostInferences++
+		upstream := event.UsageMissing != "not_called"
+		if upstream {
+			out.Requests++
+		}
 		mode := "passthrough"
 		if event.Apply != "" && event.Apply != "none" {
 			mode = event.Apply
 		} else if event.Changed {
 			mode = "rewritten"
 		}
-		out.Modes[mode]++
-		if event.Usage != nil {
+		if upstream {
+			out.Modes[mode]++
+		}
+		if event.Usage != nil && event.Usage.InputTokens != nil && event.Usage.OutputTokens != nil && !event.UsagePartial {
 			out.Metered++
 			out.Input += deref(event.Usage.InputTokens)
 			out.Cached += deref(event.Usage.CachedTokens)
@@ -215,7 +268,17 @@ func (g *gateway) meter() (RunRecord, error) {
 			out.Output += deref(event.Usage.OutputTokens)
 			out.Reasoning += deref(event.Usage.ReasoningTokens)
 		}
-		if event.UpstreamStatus != nil && *event.UpstreamStatus >= 400 {
+		if upstream && (event.Usage == nil || event.Usage.InputTokens == nil || event.Usage.OutputTokens == nil || event.UsagePartial || event.UsageMissing != "") {
+			incomplete = append(incomplete, fmt.Sprintf("event %d: upstream usage incomplete (%s)", i+1, event.UsageMissing))
+			if event.Usage == nil && !event.UsagePartial && (event.UsageMissing == "no_usage" || event.Canceled) {
+				out.UnreportedUpstream++
+				usageMissingIssues++
+				if event.Canceled && event.UpstreamFinish == "canceled" {
+					out.CanceledUnreported++
+				}
+			}
+		}
+		if upstream && event.UpstreamStatus != nil && *event.UpstreamStatus >= 400 {
 			out.FailedRequests++
 		}
 		ms := 0.0
@@ -225,11 +288,49 @@ func (g *gateway) meter() (RunRecord, error) {
 		if event.BodyMs != nil {
 			ms += *event.BodyMs
 		}
-		out.LLMSeconds += ms / 1000
+		if upstream {
+			out.LLMSeconds += ms / 1000
+		}
 		out.JevCalls += event.JevCalls
+		jevAttempts := 0
 		for _, attempt := range event.JevAttempts {
+			if attempt.Cached {
+				continue
+			}
+			jevAttempts++
 			out.JevInput += deref(attempt.InputTokens)
+			out.JevOutput += deref(attempt.OutputTokens)
 			out.JevSeconds += attempt.Ms / 1000
+			if attempt.InputTokens == nil || attempt.OutputTokens == nil {
+				incomplete = append(incomplete, fmt.Sprintf("event %d: Jev usage incomplete", i+1))
+			}
+		}
+		if jevAttempts != event.JevCalls {
+			incomplete = append(incomplete, fmt.Sprintf("event %d: Jev attempts %d != calls %d", i+1, jevAttempts, event.JevCalls))
+		}
+		if event.SessionKey == "" {
+			if upstream {
+				out.UnattributedRequests++
+			}
+		} else {
+			session := out.SessionUsage[event.SessionKey]
+			if upstream {
+				session.Requests++
+				if event.Usage != nil && event.Usage.InputTokens != nil && event.Usage.OutputTokens != nil && !event.UsagePartial {
+					session.Input += deref(event.Usage.InputTokens)
+					session.Cached += deref(event.Usage.CachedTokens)
+					session.CacheWrite += deref(event.Usage.CacheWriteTokens)
+					session.Output += deref(event.Usage.OutputTokens)
+				}
+			}
+			session.JevCalls += event.JevCalls
+			for _, attempt := range event.JevAttempts {
+				if !attempt.Cached {
+					session.JevInput += deref(attempt.InputTokens)
+					session.JevOutput += deref(attempt.OutputTokens)
+				}
+			}
+			out.SessionUsage[event.SessionKey] = session
 		}
 		if event.CompactApplied {
 			out.CompactRequests++
@@ -238,14 +339,73 @@ func (g *gateway) meter() (RunRecord, error) {
 		if event.SavedTokens != nil {
 			out.CompactSavedTokens += event.SavedTokens.CompactionInput
 		}
-		if event.SentModel != "" {
-			models[event.SentModel] = true
-		} else if event.OriginalModel != "" {
-			models[event.OriginalModel] = true
+		if upstream {
+			model := event.SentModel
+			if model == "" {
+				model = event.OriginalModel
+			}
+			if model != "" {
+				models[model] = true
+				usage := out.ModelUsage[model]
+				usage.Requests++
+				if event.Usage != nil && event.Usage.InputTokens != nil && event.Usage.OutputTokens != nil && !event.UsagePartial {
+					usage.Input += deref(event.Usage.InputTokens)
+					usage.Cached += deref(event.Usage.CachedTokens)
+					usage.CacheWrite += deref(event.Usage.CacheWriteTokens)
+					usage.Output += deref(event.Usage.OutputTokens)
+				}
+				out.ModelUsage[model] = usage
+			}
 		}
+	}
+	subagents := map[string]bool{}
+	for _, app := range body.Applications {
+		if app.Source == "jev" && app.Kind == "skill" && app.State == "delivered" {
+			out.JevApplied++
+		}
+		if app.Kind == "subagent" && isChildLaunch(app.CapabilityID) && app.State == "verified" && app.HasResult && app.CallID != "" && !subagents[app.CallID] {
+			subagents[app.CallID] = true
+			out.SubagentCalls++
+		}
+		if app.Kind != "skill" && (app.State == "started" || app.State == "result_received" || app.State == "verified") && (app.CallID == "" || !app.HasResult) {
+			incomplete = append(incomplete, "tool call ID or result missing")
+		}
+	}
+	if len(tasks) > 0 && tasks[0] == "dual-facts" {
+		calls := map[string]string{}
+		for _, app := range body.Applications {
+			if app.Kind != "mcp_tool" || app.State != "verified" || !app.HasResult || app.CallID == "" {
+				continue
+			}
+			parts := strings.SplitN(app.CapabilityID, ":", 3)
+			if len(parts) != 3 || parts[0] != "mcp_tool" {
+				continue
+			}
+			namePart, _, _ := strings.Cut(parts[2], "@")
+			for _, name := range []string{"bench_left_fact", "bench_right_fact"} {
+				if namePart == name || namePart == "mcp__bench__"+name {
+					calls[name] = app.CallID
+				}
+			}
+		}
+		left, right := calls["bench_left_fact"], calls["bench_right_fact"]
+		out.EvidenceComplete = left != "" && right != "" && left != right
+	}
+	if len(tasks) > 0 && tasks[0] == "child-facts" {
+		out.EvidenceComplete = out.SubagentCalls > 0
 	}
 	for model := range models {
 		out.Models = append(out.Models, model)
+	}
+	if hostInferences == 0 {
+		incomplete = append(incomplete, "no inference requests recorded")
+	}
+	if body.JevHTTP != nil && *body.JevHTTP != out.JevCalls {
+		incomplete = append(incomplete, fmt.Sprintf("Jev HTTP requests %d != event calls %d", *body.JevHTTP, out.JevCalls))
+	}
+	out.OnlyUsageMissing = usageMissingIssues > 0 && usageMissingIssues == len(incomplete)
+	if len(incomplete) > 0 {
+		return out, fmt.Errorf("meter incomplete: %s", strings.Join(incomplete, "; "))
 	}
 	return out, nil
 }

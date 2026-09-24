@@ -2,6 +2,8 @@ package bench
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -34,12 +37,15 @@ Options:
   --agent codex|claude|grok|devin|fake   who does the work (default codex)
   --host NAME                            alias of --agent
   --model NAME                           model passed to the agent
+  --effort low|medium|high                reasoning effort for Claude/Codex (default medium)
   --user-tools                           keep your MCP servers, plugins, skills and settings
-  --catalog N                            add a stub MCP server with N extra tools (codex, claude; default 0)
-  --tasks a,b                            task ids (default: all)
-  --modes on,off                         routing states to compare (default on,off)
+  --catalog N                            add N bench MCP tools (first 2 return evidence; default 0)
+  --tasks a,b                            task ids (default: chess suite)
+  --modes on,off[,direct]                routing states to compare (default on,off)
   --on-mode filter|forced                what "on" means (default filter; "off" is always baseline)
   --reps N                               repetitions of every task in every mode (default 1)
+  --min-pairs N                          paired repeats required for effect decision (default 6)
+  --min-savings-pct P                    predeclared practical savings threshold (default 0)
   --timeout-min N                        override each task's own time limit
   --prices in,cached,out[,cachewrite]    USD per million tokens (cachewrite default 1.25×in)
   --port N                               port for the per-run proxy (default 8890)
@@ -48,13 +54,19 @@ Options:
   --list                                 show tasks and options
 
 Tasks:
+  child-facts    Delegate one fact to a child session (6 min)
+  dual-facts     Obtain two independent facts from bench MCP tools (5 min; --catalog 2)
+  skill-proof    Apply a routed skill and prove its use (5 min; Claude Code)
+  xcell-module   Read go.mod facts from this source tree (10 min)
+  xcell-locate   Locate five definitions in this source tree (10 min)
   chess-engine   Build a chess rules engine from a spec (30 min)
   chess-bugfix   Find and fix five injected bugs (20 min)
   chess-san      Add algebraic notation to a working engine (20 min)
 
 Routing on is JEV_ROUTING_MODE=filter (or --on-mode forced). Routing off is baseline:
-the proxy meters the request and does not rewrite it. Each run has its own workspace
-and its own proxy, so the tokens belong to that run.
+the proxy meters the request and does not rewrite it. Direct bypasses the proxy;
+its full token total is unverified and cannot prove a saving.
+The command writes comparison.json; load it in the local dashboard to view the token KPI.
 
 Real agents spend real quota. Start with one task and --reps 1.
 --agent fake writes the reference solution through the proxy and spends nothing.
@@ -93,12 +105,15 @@ func runCmd(args []string) int {
 	agentFlag := fs.String("agent", "", "agent")
 	hostFlag := fs.String("host", "", "alias of --agent")
 	model := fs.String("model", "", "model")
+	effort := fs.String("effort", "medium", "reasoning effort")
 	userTools := fs.Bool("user-tools", false, "keep user tools")
 	catalog := fs.Int("catalog", 0, "stub MCP tools")
 	taskIDs := fs.String("tasks", "", "task ids")
 	modeFlag := fs.String("modes", "on,off", "on,off")
 	onMode := fs.String("on-mode", proxy.ModeFilter, "filter|forced")
 	repsFlag := fs.String("reps", "1", "repetitions")
+	minPairs := fs.Int("min-pairs", 6, "minimum paired repeats for an effect decision")
+	minSavingsPct := fs.Float64("min-savings-pct", 0, "minimum practical token savings percent")
 	portFlag := fs.String("port", "8890", "port")
 	outFlag := fs.String("out", "", "output dir")
 	timeoutFlag := fs.String("timeout-min", "", "timeout")
@@ -122,11 +137,23 @@ func runCmd(args []string) int {
 	if agent == "" {
 		agent = "codex"
 	}
+	if *model == "" {
+		switch agent {
+		case "claude":
+			*model = "claude-sonnet-5"
+		case "codex":
+			*model = "gpt-5.6-terra"
+		}
+	}
 	if agent != "fake" {
 		if _, err := host.Parse(agent); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 2
 		}
+	}
+	if *effort != "low" && *effort != "medium" && *effort != "high" {
+		fmt.Fprintln(os.Stderr, "--effort must be low, medium, or high")
+		return 2
 	}
 	if _, err := catalogTools(*catalog); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -146,14 +173,32 @@ func runCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	for _, task := range chosen {
+		if task.ID == "dual-facts" && agent != "fake" && (*catalog < 2 || (agent != "claude" && agent != "codex")) {
+			fmt.Fprintln(os.Stderr, "dual-facts requires Claude or Codex with --catalog 2 or greater")
+			return 2
+		}
+		if task.ID == "skill-proof" && agent != "fake" && agent != "claude" {
+			fmt.Fprintln(os.Stderr, "skill-proof currently requires Claude Code")
+			return 2
+		}
+	}
 	modes, err := parseModes(*modeFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	if agent == "fake" && contains(modes, "direct") {
+		fmt.Fprintln(os.Stderr, "direct requires a real agent")
+		return 2
+	}
 	reps, err := strconv.Atoi(*repsFlag)
 	if err != nil || reps < 1 {
 		fmt.Fprintln(os.Stderr, "--reps must be a positive integer")
+		return 2
+	}
+	if *minPairs < 6 || *minSavingsPct < 0 || *minSavingsPct >= 100 {
+		fmt.Fprintln(os.Stderr, "--min-pairs must be at least 6 and --min-savings-pct must be in [0,100)")
 		return 2
 	}
 	port, err := strconv.Atoi(*portFlag)
@@ -166,6 +211,15 @@ func runCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	controlled := map[string]string{
+		"JEV_COMPACTION": "off", "JEV_REASONING": "preserve", "JEV_AUTO_APPLY": "off",
+		"JEV_KIND_MODES": "skill=observe,mcp_tool=observe,cli=observe,plugin=observe",
+	}
+	if _, set := os.LookupEnv("JEV_SELECTION_MODE"); !set && agent != "fake" {
+		controlled["JEV_SELECTION_MODE"] = "jev"
+	}
+	restore := overrideBenchEnv(controlled)
+	defer restore()
 	opt, err := proxy.OptionsFromEnv()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -261,6 +315,12 @@ func runCmd(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+		if *keep {
+			if err := os.WriteFile(filepath.Join(sandbox, ".bench-keep"), nil, 0o600); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
 		workspace := filepath.Join(sandbox, "workspace")
 		scratch := filepath.Join(sandbox, "tmp")
 		if err := os.MkdirAll(workspace, 0o755); err != nil || os.MkdirAll(scratch, 0o755) != nil {
@@ -281,7 +341,26 @@ func runCmd(args []string) int {
 		if logFile != nil {
 			logW = logFile
 		}
-		gw, err := startGateway(gatewayHost(agent), fmt.Sprintf("127.0.0.1:%d", port), routingMode(step.mode == "on", *onMode), label, logW, upstreamFor(agent))
+		var gw *gateway
+		gatewayEnv := map[string]string{}
+		if step.task.ID == "skill-proof" {
+			gatewayEnv["JEV_SKILL_DIR"] = filepath.Join(sandbox, "skills")
+			if step.mode == "on" {
+				gatewayEnv["JEV_AUTO_APPLY"] = "on"
+				gatewayEnv["JEV_KIND_MODES"] = "skill=apply,mcp_tool=observe,cli=observe,plugin=observe"
+			}
+		}
+		if step.mode == "direct" {
+			// No proxy is constructed for the native-host control.
+		} else if len(gatewayEnv) > 0 {
+			err = withEnv(gatewayEnv, func() error {
+				var startErr error
+				gw, startErr = startGateway(gatewayHost(agent), fmt.Sprintf("127.0.0.1:%d", port), routingMode(step.mode == "on", *onMode), label, logW, upstreamFor(agent))
+				return startErr
+			})
+		} else {
+			gw, err = startGateway(gatewayHost(agent), fmt.Sprintf("127.0.0.1:%d", port), routingMode(step.mode == "on", *onMode), label, logW, upstreamFor(agent))
+		}
 		if err != nil {
 			if logFile != nil {
 				_ = logFile.Close()
@@ -307,9 +386,15 @@ func runCmd(args []string) int {
 				_ = os.WriteFile(agentLog, []byte(ferr.Error()+"\n"), 0o644)
 			}
 		} else {
-			cmd, err := agentCommand(agent, gw.addr(), workspace, step.task.Prompt, *model, *userTools, *catalog)
+			listen := ""
+			if gw != nil {
+				listen = gw.addr()
+			}
+			cmd, err := agentCommand(agent, listen, workspace, step.task.Prompt, *model, *effort, *userTools, *catalog, step.task.RequiresSubagent)
 			if err != nil {
-				gw.Close()
+				if gw != nil {
+					gw.Close()
+				}
 				fmt.Fprintln(os.Stderr, err)
 				return 2
 			}
@@ -318,7 +403,9 @@ func runCmd(args []string) int {
 			if *timeoutFlag != "" {
 				n, err := strconv.Atoi(*timeoutFlag)
 				if err != nil || n < 1 {
-					gw.Close()
+					if gw != nil {
+						gw.Close()
+					}
 					fmt.Fprintln(os.Stderr, "--timeout-min must be a positive integer")
 					return 2
 				}
@@ -326,12 +413,28 @@ func runCmd(args []string) int {
 			}
 			outcome = runProc(ctx, cmd.File, cmd.Args, cmd.Dir, cmd.Env, agentLog, time.Duration(minutes)*time.Minute, nil)
 		}
-		usage, merr := gw.meter()
-		gw.Close()
+		var usage RunRecord
+		var merr error
+		if gw != nil {
+			usage, merr = gw.meter(step.task.ID)
+		} else {
+			usage.MeterError = "direct run has no proxy usage; complete host and child usage unverified"
+		}
+		if gw != nil && len(gw.snapshot) > 0 {
+			if err := os.WriteFile(filepath.Join(runDir, "proxy-events.json"), gw.snapshot, 0o600); err != nil {
+				gw.Close()
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
+		if gw != nil {
+			gw.Close()
+		}
 		if logFile != nil {
 			_ = logFile.Close()
 		}
 		if merr != nil {
+			usage.MeterError = merr.Error()
 			fmt.Fprintf(os.Stderr, "\nmeter: %v\n", merr)
 		}
 		verdict, verr := verify(step.task, workspace, filepath.Join(runDir, "verify.log"))
@@ -347,6 +450,21 @@ func runCmd(args []string) int {
 		record.Task = step.task.ID
 		record.Agent = agent
 		record.AgentModel = *model
+		record.AgentEffort = *effort
+		record.EffectMinPairs = *minPairs
+		record.EffectMinSavingsPct = *minSavingsPct
+		record.ApprovalMode = map[string]string{"claude": "acceptEdits", "codex": "approve-for-me", "grok": "bypassPermissions", "devin": "dangerous", "fake": "none"}[agent]
+		record.SourceRevision = sourceRevision()
+		settings, _ := json.Marshal(map[string]any{
+			"task": step.task.ID, "agent": agent, "model": *model, "effort": *effort,
+			"approval": record.ApprovalMode, "minPairs": *minPairs, "minSavingsPct": *minSavingsPct,
+			"userTools": *userTools, "catalog": *catalog, "source": record.SourceRevision,
+			"selection": opt.SelectionMode, "reasoning": opt.Reasoning, "compaction": opt.Compaction,
+			"transforms": opt.Transforms, "costGate": opt.CostGateMax, "kindModes": opt.KindModes,
+			"applicationPolicy": opt.ApplicationPolicy, "shadow": opt.Shadow,
+		})
+		fingerprint := sha256.Sum256(settings)
+		record.CompareKey = hex.EncodeToString(fingerprint[:])
 		record.UserTools = *userTools
 		record.Catalog = *catalog
 		record.Mode = step.mode
@@ -361,6 +479,90 @@ func runCmd(args []string) int {
 		record.Failed = verdict.Failed
 		record.VerifyTimedOut = verdict.TimedOut
 		record.Isolation = &isolation
+		if agent == "devin" {
+			transcript := filepath.Join(sandbox, "devin-transcript.json")
+			if hostUsage, err := readDevinTranscript(transcript); err != nil {
+				record.HostTranscriptError = err.Error()
+			} else {
+				record.HostTranscript = hostUsage
+			}
+			if !*keep {
+				_ = os.Remove(transcript)
+			}
+		}
+		if step.mode != "direct" && (agent == "claude" || agent == "codex") {
+			if mainKey, err := matchHostSession(record, agentLog); err != nil {
+				if step.task.RequiresSubagent && record.EvidenceComplete && record.SubagentCalls == 1 {
+					partition := func() ([]int64, []int64, int, error) {
+						if agent == "codex" {
+							return codexChildAttribution(agentLog, gw.snapshot)
+						}
+						return partitionHostRequests(agent, agentLog, gw.snapshot)
+					}
+					parent, child, tokens, partitionErr := partition()
+					if partitionErr == nil {
+						record.HostUsageVerified = true
+						record.ParentChildVerified = true
+						record.ChildSessions = record.SubagentCalls
+						record.ChildTokens = tokens
+						record.ParentRequestSeqs = parent
+						record.ChildRequestSeqs = child
+						record.AttributionMethod = "usage_partition"
+					} else {
+						err = partitionErr
+					}
+				}
+				if !record.HostUsageVerified {
+					if record.MeterError != "" {
+						record.MeterError += "; "
+					}
+					record.MeterError += err.Error()
+				}
+			} else {
+				record.HostUsageVerified = true
+				classifySessions(&record, mainKey)
+				if step.task.RequiresSubagent && record.ChildSessions != record.SubagentCalls {
+					record.ParentChildVerified = false
+				}
+				if record.ParentChildVerified {
+					record.AttributionMethod = "session_key"
+				}
+			}
+		}
+		if step.mode != "direct" && agent == "grok" && step.task.RequiresSubagent {
+			parent, child, tokens, err := grokChildAttribution(agentLog, gw.snapshot)
+			if err != nil {
+				if record.MeterError != "" {
+					record.MeterError += "; "
+				}
+				record.MeterError += err.Error()
+			} else {
+				record.HostUsageVerified = true
+				record.ParentChildVerified = true
+				record.ChildSessions = record.SubagentCalls
+				record.ChildTokens = tokens
+				record.ParentRequestSeqs = parent
+				record.ChildRequestSeqs = child
+				record.AttributionMethod = "usage_partition"
+			}
+		} else if step.mode != "direct" && agent == "grok" {
+			if model, err := matchGrokHostUsage(record, agentLog, gw.snapshot); err != nil {
+				if record.MeterError != "" {
+					record.MeterError += "; "
+				}
+				record.MeterError += err.Error()
+			} else {
+				record.AgentModel = model
+				record.HostUsageVerified = true
+			}
+		}
+		if step.task.ID == "dual-facts" && agent == "codex" && !record.EvidenceComplete {
+			record.EvidenceComplete = codexDualFactEvidence(agentLog)
+		}
+		if step.task.ID == "xcell-locate" && agent != "fake" {
+			record.EvidenceComplete = xcellLocateEvidence(agent, agentLog, workspace)
+		}
+		assignTaskUsage(&record)
 		if *keep {
 			record.Workspace = workspace
 		}
@@ -370,6 +572,11 @@ func runCmd(args []string) int {
 		runs = append(runs, record)
 		if err := writeRuns(filepath.Join(outDir, "runs.jsonl"), runs); err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := WriteComparisonJSON(filepath.Join(outDir, "comparison.json"), runs); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
 		}
 		if !*keep {
 			_ = os.RemoveAll(sandbox)
@@ -391,7 +598,62 @@ func runCmd(args []string) int {
 		return 1
 	}
 	fmt.Println("\n" + report)
+	fmt.Println("Dashboard data:", filepath.Join(outDir, "comparison.json"))
 	return 0
+}
+
+func overrideBenchEnv(values map[string]string) func() {
+	type oldValue struct {
+		value string
+		set   bool
+	}
+	old := make(map[string]oldValue, len(values))
+	for key, value := range values {
+		before, set := os.LookupEnv(key)
+		old[key] = oldValue{before, set}
+		_ = os.Setenv(key, value)
+	}
+	return func() {
+		for key, before := range old {
+			if before.set {
+				_ = os.Setenv(key, before.value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		}
+	}
+}
+
+func sourceRevision() string {
+	info, ok := debug.ReadBuildInfo()
+	revision, modified := "unknown", "unknown"
+	if ok {
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				revision = setting.Value
+			case "vcs.modified":
+				modified = setting.Value
+			}
+		}
+	}
+	if revision != "unknown" {
+		return revision + ":" + modified
+	}
+	path, err := os.Executable()
+	if err != nil {
+		return "unknown"
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "unknown"
+	}
+	defer f.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return "unknown"
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))[:16]
 }
 
 func (g *gateway) addr() string {
@@ -472,7 +734,13 @@ func gitQuiet(dir string, args ...string) {
 
 func selectTasks(tasks []Task, ids string) ([]Task, error) {
 	if strings.TrimSpace(ids) == "" {
-		return tasks, nil
+		var defaults []Task
+		for _, task := range tasks {
+			if strings.HasPrefix(task.ID, "chess-") {
+				defaults = append(defaults, task)
+			}
+		}
+		return defaults, nil
 	}
 	var out []Task
 	for _, id := range strings.Split(ids, ",") {
@@ -505,13 +773,13 @@ func parseModes(s string) ([]string, error) {
 		if mode == "" {
 			continue
 		}
-		if mode != "on" && mode != "off" {
-			return nil, fmt.Errorf("--modes takes on, off, or on,off")
+		if mode != "on" && mode != "off" && mode != "direct" {
+			return nil, fmt.Errorf("--modes takes on, off, or direct")
 		}
 		modes = append(modes, mode)
 	}
 	if len(modes) == 0 {
-		return nil, fmt.Errorf("--modes takes on, off, or on,off")
+		return nil, fmt.Errorf("--modes takes on, off, or direct")
 	}
 	return modes, nil
 }
@@ -603,6 +871,10 @@ func reportCmd(args []string) int {
 	}
 	runs, err := loadRuns(dir)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := WriteComparisonJSON(filepath.Join(dir, "comparison.json"), runs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -737,6 +1009,9 @@ func claimLock() (func(), error) {
 		name := entry.Name()
 		m := benchDirRe.FindStringSubmatch(name)
 		if m == nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(tmp, name, ".bench-keep")); err == nil {
 			continue
 		}
 		pid, _ := strconv.Atoi(m[1])

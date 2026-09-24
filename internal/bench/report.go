@@ -110,6 +110,19 @@ type metric struct {
 	comparable bool
 }
 
+func measured(r RunRecord) bool {
+	return r.MeterError == "" && r.Metered == r.Requests
+}
+
+func measuredRuns(g []RunRecord) bool {
+	for _, r := range g {
+		if !measured(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // Summarize compares routing-on and routing-off runs. Contaminated runs are named and left out of every statistic.
 func Summarize(all []RunRecord, prices *Prices) string {
 	var runs []RunRecord
@@ -131,6 +144,16 @@ func Summarize(all []RunRecord, prices *Prices) string {
 	}
 	metrics := []metric{
 		{"Runs", func(g []RunRecord) *float64 { v := float64(len(g)); return &v }, fmtInt, false},
+		{"Usage complete runs", func(g []RunRecord) *float64 {
+			n := 0
+			for _, r := range g {
+				if _, ok := taskTokenTotal(r); ok {
+					n++
+				}
+			}
+			v := float64(n)
+			return &v
+		}, fmtInt, false},
 		{"Solved (every check passed)", func(g []RunRecord) *float64 {
 			n := 0
 			for _, run := range g {
@@ -149,33 +172,71 @@ func Summarize(all []RunRecord, prices *Prices) string {
 			return median(vals)
 		}, fmtPercent, true},
 		{"LLM requests, median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.Requests) }))
 		}, fmtInt, true},
 		{"Input tokens incl. cache, median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(totalInput(r)) }))
 		}, fmtInt, true},
 		{"…of which cached", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(inputShare(g, func(r RunRecord) int { return r.Cached }))
 		}, fmtPercent, false},
 		{"…uncached, median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(uncachedInput(r)) }))
 		}, fmtInt, true},
 		{"…of which cache writes", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(inputShare(g, cacheWrite))
 		}, fmtPercent, false},
 		{"Output tokens, median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.Output) }))
 		}, fmtInt, true},
 		{"…of which reasoning", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.Reasoning) }))
 		}, fmtInt, false},
+		{"Total tokens incl. Jev, median", func(g []RunRecord) *float64 {
+			var totals []float64
+			for _, r := range g {
+				total, ok := taskTokenTotal(r)
+				if !ok {
+					return nil
+				}
+				totals = append(totals, float64(total))
+			}
+			return median(totals)
+		}, fmtInt, true},
 		{"Wall-clock seconds, median", func(g []RunRecord) *float64 {
 			return median(floatField(g, func(r RunRecord) float64 { return r.Seconds }))
 		}, fmtFixed1, true},
 		{"Jev calls, median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.JevCalls) }))
 		}, fmtInt, true},
 		{"Requests Jev steered", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			vals := make([]float64, 0, len(g))
 			for _, run := range g {
 				if run.Requests == 0 {
@@ -190,15 +251,27 @@ func Summarize(all []RunRecord, prices *Prices) string {
 			return median(vals)
 		}, fmtPercent, false},
 		{"Requests compacted, median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.CompactRequests) }))
 		}, fmtInt, false},
 		{"Tool entries dropped or truncated, median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.CompactDropped) }))
 		}, fmtInt, false},
 		{"Input tokens saved by compaction (est.), median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.CompactSavedTokens) }))
 		}, fmtInt, false},
 		{"Failed LLM requests, total", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
 			n := 0
 			for _, run := range g {
 				n += run.FailedRequests
@@ -221,6 +294,9 @@ func Summarize(all []RunRecord, prices *Prices) string {
 		p := *prices
 		metrics = append(metrics,
 			metric{"Cost per run, median (USD)", func(g []RunRecord) *float64 {
+				if !measuredRuns(g) {
+					return nil
+				}
 				vals := make([]float64, len(g))
 				for i, run := range g {
 					vals[i] = costOf(run, p)
@@ -228,6 +304,9 @@ func Summarize(all []RunRecord, prices *Prices) string {
 				return median(vals)
 			}, fmtFixed4, true},
 			metric{"Cost per solved task (USD)", func(g []RunRecord) *float64 {
+				if !measuredRuns(g) {
+					return nil
+				}
 				solved := 0
 				total := 0.0
 				for _, run := range g {
@@ -318,12 +397,12 @@ func Summarize(all []RunRecord, prices *Prices) string {
 	if smallest == math.MaxInt {
 		smallest = 0
 	}
-	if smallest < 5 {
+	if smallest < 6 {
 		plural := "s"
 		if smallest == 1 {
 			plural = ""
 		}
-		lines = append(lines, fmt.Sprintf("Only %d run%s per cell: agents vary a lot from one run to the next, so treat differences here as anecdotes, not measurements. Five or more repetitions per mode start to mean something.", smallest, plural))
+		lines = append(lines, fmt.Sprintf("Only %d run%s per cell: agents vary a lot from one run to the next, so treat differences here as anecdotes, not measurements. An effect decision requires at least six comparable pairs.", smallest, plural))
 	} else {
 		lines = append(lines, "Percentages in brackets compare the routing-on median with the baseline median.")
 	}

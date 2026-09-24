@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatUsage, usageTotals, usageCursor, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS } from "./dashboard.mjs";
+import { formatUsage, usageTotals, usageCursor, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, benchComparisonView, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS } from "./dashboard.mjs";
 
 test("formatUsage distinguishes missing from zero", () => {
   assert.equal(formatUsage(null, "no_usage", false).missing, true);
@@ -63,6 +63,35 @@ test("formatComparison rejects html-like junk", () => {
   const good = formatComparison('{"groups":[{"id":"a"}]}');
   assert.equal(good.ok, true);
   assert.equal(good.data.groups[0].id, "a");
+});
+
+test("benchComparisonView shows measured savings and withholds incomplete pairs", () => {
+  const got = benchComparisonView(JSON.stringify({ schemaVersion: 1, comparisons: [
+    { task: "a", agent: "claude", model: "sonnet", rep: 1, status: "comparable", reasons: [], baselineTokens: 120, selectionTokens: 90, savedTokens: 30, baselineSolved: true, selectionSolved: true, selectionApplied: true, baselineChildSessions: 1, selectionChildSessions: 1, baselineChildTokens: 20, selectionChildTokens: 10, baselineUsageSource: "proxy", selectionUsageSource: "proxy" },
+    { task: "b", agent: "claude", model: "sonnet", rep: 1, status: "incomparable", reasons: ["missing_jev_usage"], baselineTokens: 100, selectionTokens: null, savedTokens: null, baselineSolved: true, selectionSolved: true, selectionApplied: true }
+  ] }));
+  assert.equal(got.ok, true);
+  assert.equal(got.comparable, 1);
+  assert.equal(got.total, 2);
+  assert.equal(got.savedTokens, 30);
+  assert.equal(got.direction, "decrease");
+  assert.equal(got.rows[1].savedTokens, null);
+  assert.equal(got.rows[0].baselineChildTokens, 20);
+  assert.equal(got.rows[0].selectionUsageSource, "proxy");
+  assert.equal(got.rows[1].reason, "missing_jev_usage");
+  assert.equal(benchComparisonView('{"schemaVersion":1,"comparisons":[{"status":"comparable","baselineTokens":10,"selectionTokens":8,"savedTokens":9}]}').ok, false);
+  const increase = benchComparisonView(JSON.stringify({ schemaVersion: 1, comparisons: [
+    { task: "a", status: "comparable", reasons: [], baselineSolved: true, selectionSolved: true, selectionApplied: true, baselineTokens: 90, selectionTokens: 120, savedTokens: -30 }
+  ] }));
+  assert.equal(increase.direction, "increase");
+  const direct = benchComparisonView(JSON.stringify({ schemaVersion: 1, comparisons: [
+    { task: "a", baselineMode: "direct", status: "incomparable", reasons: ["direct_usage_unverified"], baselineSolved: true, selectionSolved: true }
+  ] }));
+  assert.equal(direct.savedTokens, null);
+  assert.equal(direct.rows[0].baselineMode, "direct");
+  const repeated = benchComparisonView(JSON.stringify({ schemaVersion: 1, comparisons: [], policy: { minPairs: 6, minSavingsPct: 0 }, effects: [{ task: "a", status: "hold", totalPairs: 2, comparablePairs: 2 }] }));
+  assert.equal(repeated.effects[0].status, "hold");
+  assert.equal(repeated.policy.minPairs, 6);
 });
 
 test("application graphs distinguish increase decrease unapplied local skip missing and no comparison", () => {

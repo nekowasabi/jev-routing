@@ -23,7 +23,28 @@ type agentCmd struct {
 
 // agentCommand builds the agent's command line. catalog > 0 adds the stub MCP
 // server (jev-routing bench-mcp N) so tool selection has a catalog to choose from.
-func agentCommand(agent, listen, workspace, prompt, model string, userTools bool, catalog int) (agentCmd, error) {
+func agentCommand(agent, listen, workspace, prompt, model, effort string, userTools bool, catalog int, subagent bool) (agentCmd, error) {
+	direct := listen == ""
+	childEnv := func(h host.ID) []string {
+		if !direct {
+			return host.ChildEnv(h, listen)
+		}
+		// A direct run must not inherit a previous proxy base URL or route marker.
+		drop := map[string]bool{
+			"ANTHROPIC_BASE_URL": true, "OPENAI_BASE_URL": true,
+			"GROK_CLI_CHAT_PROXY_BASE_URL": true, "DEVIN_API_URL": true,
+			"WINDSURF_API_SERVER_URL": true, "JEV_ROUTING_HOST": true,
+			"ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true, "OPENAI_API_KEY": true,
+		}
+		var env []string
+		for _, item := range os.Environ() {
+			name, _, _ := strings.Cut(item, "=")
+			if !drop[name] {
+				env = append(env, item)
+			}
+		}
+		return env
+	}
 	var exe string
 	if catalog > 0 {
 		if agent != "codex" && agent != "claude" {
@@ -48,19 +69,32 @@ func agentCommand(agent, listen, workspace, prompt, model string, userTools bool
 		case !userTools:
 			rest = append(rest, "-c", "mcp_servers={}", "-c", "plugins={}")
 		}
-		rest = append(rest, "exec", "--ephemeral")
+		rest = append(rest, "exec", "--ephemeral", "--json", "--approve-for-me")
+		if effort != "" {
+			rest = append([]string{"-c", "model_reasoning_effort=" + strconv.Quote(effort)}, rest...)
+		}
 		if model != "" {
 			rest = append(rest, "-m", model)
 		}
-		rest = append(rest, "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", workspace, prompt)
-		return agentCmd{File: "codex", Args: host.CommandArgs(host.Codex, listen, rest), Env: host.ChildEnv(host.Codex, listen), Dir: workspace}, nil
+		rest = append(rest, "--skip-git-repo-check", "-C", workspace, prompt)
+		if !direct {
+			rest = host.CommandArgs(host.Codex, listen, rest)
+		}
+		return agentCmd{File: "codex", Args: rest, Env: childEnv(host.Codex), Dir: workspace}, nil
 	case "claude":
 		args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose", "--no-session-persistence"}
 		if model != "" {
 			args = append(args, "--model", model)
 		}
+		if effort != "" {
+			args = append(args, "--effort", effort)
+		}
 		if !userTools {
-			args = append(args, "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands", "--tools", "Bash,Edit,Write,Read,Glob,Grep")
+			tools := "Bash,Edit,Write,Read,Glob,Grep"
+			if subagent {
+				tools += ",Agent"
+			}
+			args = append(args, "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands", "--tools", tools)
 		}
 		if catalog > 0 {
 			cfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"bench": map[string]any{"command": exe, "args": []string{"bench-mcp", strconv.Itoa(catalog)}}}})
@@ -68,19 +102,29 @@ func agentCommand(agent, listen, workspace, prompt, model string, userTools bool
 		}
 		args = append(args, "--permission-mode", "acceptEdits",
 			"--allowedTools", "Read", "Edit", "Write", "Glob", "Grep", "Bash(node:*)", "Bash(npm test:*)", "Bash(npm run:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(git diff:*)", "Bash(git status:*)")
+		if subagent {
+			args = append(args, "Agent")
+		}
 		if catalog > 0 {
 			args = append(args, "mcp__bench")
 		}
-		return agentCmd{File: "claude", Args: args, Env: host.ChildEnv(host.Claude, listen), Dir: workspace}, nil
+		return agentCmd{File: "claude", Args: args, Env: childEnv(host.Claude), Dir: workspace}, nil
 	case "grok":
-		args := []string{"--single", prompt, "--output-format", "json", "--no-plan", "--no-subagents", "--permission-mode", "bypassPermissions"}
+		args := []string{"--single", prompt, "--output-format", "json", "--no-plan", "--permission-mode", "bypassPermissions"}
+		if !subagent {
+			args = append(args, "--no-subagents")
+		}
 		if model != "" {
 			args = append(args, "--model", model)
 		}
-		return agentCmd{File: "grok", Args: args, Env: host.ChildEnv(host.Grok, listen), Dir: workspace}, nil
+		return agentCmd{File: "grok", Args: args, Env: childEnv(host.Grok), Dir: workspace}, nil
 	case "devin":
-		args := []string{"--permission-mode", "dangerous", "--respect-workspace-trust", "false", "-p", "--", prompt}
-		return agentCmd{File: "devin", Args: args, Env: host.ChildEnv(host.Devin, listen), Dir: workspace}, nil
+		args := []string{"--permission-mode", "dangerous", "--respect-workspace-trust", "false",
+			"--export", filepath.Join(filepath.Dir(workspace), "devin-transcript.json"), "-p", "--", prompt}
+		if model != "" {
+			args = append([]string{"--model", model}, args...)
+		}
+		return agentCmd{File: "devin", Args: args, Env: childEnv(host.Devin), Dir: workspace}, nil
 	case "fake":
 		return agentCmd{}, nil
 	default:
@@ -112,6 +156,13 @@ func runFakeAgent(origin, workspace, taskID string, log io.Writer) error {
 			map[string]any{"type": "function_call", "name": "exec_command", "arguments": `{"cmd":"npm test"}`, "call_id": fmt.Sprintf("call_%d", turn)},
 			map[string]any{"type": "function_call_output", "call_id": fmt.Sprintf("call_%d", turn), "output": map[bool]string{true: "all passing", false: "1 failing"}[turn == 3]},
 		)
+	}
+	if tasks, err := Tasks(); err == nil {
+		for _, task := range tasks {
+			if task.ID == taskID && task.Reference != nil {
+				return task.Reference(workspace)
+			}
+		}
 	}
 	source := EngineWithoutSan()
 	if taskID == "chess-san" {

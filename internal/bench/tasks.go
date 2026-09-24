@@ -15,11 +15,14 @@ var chessFS embed.FS
 // Task is one agentic coding task. Setup writes the starting workspace.
 // Verify is the hidden checker the agent is not given.
 type Task struct {
-	ID             string
-	Title          string
-	TimeoutMinutes int
-	Prompt         string
-	Setup          func(workspace string) error
+	ID               string
+	Title            string
+	TimeoutMinutes   int
+	Prompt           string
+	Setup            func(workspace string) error
+	Verify           func(workspace string) (verdict, error)
+	Reference        func(workspace string) error
+	RequiresSubagent bool
 	// San asks the verifier for algebraic-notation checks.
 	San bool
 }
@@ -113,6 +116,51 @@ func Tasks() ([]Task, error) {
 		return nil, err
 	}
 	return []Task{
+		xcellTask("xcell-module"),
+		xcellTask("xcell-locate"),
+		{
+			ID: "child-facts", Title: "Delegate one fact and combine two values", TimeoutMinutes: 6,
+			Prompt:           "Delegate reading left.txt to a child agent exactly once using this host's subagent tool. In the parent session, read right.txt yourself. Write answer.json with integer keys left, right, and sum. The sum must equal left + right. Do not change the fact files.",
+			RequiresSubagent: true,
+			Setup: func(workspace string) error {
+				return writeFiles(workspace, map[string]string{"left.txt": "left=17\n", "right.txt": "right=23\n"})
+			},
+			Verify: func(workspace string) (verdict, error) {
+				return verifyAnswer(workspace, map[string]any{"left": float64(17), "right": float64(23), "sum": float64(40)})
+			},
+			Reference: func(workspace string) error {
+				return writeFiles(workspace, map[string]string{"answer.json": `{"left":17,"right":23,"sum":40}` + "\n"})
+			},
+		},
+		{
+			ID: "dual-facts", Title: "Combine two independent file facts", TimeoutMinutes: 5,
+			Prompt: "Call both bench MCP tools bench_left_fact and bench_right_fact. They hold separate values that are not in this workspace. Write answer.json with integer keys left, right, and sum. The sum must equal left + right.",
+			Setup: func(workspace string) error {
+				return writeFiles(workspace, map[string]string{"README.md": "The two values are supplied only by the bench MCP tools named in the task.\n"})
+			},
+			Verify: func(workspace string) (verdict, error) {
+				return verifyAnswer(workspace, map[string]any{"left": float64(17), "right": float64(23), "sum": float64(40)})
+			},
+			Reference: func(workspace string) error {
+				return writeFiles(workspace, map[string]string{"answer.json": `{"left":17,"right":23,"sum":40}` + "\n"})
+			},
+		},
+		{
+			ID: "skill-proof", Title: "Use a routed skill to complete a file fact", TimeoutMinutes: 5,
+			Prompt: "Read go.mod and write answer.json with the exact module and go directives. If task context supplies a proof value, include it as the proof field. Do not inspect files outside this workspace.",
+			Setup: func(workspace string) error {
+				if err := writeFiles(workspace, map[string]string{"go.mod": "module example.org/skill-bench\n\ngo 1.25.0\n"}); err != nil {
+					return err
+				}
+				return writeFiles(filepath.Dir(workspace), map[string]string{"skills/module-proof/SKILL.md": "---\nname: module-proof\ndescription: Use when returning module and Go version facts from go.mod.\n---\nInclude the exact proof value PLUM-91 in answer.json.\n"})
+			},
+			Verify: func(workspace string) (verdict, error) {
+				return verifyAnswer(workspace, map[string]any{"module": "example.org/skill-bench", "go": "1.25.0", "proof": "PLUM-91"})
+			},
+			Reference: func(workspace string) error {
+				return writeFiles(workspace, map[string]string{"answer.json": `{"module":"example.org/skill-bench","go":"1.25.0","proof":"PLUM-91"}` + "\n"})
+			},
+		},
 		{
 			ID: "chess-engine", Title: "Build a chess rules engine from a spec", TimeoutMinutes: 30,
 			Prompt: "Implement the chess rules engine described in README.md as src/chess.js. It must follow the API and the " +

@@ -1,0 +1,147 @@
+package bench
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestComparisonJSONUsesMeasuredJevAppliedPairsOnly(t *testing.T) {
+	base := RunRecord{Task: "task", Agent: "claude", AgentModel: "claude-sonnet-5", CompareKey: "same", Models: []string{"claude-sonnet-5"}, Mode: "off", Rep: 1, Requests: 1, Metered: 1, Input: 100, Output: 10, Passed: 1, Total: 1, Solved: true, HostUsageVerified: true}
+	on := base
+	on.Mode = "on"
+	on.Input = 70
+	on.Output = 0
+	on.JevInput = 5
+	on.JevOutput = 2
+	on.JevCalls = 1
+	on.JevApplied = 1
+	path := filepath.Join(t.TempDir(), "comparison.json")
+	if err := WriteComparisonJSON(path, []RunRecord{base, on}); err != nil {
+		t.Fatal(err)
+	}
+	var got ComparisonFile
+	raw, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(raw, &got) != nil {
+		t.Fatalf("read comparison: %v", err)
+	}
+	if got.SchemaVersion != 1 || len(got.Comparisons) != 1 {
+		t.Fatalf("shape: %+v", got)
+	}
+	row := got.Comparisons[0]
+	if row.Status != "comparable" || row.SavedTokens == nil || *row.SavedTokens != 33 {
+		t.Fatalf("wrong total (Claude cache rules and Jev output): %+v", row)
+	}
+	on.JevApplied = 0
+	on.MeterError = "missing jev usage"
+	got = BuildComparisons([]RunRecord{base, on})
+	row = got.Comparisons[0]
+	if row.Status != "incomparable" || row.SavedTokens != nil || len(row.Reasons) == 0 {
+		t.Fatalf("incomplete run claimed savings: %+v", row)
+	}
+	on.MeterError = ""
+	on.JevApplied = 1
+	on.CompareKey = "different"
+	row = BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "incomparable" || row.SavedTokens != nil {
+		t.Fatalf("settings mismatch claimed savings: %+v", row)
+	}
+	on.CompareKey = "same"
+	on.SubagentCalls = 1
+	row = BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "incomparable" || row.SavedTokens != nil {
+		t.Fatalf("unattributed subagent claimed savings: %+v", row)
+	}
+}
+
+func TestReportRebuildsDashboardComparison(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeRuns(filepath.Join(dir, "runs.jsonl"), []RunRecord{{Task: "x", Agent: "fake", Mode: "off", Rep: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if code := reportCmd([]string{dir}); code != 0 {
+		t.Fatalf("report exit=%d", code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "comparison.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDirectComparisonStaysUnverified(t *testing.T) {
+	direct := RunRecord{Task: "x", Agent: "claude", AgentModel: "claude-sonnet-5", Mode: "direct", Rep: 1, Solved: true}
+	on := direct
+	on.Mode = "on"
+	on.JevApplied = 1
+	got := BuildComparisons([]RunRecord{direct, on})
+	if len(got.Comparisons) != 1 || got.Comparisons[0].BaselineMode != "direct" || got.Comparisons[0].SavedTokens != nil || got.Comparisons[0].Status != "incomparable" {
+		t.Fatalf("direct claimed complete savings: %+v", got)
+	}
+}
+
+func TestDirectDoesNotHideComparableProxyPair(t *testing.T) {
+	off := RunRecord{Task: "x", Agent: "claude", AgentModel: "claude-sonnet-5", Models: []string{"claude-sonnet-5"}, CompareKey: "same", Mode: "off", Rep: 1, Requests: 1, Metered: 1, Input: 100, Solved: true, Total: 1, HostUsageVerified: true}
+	on := off
+	on.Mode = "on"
+	on.JevCalls, on.JevApplied = 1, 1
+	direct := off
+	direct.Mode = "direct"
+	rows := BuildComparisons([]RunRecord{direct, off, on}).Comparisons
+	if len(rows) != 2 || rows[0].BaselineMode != "off" || rows[0].Status != "comparable" || rows[1].BaselineMode != "direct" || rows[1].SavedTokens != nil {
+		t.Fatalf("direct affected primary pair: %+v", rows)
+	}
+}
+
+func TestChildFactsNeedsParentAndChildEvidence(t *testing.T) {
+	base := RunRecord{Task: "child-facts", Agent: "claude", AgentModel: "claude-sonnet-5", Models: []string{"claude-sonnet-5"}, CompareKey: "same", Mode: "off", Rep: 1, Requests: 1, Metered: 1, Input: 10, Solved: true, Total: 1, HostUsageVerified: true, EvidenceComplete: true, ParentChildVerified: true, ChildSessions: 1, ChildTokens: 5}
+	on := base
+	on.Mode = "on"
+	on.JevCalls = 1
+	on.JevApplied = 1
+	on.JevInput = 2
+	on.JevOutput = 1
+	row := BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "comparable" {
+		t.Fatalf("complete pair rejected: %+v", row)
+	}
+	if row.BaselineChildTokens == nil || *row.BaselineChildTokens != 5 {
+		t.Fatalf("child total missing: %+v", row)
+	}
+	on.ParentChildVerified = false
+	row = BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "incomparable" || row.SavedTokens != nil {
+		t.Fatalf("unverified child claimed savings: %+v", row)
+	}
+}
+
+func TestXCellLocateNeedsSequenceEvidence(t *testing.T) {
+	base := RunRecord{Task: "xcell-locate", Agent: "claude", AgentModel: "claude-sonnet-5", Models: []string{"claude-sonnet-5"}, CompareKey: "same", Mode: "off", Rep: 1, Requests: 1, Metered: 1, Input: 10, Solved: true, Total: 5, HostUsageVerified: true}
+	on := base
+	on.Mode = "on"
+	on.JevCalls, on.JevApplied = 1, 1
+	row := BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "incomparable" || row.SavedTokens != nil {
+		t.Fatalf("missing sequence claimed savings: %+v", row)
+	}
+	base.EvidenceComplete, on.EvidenceComplete = true, true
+	row = BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "comparable" {
+		t.Fatalf("verified sequence rejected: %+v", row)
+	}
+}
+
+func TestDevinATIFModelCanVerifyComparisonWithoutProxyModelField(t *testing.T) {
+	b, s := 100, 90
+	base := RunRecord{Task: "xcell-module", Agent: "devin", AgentModel: "gpt-5-6-terra-medium", CompareKey: "same", Mode: "off", Rep: 1, Requests: 2, Solved: true, Total: 3, UsageSource: "devin_atif_steps", TaskTokens: &b, HostTranscript: &HostTranscriptUsage{ModelNames: []string{"gpt-5-6-terra-medium"}}}
+	on := base
+	on.Mode, on.TaskTokens, on.JevCalls, on.JevApplied = "on", &s, 1, 1
+	row := BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "comparable" || row.SavedTokens == nil || *row.SavedTokens != 10 {
+		t.Fatalf("ATIF source rejected: %+v", row)
+	}
+	on.HostTranscript = &HostTranscriptUsage{ModelNames: []string{"other"}}
+	row = BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "incomparable" || row.SavedTokens != nil {
+		t.Fatalf("ATIF model mismatch accepted: %+v", row)
+	}
+}

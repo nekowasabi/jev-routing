@@ -135,11 +135,23 @@ func num(v float64) string {
 // Chart writes comparison-light.svg and comparison-dark.svg. Contaminated runs are omitted.
 func Chart(runs []RunRecord, outDir string) error {
 	var clean []RunRecord
+	baselines := map[string]bool{}
 	for _, run := range runs {
 		if run.Isolation != nil && run.Isolation.Contaminated {
 			continue
 		}
+		if !measured(run) {
+			return fmt.Errorf("cannot chart incomplete usage: %s.%s.%d", run.Task, run.Mode, run.Rep)
+		}
+		if run.Mode == "off" {
+			baselines[groupLabel(run)] = true
+		}
 		clean = append(clean, run)
+	}
+	for _, run := range clean {
+		if run.Mode == "on" && !baselines[groupLabel(run)] {
+			return fmt.Errorf("cannot chart without baseline: %s", groupLabel(run))
+		}
 	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err

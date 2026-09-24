@@ -183,7 +183,7 @@
     return out;
   }
 
-  function formatComparison(jsonText) {
+function formatComparison(jsonText) {
     let data;
     try {
       data = JSON.parse(jsonText);
@@ -193,8 +193,52 @@
     if (data == null || typeof data !== "object" || Array.isArray(data)) {
       return { ok: false, error: "unexpected structure" };
     }
-    return { ok: true, data };
+return { ok: true, data };
+}
+
+function benchComparisonView(jsonText) {
+  const parsed = formatComparison(jsonText);
+  if (!parsed.ok) return parsed;
+  const data = parsed.data;
+  if (data.schemaVersion !== 1 || !Array.isArray(data.comparisons)) return { ok: false, error: "unsupported benchmark comparison" };
+  const rows = [];
+  let comparable = 0;
+  let savedTokens = 0;
+  let qualityPassed = 0;
+  const reasonNames = { missing_selection: "介入ランなし", missing_baseline: "対照ランなし", duplicate_run: "同じ条件のランが重複",
+    settings_mismatch: "実行条件が不一致", model_unverified: "送信モデルを確認できない", synthetic_agent: "模擬エージェント", quality_failed: "成果品質が不合格",
+    usage_incomplete: "使用量の計測が不完全", host_usage_unverified: "CLI とプロキシの使用量が一致しない", jev_not_applied: "Jev の判定が未適用", required_tools_unverified: "必要な２つのツール結果を確認できない", tool_sequence_unverified: "指定された検索・読取の順序を確認できない", child_session_unverified: "親子セッションの使用量または結果を確認できない", direct_usage_unverified: "直通経路の全推論使用量を確認できない" };
+  for (const item of data.comparisons) {
+    if (!item || (item.status !== "comparable" && item.status !== "incomparable")) return { ok: false, error: "invalid comparison status" };
+    const row = { task: item.task || "—", agent: item.agent || "—", model: item.model || "—", rep: item.rep || 0, baselineMode: item.baselineMode || "off",
+      status: item.status, baselineSolved: item.baselineSolved === true, selectionSolved: item.selectionSolved === true,
+      baselineUsageSource: item.baselineUsageSource || "", selectionUsageSource: item.selectionUsageSource || "",
+      baselineChildSessions: item.baselineChildSessions ?? null, selectionChildSessions: item.selectionChildSessions ?? null,
+      baselineChildTokens: item.baselineChildTokens ?? null, selectionChildTokens: item.selectionChildTokens ?? null,
+      baselineTokens: null, selectionTokens: null, savedTokens: null,
+      reason: Array.isArray(item.reasons) ? item.reasons.map((code) => reasonNames[code] || code).join("、") : "" };
+    if (row.selectionSolved) qualityPassed++;
+    if (item.status === "comparable") {
+      if (!row.baselineSolved || !row.selectionSolved || item.selectionApplied !== true ||
+          !Number.isSafeInteger(item.baselineTokens) || item.baselineTokens < 0 ||
+          !Number.isSafeInteger(item.selectionTokens) || item.selectionTokens < 0 ||
+          !Number.isSafeInteger(item.savedTokens) || item.savedTokens !== item.baselineTokens - item.selectionTokens) {
+        return { ok: false, error: "inconsistent measured comparison" };
+      }
+      row.baselineTokens = item.baselineTokens;
+      row.selectionTokens = item.selectionTokens;
+      row.savedTokens = item.savedTokens;
+      comparable++;
+      savedTokens += item.savedTokens;
+    } else if (!row.reason) {
+      row.reason = "比較不能の理由なし";
+    }
+    rows.push(row);
   }
+  return { ok: true, rows, comparable, total: rows.length, savedTokens: comparable ? savedTokens : null,
+    direction: !comparable ? "unavailable" : savedTokens < 0 ? "increase" : savedTokens > 0 ? "decrease" : "flat", qualityPassed,
+    effects: Array.isArray(data.effects) ? data.effects : [], policy: data.policy || {} };
+}
 
   function summarizeApplication(metrics) {
     metrics = metrics || {};
@@ -348,8 +392,11 @@
     const unappliedEl = document.getElementById("unapplied-chart");
     const effectEl = document.getElementById("effect-list");
     const sampleNote = document.getElementById("sample-note");
-    const cmp = document.getElementById("cmp");
-    const cmpOut = document.getElementById("cmp-out");
+    const benchFile = document.getElementById("bench-file");
+    const benchStatus = document.getElementById("bench-status");
+    const benchKpis = document.getElementById("bench-kpis");
+    const benchRows = document.getElementById("bench-rows");
+    const benchEffects = document.getElementById("bench-effects");
     const filterHost = document.getElementById("filter-host");
     const filterSource = document.getElementById("filter-source");
     const filterApply = document.getElementById("filter-apply");
@@ -793,16 +840,65 @@
       }
     }
 
-    if (cmp && cmpOut) {
-      cmp.addEventListener("input", function () {
-        const got = formatComparison(cmp.value);
+    if (benchFile && benchStatus && benchKpis && benchRows && benchEffects) {
+      benchFile.addEventListener("change", async function () {
+        const file = benchFile.files && benchFile.files[0];
+        if (!file) return;
+        const got = benchComparisonView(await file.text());
+        benchKpis.replaceChildren();
+        benchRows.replaceChildren();
+        benchEffects.replaceChildren();
         if (!got.ok) {
-          cmpOut.className = "err";
-          text(cmpOut, got.error);
+          benchStatus.className = "err";
+          text(benchStatus, got.error);
           return;
         }
-        cmpOut.className = "";
-        text(cmpOut, JSON.stringify(got.data, null, 2));
+        benchStatus.className = "";
+        text(benchStatus, file.name + " · 保存済み比較結果");
+        const outcome = { unavailable: "判定不能", increase: "トークン増加", decrease: "トークン削減", flat: "変化なし" }[got.direction];
+        const kpis = [["今回の観測", outcome + (got.comparable < got.total ? "（一部比較不能）" : "")],
+          ["トークン削減量", got.savedTokens == null ? "—" : got.savedTokens.toLocaleString() + "（比較可能なペアのみ）"],
+          ["品質成功", got.qualityPassed + " / " + got.total], ["比較可能", got.comparable + " / " + got.total]];
+        for (const [label, value] of kpis) {
+          const box = document.createElement("div");
+          const dt = document.createElement("dt");
+          const dd = document.createElement("dd");
+          text(dt, label);
+          text(dd, value);
+          box.append(dt, dd);
+          benchKpis.appendChild(box);
+        }
+        for (const row of got.rows) {
+          const tr = document.createElement("tr");
+          const sourceNames = { proxy: "プロキシ", grok_cli_reconciled: "Grok CLI 照合", devin_atif_steps: "Devin ATIF 集計" };
+          const source = row.baselineUsageSource || row.selectionUsageSource ?
+            (sourceNames[row.baselineUsageSource] || row.baselineUsageSource || "未記録") + "→" + (sourceNames[row.selectionUsageSource] || row.selectionUsageSource || "未記録") : "—";
+          const child = [row.baselineChildSessions, row.selectionChildSessions, row.baselineChildTokens, row.selectionChildTokens].every(Number.isSafeInteger) ?
+            row.baselineChildSessions + "→" + row.selectionChildSessions + "件 / " + row.baselineChildTokens.toLocaleString() + "→" + row.selectionChildTokens.toLocaleString() + "トークン" : "—";
+          const values = [row.task + " · " + row.agent + " · " + row.model + " · " + row.rep + " · " + row.baselineMode + "→on",
+            row.selectionSolved ? "成功" : "失敗", child, source, row.baselineTokens == null ? "—" : row.baselineTokens.toLocaleString(),
+            row.selectionTokens == null ? "—" : row.selectionTokens.toLocaleString(),
+            row.savedTokens == null ? "—" : row.savedTokens.toLocaleString(), row.reason || "—"];
+          for (const value of values) {
+            const td = document.createElement("td");
+            text(td, value);
+            if (value === row.savedTokens?.toLocaleString() && row.savedTokens < 0) td.className = "err";
+            tr.appendChild(td);
+          }
+          benchRows.appendChild(tr);
+        }
+        const effectNames = { decrease: "削減を検出", increase: "増加を検出", hold: "保留", incomparable: "判定不能", quality_worse: "品質悪化" };
+        const effectReasons = { insufficient_pairs: "反復不足", interval_unavailable: "区間を計算できない", interval_crosses_threshold: "区間が閾値をまたぐ", incomplete_pairs: "品質または計測が不完全", selection_quality_regressed: "介入の品質が悪化" };
+        if (!got.effects.length) text(benchEffects, "反復データなし");
+        for (const effect of got.effects) {
+          const line = document.createElement("p");
+          const interval = effect.lowerSavingsPct == null || effect.upperSavingsPct == null ? "" :
+            " · 削減率の区間 " + effect.lowerSavingsPct.toFixed(1) + "～" + effect.upperSavingsPct.toFixed(1) + "%";
+          text(line, [effect.task, effect.agent, effect.model, effect.baselineMode + "→on"].join(" · ") +
+            ": " + (effectNames[effect.status] || effect.status) + "（" + effect.comparablePairs + "/" + effect.totalPairs + "ペア）" + interval +
+            (effect.reason ? " · " + (effectReasons[effect.reason] || effect.reason) : ""));
+          benchEffects.appendChild(line);
+        }
       });
     }
     [filterHost, filterSource, filterApply, filterKind].forEach(function (el) {
@@ -849,5 +945,5 @@
     setInterval(poll, 2000);
   }
 
-  return { clip, formatUsage, formatSavings, usageTotals, usageCursor, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS, start };
+  return { clip, formatUsage, formatSavings, usageTotals, usageCursor, toolReplacement, summarizeUnsupportedHistory, unknownHistoryDetails, formatConfidence, routeOutcome, skippedTools, summarizeEvents, overviewGroups, t, formatComparison, benchComparisonView, mergeEvents, summarizeApplication, unappliedReasons, formatEffect, filterEvents, classMapFromPayload, classLabel, classStatusLabel, filterApplications, SAMPLE_EVENTS, start };
 });

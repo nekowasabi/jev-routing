@@ -20,6 +20,8 @@ type stubTool struct {
 // catalog interleaves unrelated SaaS/ops tools with distractors that overlap the
 // agents' built-ins, so even a small N makes tool selection non-trivial.
 var catalog = []stubTool{
+	{"bench_left_fact", "Return the left value for the dual-facts benchmark.", []string{"request: request the left value"}},
+	{"bench_right_fact", "Return the right value for the dual-facts benchmark.", []string{"request: request the right value"}},
 	{"jira_search_issues", "Search Jira issues with a JQL query.", []string{"jql: JQL query", "max_results: maximum number of issues"}},
 	{"repo_search_code", "Search source code in the repository for a pattern.", []string{"query: text or regex to search for", "path: directory to search in"}},
 	{"slack_post_message", "Post a message to a Slack channel.", []string{"channel: channel name or id", "text: message text"}},
@@ -158,9 +160,14 @@ func serveMCP(r io.Reader, w io.Writer, n int) error {
 		case "tools/list":
 			resp["result"] = map[string]any{"tools": tools}
 		case "tools/call":
-			resp["result"] = map[string]any{
-				"content": []map[string]string{{"type": "text", "text": req.Params.Name + " is not connected in this workspace; use the built-in tools."}},
-				"isError": true,
+			value := map[string]string{"bench_left_fact": "left=17", "bench_right_fact": "right=23"}[req.Params.Name]
+			if value != "" {
+				resp["result"] = map[string]any{"content": []map[string]string{{"type": "text", "text": value}}, "isError": false}
+			} else {
+				resp["result"] = map[string]any{
+					"content": []map[string]string{{"type": "text", "text": req.Params.Name + " is not connected in this workspace; use the built-in tools."}},
+					"isError": true,
+				}
 			}
 		case "ping":
 			resp["result"] = map[string]any{}

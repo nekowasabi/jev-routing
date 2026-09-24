@@ -90,17 +90,27 @@ func joinFailed(failed []string) string {
 }
 
 func scoreTask(task Task, source *string) (verdict, error) {
-	dir, err := os.MkdirTemp("", "jev-bench-selftest-")
+	root, err := os.MkdirTemp("", "jev-bench-selftest-")
 	if err != nil {
 		return verdict{}, err
 	}
-	defer os.RemoveAll(dir)
+	defer os.RemoveAll(root)
+	dir := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return verdict{}, err
+	}
 	if err := task.Setup(dir); err != nil {
 		return verdict{}, err
 	}
 	if source != nil {
-		if err := os.WriteFile(filepath.Join(dir, "src", "chess.js"), []byte(*source), 0o644); err != nil {
-			return verdict{}, err
+		if task.Reference != nil {
+			if err := task.Reference(dir); err != nil {
+				return verdict{}, err
+			}
+		} else {
+			if err := os.WriteFile(filepath.Join(dir, "src", "chess.js"), []byte(*source), 0o644); err != nil {
+				return verdict{}, err
+			}
 		}
 	}
 	return verify(task, dir, "")

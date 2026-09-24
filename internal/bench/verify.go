@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -44,6 +45,9 @@ func verifierScript() (string, error) {
 }
 
 func verify(task Task, workspace, logFile string) (verdict, error) {
+	if task.Verify != nil {
+		return task.Verify(workspace)
+	}
 	node, err := exec.LookPath("node")
 	if err != nil {
 		return verdict{}, fmt.Errorf("node is required to score chess tasks: %w", err)
@@ -95,5 +99,30 @@ func verify(task Task, workspace, logFile string) (verdict, error) {
 		score = float64(passed) / float64(total)
 	}
 	v := verdict{Passed: passed, Total: total, Score: score, Solved: total > 0 && passed == total, Failed: failed, TimedOut: out.TimedOut}
+	return v, nil
+}
+
+func verifyAnswer(workspace string, expected map[string]any) (verdict, error) {
+	raw, err := os.ReadFile(filepath.Join(workspace, "answer.json"))
+	var got map[string]any
+	if err == nil {
+		_ = json.Unmarshal(raw, &got)
+	}
+	v := verdict{Total: len(expected)}
+	keys := make([]string, 0, len(expected))
+	for key := range expected {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		want := expected[key]
+		if got[key] == want {
+			v.Passed++
+		} else {
+			v.Failed = append(v.Failed, key)
+		}
+	}
+	v.Score = float64(v.Passed) / float64(v.Total)
+	v.Solved = v.Passed == v.Total
 	return v, nil
 }

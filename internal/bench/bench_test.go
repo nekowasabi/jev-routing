@@ -11,8 +11,8 @@ import (
 
 func TestSummarizeComparesMediansAndDropsContaminated(t *testing.T) {
 	runs := []RunRecord{
-		{Task: "chess-bugfix", Mode: "on", Rep: 1, Solved: true, Score: 1, Requests: 4, Input: 50, Output: 40, Seconds: 10, Modes: map[string]int{"filter": 4}},
-		{Task: "chess-bugfix", Mode: "off", Rep: 1, Solved: true, Score: 1, Requests: 8, Input: 100, Output: 80, Seconds: 20, Modes: map[string]int{"passthrough": 8}},
+		{Task: "chess-bugfix", Mode: "on", Rep: 1, Solved: true, Score: 1, Requests: 4, Metered: 4, Input: 50, Output: 40, Seconds: 10, Modes: map[string]int{"filter": 4}},
+		{Task: "chess-bugfix", Mode: "off", Rep: 1, Solved: true, Score: 1, Requests: 8, Metered: 8, Input: 100, Output: 80, Seconds: 20, Modes: map[string]int{"passthrough": 8}},
 		{Task: "chess-bugfix", Mode: "on", Rep: 2, Solved: false, Score: 0.5, Requests: 4, Input: 10, Output: 10, Seconds: 5, Isolation: &Isolation{Contaminated: true, ForeignReads: []string{"/tmp/other"}}, Modes: map[string]int{}},
 	}
 	got := Summarize(runs, &Prices{Input: 1, Cached: 0.1, Output: 2})
@@ -27,10 +27,51 @@ func TestSummarizeComparesMediansAndDropsContaminated(t *testing.T) {
 	}
 }
 
+func TestSummarizeMissingMeterDoesNotClaimSavings(t *testing.T) {
+	runs := []RunRecord{
+		{Task: "chess-bugfix", Agent: "codex", Mode: "on", Requests: 1, Modes: map[string]int{"filter": 1}, MeterError: "usage missing"},
+		{Task: "chess-bugfix", Agent: "codex", Mode: "off", Requests: 10, Metered: 10, Input: 100, JevCalls: 1, Modes: map[string]int{"passthrough": 10}},
+	}
+	got := Summarize(runs, nil)
+	for _, row := range []string{
+		"Input tokens incl. cache, median | n/a | 100 |",
+		"LLM requests, median | n/a | 10 |",
+		"Jev calls, median | n/a | 1 |",
+		"Requests Jev steered | n/a | 0% |",
+	} {
+		if !strings.Contains(got, row) {
+			t.Fatalf("incomplete meter must not report %q as savings:\n%s", row, got)
+		}
+	}
+}
+
+func TestSummarizeTotalTokensIncludesJevOutput(t *testing.T) {
+	runs := []RunRecord{
+		{Task: "chess-bugfix", Agent: "codex", Mode: "on", Requests: 1, Metered: 1, Input: 10, Output: 2, JevInput: 3, JevOutput: 4},
+		{Task: "chess-bugfix", Agent: "codex", Mode: "off", Requests: 1, Metered: 1, Input: 20, Output: 2},
+	}
+	got := Summarize(runs, nil)
+	if !strings.Contains(got, "Total tokens incl. Jev, median | 19 (-14%) | 22 |") {
+		t.Fatalf("Jev output missing from total tokens:\n%s", got)
+	}
+}
+
+func TestSummarizeUsesVerifiedSessionTotal(t *testing.T) {
+	baseline, selection := 200, 150
+	runs := []RunRecord{
+		{Task: "xcell-module", Mode: "off", Requests: 3, Metered: 2, MeterError: "canceled response", TaskTokens: &baseline, UsageSource: "grok_cli_reconciled"},
+		{Task: "xcell-module", Mode: "on", Requests: 3, Metered: 2, MeterError: "canceled response", TaskTokens: &selection, UsageSource: "grok_cli_reconciled"},
+	}
+	got := Summarize(runs, nil)
+	if !strings.Contains(got, "Usage complete runs | 1 | 1 |") || !strings.Contains(got, "Total tokens incl. Jev, median | 150 (-25%) | 200 |") || !strings.Contains(got, "LLM requests, median | n/a | n/a |") {
+		t.Fatalf("session total and request-level missing usage confused:\n%s", got)
+	}
+}
+
 func TestSummarizeReportsCompaction(t *testing.T) {
 	runs := []RunRecord{
-		{Task: "chess-bugfix", Mode: "on", Rep: 1, Requests: 10, CompactRequests: 3, CompactDropped: 7, CompactSavedTokens: 1200},
-		{Task: "chess-bugfix", Mode: "off", Rep: 1, Requests: 10},
+		{Task: "chess-bugfix", Mode: "on", Rep: 1, Requests: 10, Metered: 10, CompactRequests: 3, CompactDropped: 7, CompactSavedTokens: 1200},
+		{Task: "chess-bugfix", Mode: "off", Rep: 1, Requests: 10, Metered: 10},
 	}
 	got := Summarize(runs, nil)
 	for _, row := range []string{
@@ -88,8 +129,8 @@ func TestAuditClaudeToolUse(t *testing.T) {
 func TestChartOmitsContaminated(t *testing.T) {
 	dir := t.TempDir()
 	runs := []RunRecord{
-		{Task: "chess-bugfix", Agent: "codex", AgentModel: "gpt-5.6-sol", Mode: "on", Solved: true, Score: 1, Input: 1000, Output: 10, Requests: 2, Seconds: 3},
-		{Task: "chess-bugfix", Agent: "codex", AgentModel: "gpt-5.6-sol", Mode: "off", Solved: true, Score: 1, Input: 2000, Output: 20, Requests: 4, Seconds: 6},
+		{Task: "chess-bugfix", Agent: "codex", AgentModel: "gpt-5.6-sol", Mode: "on", Solved: true, Score: 1, Input: 1000, Output: 10, Requests: 2, Metered: 2, Seconds: 3},
+		{Task: "chess-bugfix", Agent: "codex", AgentModel: "gpt-5.6-sol", Mode: "off", Solved: true, Score: 1, Input: 2000, Output: 20, Requests: 4, Metered: 4, Seconds: 6},
 		{Task: "chess-san", Agent: "codex", Mode: "on", Solved: true, Score: 1, Input: 9, Isolation: &Isolation{Contaminated: true}},
 	}
 	if err := Chart(runs, dir); err != nil {
@@ -105,6 +146,18 @@ func TestChartOmitsContaminated(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "comparison-dark.svg")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChartRejectsIncompleteUsageAndMissingBaseline(t *testing.T) {
+	base := RunRecord{Task: "chess-bugfix", Agent: "codex", AgentModel: "gpt-5.6-sol", Mode: "off", Requests: 1, Metered: 1, Input: 100}
+	on := RunRecord{Task: base.Task, Agent: base.Agent, AgentModel: base.AgentModel, Mode: "on", Requests: 1, MeterError: "usage missing"}
+	if err := Chart([]RunRecord{base, on}, t.TempDir()); err == nil {
+		t.Fatal("chart accepted missing usage")
+	}
+	on.MeterError, on.Metered = "", 1
+	if err := Chart([]RunRecord{on}, t.TempDir()); err == nil {
+		t.Fatal("chart accepted an on run without a baseline")
 	}
 }
 

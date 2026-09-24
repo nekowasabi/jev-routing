@@ -240,82 +240,36 @@ class SummarizeXCell(unittest.TestCase):
             self.assertEqual(slot["median_output_tokens_saved"], 10)
             self.assertTrue(slot["improved"])
 
-    def test_live_harness_exit_tracks_acceptance(self):
+    def test_xcell_entry_delegates_to_common_bench(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             scripts = root / "scripts"
             scripts.mkdir()
-            for name in ("test-x-cell.sh", "summarize_x_cell.py"):
-                shutil.copy(Path(__file__).parent / name, scripts / name)
-            for name, filename in LIVE_TARGETS.items():
-                path = root / filename
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with path.open("a") as out:
-                    out.write(f"func {name}() {{}}\n")
+            shutil.copy(Path(__file__).parent / "test-x-cell.sh", scripts / "test-x-cell.sh")
             subprocess.run(["git", "init", "-q", tmp], check=True)
-            subprocess.run(["git", "add", "."], cwd=root, check=True)
-            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-                            "commit", "-qm", "fixture"], cwd=root, check=True)
-            expected = expected_live_answers(root)
             fakebin = root / "fakebin"
             fakebin.mkdir()
-            # Correct answers and application counters cannot override a failed child.
-            commands = {
-                "claude": "#!/bin/sh\nif [ -n \"${JEV_RUN_STATS:-}\" ]; then printf '%s\\n' '{\"requests\":1,\"selectionApplied\":1,\"compactionApplied\":1,\"compaction\":\"on\",\"events\":[{\"apply\":\"filter\",\"compactApplied\":true,\"upstreamStatus\":200,\"upstreamFinish\":\"complete\"}]}' >\"$JEV_RUN_STATS\"; fi\nprintf '%s\\n' '" + json.dumps({"result": json.dumps(expected)}) + "'\nexit \"$FAKE_EXIT\"\n",
-                "go": "#!/bin/sh\nmkdir -p \"$(dirname \"$3\")\"\nprintf '%s\\n' '#!/bin/sh' 'shift; cli=$1; shift; shift; exec \"$cli\" \"$@\"' >\"$3\"\nchmod +x \"$3\"\n",
-                "codex": f"#!{sys.executable}\n" + "import json, os, sys\nfrom pathlib import Path\n"
-                    + "with open(os.environ['ARGV_LOG'], 'a') as out: out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-                    + "if os.environ.get('JEV_RUN_STATS'): assert os.environ.get('JEV_REASONING') == 'legacy'\n"
-                    + "stats = {'reasoning': os.environ.get('JEV_REASONING'), 'selectionApplied': 1, 'compactionApplied': 1, 'compaction': 'on', 'events': [{'apply': 'filter', 'compactApplied': True, 'upstreamStatus': 200, 'upstreamFinish': 'complete'}]}\n"
-                    + "if os.environ.get('JEV_RUN_STATS'): Path(os.environ['JEV_RUN_STATS']).write_text(json.dumps(stats))\n"
-                    + "print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': " + repr(json.dumps(expected)) + "}}))\n"
-                    + "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\nsys.exit(int(os.environ['FAKE_EXIT']))\n",
-            }
-            for name, code in commands.items():
-                path = fakebin / name
-                path.write_text(code)
-                path.chmod(0o755)
-            home = root / "home"
-            history = home / ".local" / "state" / "jev-routing" / "x-cell.jsonl"
-            base_env = {key: value for key, value in os.environ.items() if key != "JEV_XCELL_LOG"}
-            seen = 0
-            for host, exit_code in (("claude", 7), ("claude", 0), ("codex", 7), ("codex", 0)):
-                proc = subprocess.run(["bash", str(scripts / "test-x-cell.sh"), host], cwd=root,
-                                      env={**base_env, "HOME": str(home),
-                                           "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
-                                           "FAKE_EXIT": str(exit_code), "CODEX_MODEL": "gpt-5.6-terra",
-                                           "JEV_REASONING": "legacy",
-                                           "ARGV_LOG": str(root / "codex-argv.jsonl")}, capture_output=True, text=True)
-                self.assertEqual(proc.returncode, int(exit_code != 0), proc.stdout + proc.stderr)
-                self.assertIn("結果: ", proc.stdout, proc.stdout + proc.stderr)
-                run_path = Path(proc.stdout.split("結果: ", 1)[1].strip())
-                data = json.loads((run_path / host / "comparison.json").read_text())
-                self.assertEqual(data["valid"], exit_code == 0)
-                self.assertEqual(data["baseline"]["exit_code"], exit_code)
-                self.assertEqual(data["jev"]["events"], [{"apply": "filter", "compactApplied": True, "upstreamStatus": 200, "upstreamFinish": "complete"}])
-                if exit_code:
-                    self.assertIsNone(data["reduction"])
-                if host == "codex":
-                    for mode in ("baseline", "jev"):
-                        self.assertEqual(data[mode]["model"], "gpt-5.6-terra")
-                        self.assertEqual(data[mode]["effort"], "low")
-                        self.assertEqual(data[mode]["routing_reasoning"], "legacy" if mode == "jev" else None)
-                seen += 1
-                self.assertIn(f"履歴: {history}", proc.stdout, proc.stdout + proc.stderr)
-                rows = [json.loads(line) for line in history.read_text().splitlines()]
-                self.assertEqual(len(rows), seen)
-                self.assertEqual(rows[-1]["host"], host)
-                self.assertEqual(rows[-1]["run_id"], run_path.name)
-                self.assertEqual(rows[-1]["comparable"], exit_code == 0)
-                self.assertEqual(rows[-1]["modes"]["baseline"]["exit_code"], exit_code)
-                self.assertIn("hybrid", rows[-1]["modes"])
-                if exit_code:
-                    self.assertIsNone(rows[-1]["reduction"])
-            calls = [json.loads(line) for line in (root / "codex-argv.jsonl").read_text().splitlines()]
-            self.assertEqual(len(calls), 4)
-            for args in calls:
-                self.assertEqual(args[args.index("--model") + 1], "gpt-5.6-terra")
-                self.assertEqual(args[args.index("-c") + 1], 'model_reasoning_effort="low"')
+            go = fakebin / "go"
+            go.write_text("#!/bin/sh\ncat > \"$3\" <<'SH'\n#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_LOG\"\nexit \"${FAKE_EXIT:-0}\"\nSH\nchmod +x \"$3\"\n")
+            go.chmod(0o755)
+            codex = fakebin / "codex"
+            codex.write_text("#!/bin/sh\nexit 0\n")
+            codex.chmod(0o755)
+            env = {**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
+                   "JEV_XCELL_TASK": "module", "JEV_XCELL_REPEATS": "2",
+                   "JEV_XCELL_DIRECT": "1", "ARGV_LOG": str(root / "argv.log")}
+            proc = subprocess.run(["bash", str(scripts / "test-x-cell.sh"), "codex"], cwd=root,
+                                  env=env, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            args = (root / "argv.log").read_text().splitlines()
+            for value in ("bench", "--agent", "codex", "--tasks", "xcell-module",
+                          "--modes", "direct,off,on", "--reps", "2", "gpt-5.6-terra"):
+                self.assertIn(value, args)
+            self.assertIn("結果: ", proc.stdout)
+            env["FAKE_EXIT"] = "7"
+            proc = subprocess.run(["bash", str(scripts / "test-x-cell.sh"), "codex"], cwd=root,
+                                  env=env, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 1)
 
 
 if __name__ == "__main__":
