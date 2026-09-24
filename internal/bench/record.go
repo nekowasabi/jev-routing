@@ -69,6 +69,34 @@ type RunRecord struct {
 	CompactRequests    int `json:"compactRequests"`
 	CompactDropped     int `json:"compactDropped"`
 	CompactSavedTokens int `json:"compactSavedTokens"`
+
+	// ClaudeClear marks the Claude "on" condition as native context editing
+	// (clear_tool_uses_20250919) rather than JEV_CLAUDE_ADVISE; see --claude-clear.
+	ClaudeClear        bool `json:"claudeClear,omitempty"`
+	ClaudeClearTrigger int  `json:"claudeClearTrigger,omitempty"`
+	ClaudeClearAtLeast int  `json:"claudeClearAtLeast,omitempty"`
+	ClaudeClearKeep    int  `json:"claudeClearKeep,omitempty"`
+	// ClaudeClearExclude is the raw --claude-clear-exclude value (comma-
+	// separated tool names); see internal/proxy Options.ClaudeClearExclude.
+	ClaudeClearExclude string `json:"claudeClearExclude,omitempty"`
+	ClearedToolUses    int    `json:"clearedToolUses,omitempty"`
+	ClearedInputTokens int    `json:"clearedInputTokens,omitempty"`
+
+	// ClearNet* is the same-path net reduction native context editing gave
+	// this "on" run against its own counterfactual (see clearnet.go), as
+	// opposed to the on-vs-off run comparison the rest of this file reports.
+	// Populated only for Claude runs with ClaudeClear set; nil means "not
+	// measured" (wrong condition or missing artifacts), which is distinct
+	// from a measured 0. ClearReworkTokens/ClearNetTokens/ClearNetPct stay
+	// nil specifically when a run cleared tokens but its rework cost could
+	// not be attributed (agent.log/proxy-events.json turn count mismatch) --
+	// that run must not be silently treated as a zero-rework success.
+	ClearSavedTokens     *int `json:"clearSavedTokens,omitempty"`
+	ClearExtraCacheWrite *int `json:"clearExtraCacheWrite,omitempty"`
+	ClearReworkTokens    *int `json:"clearReworkTokens,omitempty"`
+	ClearNetTokens       *int `json:"clearNetTokens,omitempty"`
+	// ClearNetPct is a fraction (0.145, not 14.5): net / cfTotal.
+	ClearNetPct *float64 `json:"clearNetPct,omitempty"`
 }
 
 type ModelUsage struct {

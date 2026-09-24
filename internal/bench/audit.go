@@ -15,12 +15,28 @@ type Isolation struct {
 	Outside      []Touch  `json:"outside,omitempty"`
 	ForeignReads []string `json:"foreignReads,omitempty"`
 	Contaminated bool     `json:"contaminated"`
+	// Cleaned/CleanupFailed are the files this run created outside its
+	// sandbox, under the OS temp dir, that were (or failed to be) removed
+	// after the run so a later run does not read them as "found" and get
+	// misclassified as contaminated. CleanupSkipped notes --keep left them.
+	Cleaned        []string `json:"cleaned,omitempty"`
+	CleanupFailed  []string `json:"cleanupFailed,omitempty"`
+	CleanupSkipped bool     `json:"cleanupSkipped,omitempty"`
+	// SandboxMethod is how this run's process isolation was enforced:
+	// "bwrap" (private tmpfs /tmp via bubblewrap) or "none" (host /tmp
+	// shared across runs, protected only by the audit above). Empty for
+	// the fake agent, which spawns no process. See sandbox.go.
+	SandboxMethod string `json:"sandboxMethod,omitempty"`
 }
 
 // Touch is one path outside the sandbox.
 type Touch struct {
 	Path string `json:"path"`
 	How  string `json:"how"`
+	// real is the literal filesystem path; Path may be "~"-shortened for
+	// display (see inspect's shown), which is not safe to pass to os.Remove.
+	// Unexported: json.Marshal already skips it.
+	real string
 }
 
 // Places an agent may touch without it meaning anything: the toolchain and the system.
@@ -37,7 +53,14 @@ type toolCall struct {
 // Audit reads the agent log and lists paths outside the sandbox.
 // Codex and Claude Code are parsed the way jev-gateway-bench parses them.
 // Other agents are audited only when their log contains the same shell lines.
-func Audit(agent, agentLog, sandbox, home string) Isolation {
+//
+// tmpSnapshot is the set of /tmp (and os.TempDir()) top-level entries that
+// existed before this run's agent started (see snapshotTmp). It takes
+// priority over the tool-call text heuristic for any outside path under a
+// tmp root: not in the snapshot means this run made it. Pass nil when no
+// snapshot was captured (e.g. re-auditing an old results dir); the text
+// heuristic alone then decides, as before.
+func Audit(agent, agentLog, sandbox, home string, tmpSnapshot map[string]bool) Isolation {
 	raw, err := os.ReadFile(agentLog)
 	if err != nil {
 		return Isolation{Audited: false}
@@ -51,7 +74,7 @@ func Audit(agent, agentLog, sandbox, home string) Isolation {
 	default:
 		calls = codexCommands(string(raw))
 	}
-	return inspect(calls, sandbox, home)
+	return inspect(calls, sandbox, home, tmpSnapshot)
 }
 
 // codexDualFactEvidence checks completed MCP results in the host's JSONL trace.
@@ -93,7 +116,7 @@ func codexDualFactEvidence(agentLog string) bool {
 	return left != "" && right != "" && left != right
 }
 
-func inspect(calls []toolCall, sandbox, home string) Isolation {
+func inspect(calls []toolCall, sandbox, home string, tmpSnapshot map[string]bool) Isolation {
 	seen := map[string]string{}
 	var order []string
 	for _, call := range calls {
@@ -109,7 +132,13 @@ func inspect(calls []toolCall, sandbox, home string) Isolation {
 				continue
 			}
 			how := "found"
-			if call.tool == "Write" || createdPath(call.text, path) {
+			if top, ok := topLevelTmpEntry(path); tmpSnapshot != nil && ok {
+				// Snapshot decides for tmp paths: absent at run start means
+				// this run made it, no matter how the text heuristic reads.
+				if !tmpSnapshot[top] {
+					how = "created"
+				}
+			} else if call.tool == "Write" || createdPath(call.text, path) {
 				how = "created"
 			}
 			seen[path] = how
@@ -123,7 +152,7 @@ func inspect(calls []toolCall, sandbox, home string) Isolation {
 		if home != "" && strings.HasPrefix(path, home) {
 			shown = "~" + path[len(home):]
 		}
-		outside = append(outside, Touch{Path: shown, How: seen[path]})
+		outside = append(outside, Touch{Path: shown, How: seen[path], real: path})
 		if seen[path] == "found" {
 			foreign = append(foreign, shown)
 		}

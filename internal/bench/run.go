@@ -43,6 +43,12 @@ Options:
   --tasks a,b                            task ids (default: chess suite)
   --modes on,off[,direct]                routing states to compare (default on,off)
   --on-mode filter|forced                what "on" means (default filter; "off" is always baseline)
+  --claude-clear                         Claude "on": enable native context editing (clear_tool_uses_20250919)
+                                          instead of JEV_CLAUDE_ADVISE, so the two are measured separately
+  --claude-clear-trigger N               input_tokens trigger (default 100000)
+  --claude-clear-at-least N              input_tokens clear_at_least (default 20000)
+  --claude-clear-keep N                  tool_uses keep (default 3)
+  --claude-clear-exclude names           comma-separated tool names the edit must never clear
   --reps N                               repetitions of every task in every mode (default 1)
   --min-pairs N                          paired repeats required for effect decision (default 6)
   --min-savings-pct P                    predeclared practical savings threshold (default 0)
@@ -111,6 +117,11 @@ func runCmd(args []string) int {
 	taskIDs := fs.String("tasks", "", "task ids")
 	modeFlag := fs.String("modes", "on,off", "on,off")
 	onMode := fs.String("on-mode", proxy.ModeFilter, "filter|forced")
+	claudeClear := fs.Bool("claude-clear", false, "enable native context editing on Claude's on condition, instead of advise")
+	claudeClearTrigger := fs.Int("claude-clear-trigger", proxy.DefaultOptions().ClaudeClearTrigger, "input_tokens trigger")
+	claudeClearAtLeast := fs.Int("claude-clear-at-least", proxy.DefaultOptions().ClaudeClearAtLeast, "input_tokens clear_at_least")
+	claudeClearKeep := fs.Int("claude-clear-keep", proxy.DefaultOptions().ClaudeClearKeep, "tool_uses keep")
+	claudeClearExclude := fs.String("claude-clear-exclude", "", "comma-separated tool names to exclude from clearing")
 	repsFlag := fs.String("reps", "1", "repetitions")
 	minPairs := fs.Int("min-pairs", 6, "minimum paired repeats for an effect decision")
 	minSavingsPct := fs.Float64("min-savings-pct", 0, "minimum practical token savings percent")
@@ -143,6 +154,9 @@ func runCmd(args []string) int {
 			*model = "claude-sonnet-5"
 		case "codex":
 			*model = "gpt-5.6-terra"
+		case "grok":
+			// Why: without --model the Grok CLI resolves its own default at startup, and the first run of a series picked grok-4.6
+			*model = "grok-4.7"
 		}
 	}
 	if agent != "fake" {
@@ -335,6 +349,22 @@ func runCmd(args []string) int {
 		gitQuiet(workspace, "add", "-A")
 		gitQuiet(workspace, "-c", "user.name=bench", "-c", "user.email=bench@localhost", "commit", "-q", "-m", "task")
 
+		sandboxMethod := "none"
+		if agent != "fake" && bwrapAvailable() {
+			sandboxMethod = "bwrap"
+		}
+		// Why: captured right before the agent runs, so Audit can tell paths
+		// this run made outside its sandbox from paths that were already
+		// there (see inspect's tmpSnapshot use). Under bwrap the run's /tmp
+		// is its own empty tmpfs (see sandbox.go's bwrapWrap): nothing could
+		// already be in it, so every /tmp path is this run's own and no
+		// host snapshot is needed. Only the fallback shares the host /tmp
+		// across runs.
+		tmpSnapshot := map[string]bool{}
+		if sandboxMethod != "bwrap" {
+			tmpSnapshot = snapshotTmp()
+		}
+
 		fmt.Printf("[%d/%d] %s … ", i+1, len(plan), label)
 		logFile, _ := os.Create(filepath.Join(runDir, "gateway.log"))
 		var logW io.Writer = io.Discard
@@ -348,6 +378,23 @@ func runCmd(args []string) int {
 			if step.mode == "on" {
 				gatewayEnv["JEV_AUTO_APPLY"] = "on"
 				gatewayEnv["JEV_KIND_MODES"] = "skill=apply,mcp_tool=observe,cli=observe,plugin=observe"
+			}
+		}
+		// Why: JEV_CLAUDE_ADVISE defaults off (docs/MEMO.md), which would make
+		// Claude's "on" bench condition indistinguishable from "off". The bench
+		// still needs advise applied to measure it, so force it on here only.
+		// --claude-clear is a separate Claude "on" condition (native context
+		// editing) and must not also enable advise, or the two effects mix.
+		if agent == "claude" && step.mode == "on" && !*claudeClear {
+			gatewayEnv["JEV_CLAUDE_ADVISE"] = "on"
+		}
+		if agent == "claude" && step.mode == "on" && *claudeClear {
+			gatewayEnv["JEV_CLAUDE_CLEAR_TOOL_USES"] = "on"
+			gatewayEnv["JEV_CLAUDE_CLEAR_TRIGGER"] = strconv.Itoa(*claudeClearTrigger)
+			gatewayEnv["JEV_CLAUDE_CLEAR_AT_LEAST"] = strconv.Itoa(*claudeClearAtLeast)
+			gatewayEnv["JEV_CLAUDE_CLEAR_KEEP"] = strconv.Itoa(*claudeClearKeep)
+			if *claudeClearExclude != "" {
+				gatewayEnv["JEV_CLAUDE_CLEAR_EXCLUDE"] = *claudeClearExclude
 			}
 		}
 		if step.mode == "direct" {
@@ -411,7 +458,11 @@ func runCmd(args []string) int {
 				}
 				minutes = n
 			}
-			outcome = runProc(ctx, cmd.File, cmd.Args, cmd.Dir, cmd.Env, agentLog, time.Duration(minutes)*time.Minute, nil)
+			file, args := cmd.File, cmd.Args
+			if sandboxMethod == "bwrap" {
+				file, args = bwrapWrap(file, args, sandbox)
+			}
+			outcome = runProc(ctx, file, args, cmd.Dir, cmd.Env, agentLog, time.Duration(minutes)*time.Minute, nil)
 		}
 		var usage RunRecord
 		var merr error
@@ -445,7 +496,20 @@ func runCmd(args []string) int {
 		_ = runProc(context.Background(), "git", []string{"diff", "--cached", "--stat"}, workspace, nil, filepath.Join(runDir, "diff.stat"), 30*time.Second, nil)
 
 		home, _ := os.UserHomeDir()
-		isolation := Audit(agent, agentLog, sandbox, home)
+		isolation := Audit(agent, agentLog, sandbox, home, tmpSnapshot)
+		isolation.SandboxMethod = sandboxMethod
+		// Why: --keep means "leave the run's footprint for inspection"; a run
+		// asked to keep its sandbox must also keep what it left in /tmp.
+		if *keep {
+			isolation.CleanupSkipped = true
+		} else if sandboxMethod != "bwrap" {
+			// Under bwrap there is nothing to clean: the run's /tmp was its
+			// own tmpfs, already gone with the process, and never reached
+			// the host's /tmp. Cleanup stays for the fallback (no bwrap).
+			cleaned := cleanupOutsideTmp(isolation.Outside)
+			isolation.Cleaned = cleaned.Cleaned
+			isolation.CleanupFailed = cleaned.Failed
+		}
 		record := usage
 		record.Task = step.task.ID
 		record.Agent = agent
@@ -455,18 +519,30 @@ func runCmd(args []string) int {
 		record.EffectMinSavingsPct = *minSavingsPct
 		record.ApprovalMode = map[string]string{"claude": "acceptEdits", "codex": "approve-for-me", "grok": "bypassPermissions", "devin": "dangerous", "fake": "none"}[agent]
 		record.SourceRevision = sourceRevision()
-		settings, _ := json.Marshal(map[string]any{
-			"task": step.task.ID, "agent": agent, "model": *model, "effort": *effort,
-			"approval": record.ApprovalMode, "minPairs": *minPairs, "minSavingsPct": *minSavingsPct,
-			"userTools": *userTools, "catalog": *catalog, "source": record.SourceRevision,
-			"selection": opt.SelectionMode, "reasoning": opt.Reasoning, "compaction": opt.Compaction,
-			"transforms": opt.Transforms, "costGate": opt.CostGateMax, "kindModes": opt.KindModes,
-			"applicationPolicy": opt.ApplicationPolicy, "shadow": opt.Shadow,
+		record.CompareKey = computeCompareKey(compareKeySettings{
+			Task: step.task.ID, Agent: agent, Model: *model, Effort: *effort,
+			Approval: record.ApprovalMode, MinPairs: *minPairs, MinSavingsPct: *minSavingsPct,
+			UserTools: *userTools, Catalog: *catalog, Source: record.SourceRevision,
+			Selection: opt.SelectionMode, Reasoning: opt.Reasoning, Compaction: opt.Compaction,
+			Transforms: opt.Transforms, CostGate: opt.CostGateMax, KindModes: opt.KindModes,
+			ApplicationPolicy: opt.ApplicationPolicy, Shadow: opt.Shadow,
+			ClaudeClear: *claudeClear, ClaudeClearTrigger: *claudeClearTrigger,
+			ClaudeClearAtLeast: *claudeClearAtLeast, ClaudeClearKeep: *claudeClearKeep,
+			ClaudeClearExclude: *claudeClearExclude,
+			// Why: bwrap and the fallback give different isolation
+			// guarantees; mixing their runs into one comparison would
+			// average over that difference instead of reporting it.
+			SandboxMethod: sandboxMethod,
 		})
-		fingerprint := sha256.Sum256(settings)
-		record.CompareKey = hex.EncodeToString(fingerprint[:])
 		record.UserTools = *userTools
 		record.Catalog = *catalog
+		if agent == "claude" && *claudeClear {
+			record.ClaudeClear = true
+			record.ClaudeClearTrigger = *claudeClearTrigger
+			record.ClaudeClearAtLeast = *claudeClearAtLeast
+			record.ClaudeClearKeep = *claudeClearKeep
+			record.ClaudeClearExclude = *claudeClearExclude
+		}
 		record.Mode = step.mode
 		record.Rep = step.rep
 		record.ExitCode = outcome.ExitCode
@@ -563,6 +639,7 @@ func runCmd(args []string) int {
 			record.EvidenceComplete = xcellLocateEvidence(agent, agentLog, workspace)
 		}
 		assignTaskUsage(&record)
+		applyClearNet(outDir, &record)
 		if *keep {
 			record.Workspace = workspace
 		}
@@ -622,6 +699,30 @@ func overrideBenchEnv(values map[string]string) func() {
 			}
 		}
 	}
+}
+
+// compareKeySettings is everything that must match between two runs for
+// them to be considered the same condition (see BuildComparisons in
+// comparison.go, which rejects pairs whose CompareKey differs).
+type compareKeySettings struct {
+	Task, Agent, Model, Effort, Approval, Source            string
+	MinPairs, Catalog, CostGate                             int
+	MinSavingsPct                                           float64
+	UserTools, Shadow                                       bool
+	Selection, Reasoning, Compaction, ApplicationPolicy     string
+	Transforms                                              proxy.TransformOptions
+	KindModes                                               map[string]string
+	ClaudeClear                                             bool
+	ClaudeClearTrigger, ClaudeClearAtLeast, ClaudeClearKeep int
+	ClaudeClearExclude, SandboxMethod                       string
+}
+
+// computeCompareKey hashes compareKeySettings; two runs get the same
+// CompareKey iff every field above matches byte-for-byte.
+func computeCompareKey(s compareKeySettings) string {
+	settings, _ := json.Marshal(s)
+	fingerprint := sha256.Sum256(settings)
+	return hex.EncodeToString(fingerprint[:])
 }
 
 func sourceRevision() string {
@@ -874,6 +975,17 @@ func reportCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	// Why: runs.jsonl from before this metric existed has no ClearNet*
+	// fields; recompute them from each run's own proxy-events.json/agent.log
+	// every time report runs, and persist so later reads (dashboard,
+	// scripts) don't have to.
+	for i := range runs {
+		applyClearNet(dir, &runs[i])
+	}
+	if err := writeRuns(filepath.Join(dir, "runs.jsonl"), runs); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if err := WriteComparisonJSON(filepath.Join(dir, "comparison.json"), runs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -922,7 +1034,9 @@ func auditCmd(args []string) int {
 			if strings.HasSuffix(workspace, "/workspace") {
 				sandbox = strings.TrimSuffix(workspace, "/workspace")
 			}
-			iso := Audit(runs[i].Agent, logPath, sandbox, home)
+			// tmpSnapshot is nil: a past run's /tmp state at start time was
+			// never recorded, so re-auditing falls back to the text heuristic.
+			iso := Audit(runs[i].Agent, logPath, sandbox, home, nil)
 			runs[i].Isolation = &iso
 			if iso.Audited {
 				audited++
@@ -1004,21 +1118,6 @@ func fakeUpstreamCmd(args []string) int {
 
 func claimLock() (func(), error) {
 	tmp := os.TempDir()
-	entries, _ := os.ReadDir(tmp)
-	for _, entry := range entries {
-		name := entry.Name()
-		m := benchDirRe.FindStringSubmatch(name)
-		if m == nil {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(tmp, name, ".bench-keep")); err == nil {
-			continue
-		}
-		pid, _ := strconv.Atoi(m[1])
-		if pid == 0 || !alive(pid) {
-			_ = os.RemoveAll(filepath.Join(tmp, name))
-		}
-	}
 	lock := filepath.Join(tmp, "jev-bench.lock")
 	if raw, err := os.ReadFile(lock); err == nil {
 		pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
@@ -1028,6 +1127,25 @@ func claimLock() (func(), error) {
 	}
 	if err := os.WriteFile(lock, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
 		return nil, err
+	}
+	// Why: only one bench process may hold this lock at a time, so once it
+	// is ours every leftover jev-bench-* directory is an orphan from a past
+	// run and safe to sweep unconditionally. The old sweep instead trusted
+	// the pid embedded in the directory name (removing it only when that
+	// pid was not alive) — but pids wrap around and get reused, so a
+	// directory left by a long-dead run whose pid happened to equal this
+	// process's own pid was never swept. The next run's audit then found
+	// it and misclassified that run as contaminated.
+	entries, _ := os.ReadDir(tmp)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !benchDirRe.MatchString(name) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(tmp, name, ".bench-keep")); err == nil {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(tmp, name))
 	}
 	return func() { _ = os.Remove(lock) }, nil
 }

@@ -34,6 +34,17 @@ type Comparison struct {
 	BaselineTokens         *int     `json:"baselineTokens"`
 	SelectionTokens        *int     `json:"selectionTokens"`
 	SavedTokens            *int     `json:"savedTokens"`
+	// SelectionClearedToolUses/SelectionClearedInputTokens report the
+	// intervention side's native context editing activity (--claude-clear).
+	// Populated for every pair with an "on" run, not just ClaudeClear ones,
+	// so the dashboard can show it was zero rather than absent.
+	SelectionClearedToolUses    *int `json:"selectionClearedToolUses,omitempty"`
+	SelectionClearedInputTokens *int `json:"selectionClearedInputTokens,omitempty"`
+	// SelectionClaudeClear/SelectionClearNetPct carry the on run's same-path
+	// net-reduction result (see clearnet.go) into AssessEffects' grouping,
+	// separate from the on-vs-off comparison the rest of this row reports.
+	SelectionClaudeClear bool     `json:"selectionClaudeClear,omitempty"`
+	SelectionClearNetPct *float64 `json:"selectionClearNetPct,omitempty"`
 }
 
 // BuildComparisons never invents a token total for a missing or failed pair.
@@ -105,6 +116,10 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			row.SelectionSolved = p.on.Solved
 			row.SelectionApplied = p.on.JevApplied > 0
 			row.SelectionUsageSource = p.on.UsageSource
+			row.SelectionClearedToolUses = &p.on.ClearedToolUses
+			row.SelectionClearedInputTokens = &p.on.ClearedInputTokens
+			row.SelectionClaudeClear = p.on.ClaudeClear
+			row.SelectionClearNetPct = p.on.ClearNetPct
 			if p.on.ParentChildVerified {
 				row.SelectionChildSessions = &p.on.ChildSessions
 				row.SelectionChildTokens = &p.on.ChildTokens
@@ -161,7 +176,11 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			if (k.agent == "claude" || k.agent == "codex") && (!p.off.HostUsageVerified || !p.on.HostUsageVerified) {
 				row.Reasons = append(row.Reasons, "host_usage_unverified")
 			}
-			if p.on.JevCalls == 0 || p.on.JevApplied == 0 {
+			// Why: --claude-clear only fires past its input-token trigger, so a
+			// run where it never fired is still a legitimate result of the
+			// intervention, not an incomplete measurement. Gating those out
+			// would keep only the longest runs and bias the comparison.
+			if !p.on.ClaudeClear && (p.on.JevCalls == 0 || p.on.JevApplied == 0) {
 				row.Reasons = append(row.Reasons, "jev_not_applied")
 			}
 			if len(row.Reasons) == 0 {

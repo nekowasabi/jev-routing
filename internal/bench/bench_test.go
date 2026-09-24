@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -95,7 +96,7 @@ func TestAuditFlagsForeignReadButNotAgentsSearch(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := Audit("codex", logPath, sandbox, "/home/someone")
+	got := Audit("codex", logPath, sandbox, "/home/someone", nil)
 	if !got.Audited || !got.Contaminated {
 		t.Fatalf("audit = %+v", got)
 	}
@@ -120,9 +121,66 @@ func TestAuditClaudeToolUse(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte(line), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := Audit("claude", logPath, filepath.Join(dir, "sandbox"), "")
+	got := Audit("claude", logPath, filepath.Join(dir, "sandbox"), "", nil)
 	if !got.Contaminated || got.ToolCalls != 1 {
 		t.Fatalf("audit = %+v", got)
+	}
+}
+
+// TestAuditSnapshotClearsCommandsTheTextHeuristicCannotSeeAsCreates covers
+// the on-disk evidence from a real bench run (chess_debug.mjs written via
+// node's fs.writeFileSync, chess_debug.js via cp, chesscheck via a
+// relative-path mkdir later referenced by its absolute path): none of
+// those match the "was this created" regex, so before the snapshot they
+// were misread as "found" (another run's file) and the run was wrongly
+// marked contaminated.
+func TestAuditSnapshotClearsCommandsTheTextHeuristicCannotSeeAsCreates(t *testing.T) {
+	root, err := os.MkdirTemp("/var/tmp", "jev-bench-audit-test-")
+	if err != nil {
+		t.Skipf("no writable /var/tmp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	t.Setenv("TMPDIR", root)
+
+	dir := t.TempDir()
+	sandbox := filepath.Join(dir, "sandbox")
+	logPath := filepath.Join(dir, "agent.log")
+
+	// A sibling that was already there before this run's agent started —
+	// still real contamination if the run reads it.
+	preExisting := filepath.Join(root, "pre-existing")
+	if err := os.WriteFile(preExisting, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tmpSnapshot := snapshotTmp()
+
+	// Made by this run via fs.writeFileSync (not `>`, `tee`, `mkdir` or
+	// `touch`, so createdPath's regex never matches it).
+	madeThisRun := filepath.Join(root, "chess_debug.mjs")
+	if err := os.WriteFile(madeThisRun, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	body := "/bin/bash -lc 'node -e \"fs.writeFileSync(" + strconv.Quote(madeThisRun) + ", src)\"'\n" +
+		"/bin/bash -lc 'cat " + preExisting + "'\n"
+	if err := os.WriteFile(logPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Audit("codex", logPath, sandbox, "", tmpSnapshot)
+	how := map[string]string{}
+	for _, touch := range got.Outside {
+		how[touch.Path] = touch.How
+	}
+	if how[madeThisRun] != "created" {
+		t.Fatalf("path made this run via writeFileSync must be created, got %+v", got.Outside)
+	}
+	if how[preExisting] != "found" {
+		t.Fatalf("path from before this run must stay found, got %+v", got.Outside)
+	}
+	if !got.Contaminated || len(got.ForeignReads) != 1 || got.ForeignReads[0] != preExisting {
+		t.Fatalf("only the pre-existing path should contaminate, got %+v", got)
 	}
 }
 

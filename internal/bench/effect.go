@@ -12,19 +12,38 @@ type EffectPolicy struct {
 }
 
 type EffectResult struct {
-	Task              string   `json:"task"`
-	Agent             string   `json:"agent"`
-	Model             string   `json:"model"`
-	BaselineMode      string   `json:"baselineMode"`
-	Status            string   `json:"status"`
-	Reason            string   `json:"reason,omitempty"`
-	TotalPairs        int      `json:"totalPairs"`
-	ComparablePairs   int      `json:"comparablePairs"`
+	Task            string `json:"task"`
+	Agent           string `json:"agent"`
+	Model           string `json:"model"`
+	BaselineMode    string `json:"baselineMode"`
+	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
+	TotalPairs      int    `json:"totalPairs"`
+	ComparablePairs int    `json:"comparablePairs"`
+	// ClearedPairs is how many of TotalPairs had the intervention side
+	// actually clear at least one tool use (--claude-clear can end a run
+	// without ever crossing its trigger; that is a valid result, not noise).
+	ClearedPairs      int      `json:"clearedPairs,omitempty"`
 	MedianSavedTokens *float64 `json:"medianSavedTokens,omitempty"`
 	MedianSavingsPct  *float64 `json:"medianSavingsPct,omitempty"`
 	LowerSavingsPct   *float64 `json:"lowerSavingsPct,omitempty"`
 	UpperSavingsPct   *float64 `json:"upperSavingsPct,omitempty"`
 	Coverage          float64  `json:"coverage,omitempty"`
+
+	// ClearNet* summarizes native context editing's same-path net reduction
+	// (clearnet.go) across this group's --claude-clear "on" runs. This is a
+	// different measurement from the fields above: those compare separate
+	// on/off runs against each other (noisy, per the reason this metric was
+	// added -- see docs/MEMO.md); this compares each on run against its own
+	// counterfactual and does not need a baseline run at all.
+	ClearNetRuns        int `json:"clearNetRuns,omitempty"`
+	ClearNetClearedRuns int `json:"clearNetClearedRuns,omitempty"`
+	// ClearNetMedianPct/Min/Max are fractions (0.145, not 14.5).
+	ClearNetMedianPct     *float64 `json:"clearNetMedianPct,omitempty"`
+	ClearNetMinPct        *float64 `json:"clearNetMinPct,omitempty"`
+	ClearNetMaxPct        *float64 `json:"clearNetMaxPct,omitempty"`
+	ClearNetAllPositive   bool     `json:"clearNetAllPositive,omitempty"`
+	ClearNetReworkMissing int      `json:"clearNetReworkMissing,omitempty"`
 }
 
 func AssessEffects(file ComparisonFile, policy EffectPolicy) []EffectResult {
@@ -63,6 +82,9 @@ func AssessEffects(file ComparisonFile, policy EffectPolicy) []EffectResult {
 			if row.BaselineSolved && !row.SelectionSolved {
 				qualityLoss = true
 			}
+			if row.SelectionClearedToolUses != nil && *row.SelectionClearedToolUses > 0 {
+				effect.ClearedPairs++
+			}
 			if row.Status != "comparable" || row.BaselineTokens == nil || row.SelectionTokens == nil || row.SavedTokens == nil || *row.BaselineTokens <= 0 {
 				incomplete = true
 				continue
@@ -92,9 +114,54 @@ func AssessEffects(file ComparisonFile, policy EffectPolicy) []EffectResult {
 				effect.Reason = "interval_crosses_threshold"
 			}
 		}
+		assessClearNet(&effect, rows)
 		out = append(out, effect)
 	}
 	return out
+}
+
+// assessClearNet fills the group's same-path net-reduction summary from its
+// --claude-clear "on" runs, independent of the on/off comparability status
+// computed above (a run's own counterfactual doesn't need a paired baseline).
+func assessClearNet(effect *EffectResult, rows []Comparison) {
+	// Why: median/min/max describe the cleared-run population (a run that
+	// never fired --claude-clear has a legitimate, uninteresting net=0 that
+	// would just compress the range toward zero); ClearNetRuns/ClearedRuns
+	// still count every --claude-clear "on" run so the summary states what
+	// fraction of runs even reached the trigger.
+	var firedPcts []float64
+	for _, row := range rows {
+		if !row.SelectionClaudeClear {
+			continue
+		}
+		effect.ClearNetRuns++
+		fired := row.SelectionClearedInputTokens != nil && *row.SelectionClearedInputTokens > 0
+		if !fired {
+			continue
+		}
+		effect.ClearNetClearedRuns++
+		if row.SelectionClearNetPct != nil {
+			firedPcts = append(firedPcts, *row.SelectionClearNetPct)
+		} else {
+			effect.ClearNetReworkMissing++
+		}
+	}
+	if effect.ClearNetRuns == 0 {
+		return
+	}
+	effect.ClearNetMedianPct = median(firedPcts)
+	if len(firedPcts) > 0 {
+		sorted := append([]float64(nil), firedPcts...)
+		sort.Float64s(sorted)
+		lo, hi := sorted[0], sorted[len(sorted)-1]
+		effect.ClearNetMinPct, effect.ClearNetMaxPct = &lo, &hi
+	}
+	effect.ClearNetAllPositive = effect.ClearNetReworkMissing == 0
+	for _, v := range firedPcts {
+		if v <= 0 {
+			effect.ClearNetAllPositive = false
+		}
+	}
 }
 
 // medianInterval uses an exact order-statistic interval with at least 95% coverage.

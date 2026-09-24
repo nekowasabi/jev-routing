@@ -55,6 +55,69 @@ func TestComparisonJSONUsesMeasuredJevAppliedPairsOnly(t *testing.T) {
 	}
 }
 
+// TestComparisonClaudeClearIsComparableWithoutJevCalls covers the
+// --claude-clear condition: it deliberately makes no Jev calls, so
+// jev_not_applied must not gate it; clearedToolUses>0 is the applied signal.
+func TestComparisonClaudeClearIsComparableWithoutJevCalls(t *testing.T) {
+	base := RunRecord{Task: "task", Agent: "claude", AgentModel: "claude-sonnet-5", CompareKey: "same", Models: []string{"claude-sonnet-5"}, Mode: "off", Rep: 1, Requests: 1, Metered: 1, Input: 100, Output: 10, Passed: 1, Total: 1, Solved: true, HostUsageVerified: true}
+	on := base
+	on.Mode = "on"
+	on.Input = 70
+	on.Output = 0
+	on.ClaudeClear = true
+	on.ClearedToolUses = 2
+	on.ClearedInputTokens = 58
+	row := BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "comparable" {
+		t.Fatalf("claude-clear pair with no Jev calls must be comparable: %+v", row)
+	}
+	for _, reason := range row.Reasons {
+		if reason == "jev_not_applied" {
+			t.Fatalf("jev_not_applied must not gate a claude-clear run: %+v", row)
+		}
+	}
+
+	// A run where the trigger never fired (clearedToolUses=0) is still a
+	// legitimate outcome of the intervention, not an incomplete measurement:
+	// excluding it would keep only the longest runs and bias the comparison.
+	on.ClearedToolUses = 0
+	row = BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "comparable" {
+		t.Fatalf("clearedToolUses=0 must stay comparable: %+v", row)
+	}
+	if row.SelectionClearedToolUses == nil || *row.SelectionClearedToolUses != 0 {
+		t.Fatalf("selectionClearedToolUses must report 0, not absent: %+v", row)
+	}
+}
+
+// TestEffectReportsClearedPairRatio covers "消去が発生したペア数／全ペア数":
+// AssessEffects must count how many pairs actually cleared, separately from
+// whether they were statistically comparable.
+func TestEffectReportsClearedPairRatio(t *testing.T) {
+	base := RunRecord{Task: "task", Agent: "claude", AgentModel: "claude-sonnet-5", CompareKey: "same", Models: []string{"claude-sonnet-5"}, Mode: "off", Requests: 1, Metered: 1, Input: 100, Passed: 1, Total: 1, Solved: true, HostUsageVerified: true}
+	var runs []RunRecord
+	for rep := 1; rep <= 6; rep++ {
+		off := base
+		off.Rep = rep
+		on := off
+		on.Mode = "on"
+		on.ClaudeClear = true
+		on.Input = 90
+		if rep%2 == 0 {
+			on.ClearedToolUses = 3
+			on.ClearedInputTokens = 40
+		}
+		runs = append(runs, off, on)
+	}
+	effects := BuildComparisons(runs).Effects
+	if len(effects) != 1 {
+		t.Fatalf("effects = %+v", effects)
+	}
+	if effects[0].TotalPairs != 6 || effects[0].ClearedPairs != 3 {
+		t.Fatalf("cleared/total = %d/%d, want 3/6: %+v", effects[0].ClearedPairs, effects[0].TotalPairs, effects[0])
+	}
+}
+
 func TestReportRebuildsDashboardComparison(t *testing.T) {
 	dir := t.TempDir()
 	if err := writeRuns(filepath.Join(dir, "runs.jsonl"), []RunRecord{{Task: "x", Agent: "fake", Mode: "off", Rep: 1}}); err != nil {

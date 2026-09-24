@@ -85,6 +85,25 @@ func TestMeterCountsJevApplicationAndCapabilityUsage(t *testing.T) {
 	}
 }
 
+// TestMeterSumsClearedToolUses covers the --claude-clear bench condition:
+// the run total must sum clearedToolUses/clearedInputTokens across events.
+func TestMeterSumsClearedToolUses(t *testing.T) {
+	const response = `{"events":[` +
+		`{"usageMissing":"not_called","clearedToolUses":0,"clearedInputTokens":0},` +
+		`{"usage":{"inputTokens":12,"outputTokens":3},"clearedToolUses":2,"clearedInputTokens":58},` +
+		`{"usage":{"inputTokens":9,"outputTokens":1},"clearedToolUses":1,"clearedInputTokens":30}` +
+		`]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(response)) }))
+	defer srv.Close()
+	got, err := (&gateway{origin: srv.URL}).meter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ClearedToolUses != 3 || got.ClearedInputTokens != 88 {
+		t.Fatalf("meter=%+v", got)
+	}
+}
+
 func TestMeterRejectsMissingToolEvidence(t *testing.T) {
 	for _, applications := range []string{
 		`[{"kind":"mcp_tool","state":"started","callId":"call-1","hasResult":false}]`,

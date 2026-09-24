@@ -268,6 +268,12 @@ func Summarize(all []RunRecord, prices *Prices) string {
 			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.CompactSavedTokens) }))
 		}, fmtInt, false},
+		{"Tool uses cleared (context editing), median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
+			return median(floatField(g, func(r RunRecord) float64 { return float64(r.ClearedToolUses) }))
+		}, fmtInt, false},
 		{"Failed LLM requests, total", func(g []RunRecord) *float64 {
 			if !measuredRuns(g) {
 				return nil
@@ -366,6 +372,9 @@ func Summarize(all []RunRecord, prices *Prices) string {
 			}
 			lines = append(lines, fmt.Sprintf("| %s | %s%s | %s |", m.label, m.format(a), extra, m.format(b)))
 		}
+		if line := clearNetSummaryLine(with); line != "" {
+			lines = append(lines, line)
+		}
 		lines = append(lines, "")
 	}
 	if prices != nil && prices.CacheWriteGiven && len(ignoredCacheWrite) > 0 {
@@ -407,6 +416,41 @@ func Summarize(all []RunRecord, prices *Prices) string {
 		lines = append(lines, "Percentages in brackets compare the routing-on median with the baseline median.")
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// clearNetSummaryLine reports native context editing's same-path net
+// reduction (clearnet.go) as a standalone line rather than a with/without
+// table row: the counterfactual only exists on the "on" side, there is
+// nothing on the baseline to compare it against.
+func clearNetSummaryLine(with []RunRecord) string {
+	var pcts []float64
+	fired, missing := 0, 0
+	for _, r := range with {
+		if !r.ClaudeClear || r.ClearedToolUses == 0 {
+			continue
+		}
+		fired++
+		if r.ClearNetPct != nil {
+			pcts = append(pcts, *r.ClearNetPct)
+		} else {
+			missing++
+		}
+	}
+	if fired == 0 {
+		return ""
+	}
+	med := median(pcts)
+	if med == nil {
+		return fmt.Sprintf("Native context editing net reduction (same path): no run has a computable rework figure (%d cleared, %d missing rework).", fired, missing)
+	}
+	sorted := append([]float64(nil), pcts...)
+	sort.Float64s(sorted)
+	line := fmt.Sprintf("Native context editing net reduction (same path): median %.1f%% [%.1f%%, %.1f%%] over %d cleared run(s)",
+		*med*100, sorted[0]*100, sorted[len(sorted)-1]*100, len(pcts))
+	if missing > 0 {
+		line += fmt.Sprintf(" (%d run(s) missing rework)", missing)
+	}
+	return line + "."
 }
 
 func floatField(g []RunRecord, pick func(RunRecord) float64) []float64 {

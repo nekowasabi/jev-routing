@@ -184,6 +184,8 @@ type dashEvent struct {
 	SavedTokens    *struct {
 		CompactionInput int `json:"compactionInput"`
 	} `json:"savedTokens"`
+	ClearedToolUses    int `json:"clearedToolUses"`
+	ClearedInputTokens int `json:"clearedInputTokens"`
 }
 
 type dashApplication struct {
@@ -339,6 +341,8 @@ func (g *gateway) meter(tasks ...string) (RunRecord, error) {
 		if event.SavedTokens != nil {
 			out.CompactSavedTokens += event.SavedTokens.CompactionInput
 		}
+		out.ClearedToolUses += event.ClearedToolUses
+		out.ClearedInputTokens += event.ClearedInputTokens
 		if upstream {
 			model := event.SentModel
 			if model == "" {

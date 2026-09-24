@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,29 @@ func TestClaimLockPreservesKeptSandbox(t *testing.T) {
 	release()
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("kept sandbox removed: %v", err)
+	}
+}
+
+// TestClaimLockSweepsOrphanEvenWhenPidMatchesSelf reproduces the pid-reuse
+// bug: a sandbox left by a long-dead run whose pid happened to equal this
+// process's own pid was never swept, because the old sweep trusted
+// alive(pid) — and the current process is, by definition, alive. Only one
+// bench process may hold the lock at a time, so once claimLock owns it,
+// every jev-bench-* leftover (without .bench-keep) is an orphan regardless
+// of the pid in its name.
+func TestClaimLockSweepsOrphanEvenWhenPidMatchesSelf(t *testing.T) {
+	path, err := os.MkdirTemp("", fmt.Sprintf("jev-bench-%d-", os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(path) })
+	release, err := claimLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("pid-reused orphan survived: err=%v", err)
 	}
 }
 
