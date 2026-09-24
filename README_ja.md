@@ -216,6 +216,12 @@ JEV_SELECTION_MODE=local jev-routing serve --host codex --listen 127.0.0.1:8787
 | `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
 | `JEV_SELECTION_MODE` | `local` / `jev` / `hybrid` | `hybrid` |
 | `JEV_SHADOW` | `on` / `off` | `off` |
+| `JEV_CLAUDE_ADVISE` | `on` / `off` | `off`（Claude の advise 経路は Jev を呼ばず要求を無変更で通す） |
+| `JEV_CLAUDE_CLEAR_TOOL_USES` | `on` / `off` | `off`（Claude の要求に `clear_tool_uses_20250919`（[context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)）を追記する） |
+| `JEV_CLAUDE_CLEAR_TRIGGER` | `input_tokens` の整数 | `100000` |
+| `JEV_CLAUDE_CLEAR_AT_LEAST` | `input_tokens` の整数 | `20000` |
+| `JEV_CLAUDE_CLEAR_KEEP` | `tool_uses` の整数 | `3` |
+| `JEV_CLAUDE_CLEAR_EXCLUDE` | カンマ区切りのツール名 | 空（`exclude_tools` を出力しない） |
 | `JEV_TRANSFORMS` | `compact=on/off,filter=on/off,criteria=on/off` | `compact=on,filter=on,criteria=off` |
 | `JEV_COST_GATE_MAX` | 0 以上の整数 | `3` |
 | `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | モデル識別子とカンマ区切りの完全一致名 | 空（無効） |

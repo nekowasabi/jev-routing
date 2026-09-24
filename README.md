@@ -228,6 +228,12 @@ These are read once at startup. Invalid values make startup fail.
 | `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
 | `JEV_SELECTION_MODE` | `local` / `jev` / `hybrid` | `hybrid` |
 | `JEV_SHADOW` | `on` / `off` | `off` |
+| `JEV_CLAUDE_ADVISE` | `on` / `off` | `off` (Claude's advise path skips Jev and passes the request through unchanged) |
+| `JEV_CLAUDE_CLEAR_TOOL_USES` | `on` / `off` | `off` (appends Anthropic's native [context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing) `clear_tool_uses_20250919` edit to Claude requests) |
+| `JEV_CLAUDE_CLEAR_TRIGGER` | integer, `input_tokens` | `100000` |
+| `JEV_CLAUDE_CLEAR_AT_LEAST` | integer, `input_tokens` | `20000` |
+| `JEV_CLAUDE_CLEAR_KEEP` | integer, `tool_uses` | `3` |
+| `JEV_CLAUDE_CLEAR_EXCLUDE` | comma-separated tool names | empty (omits `exclude_tools`) |
 | `JEV_TRANSFORMS` | `compact=on/off,filter=on/off,criteria=on/off` | `compact=on,filter=on,criteria=off` |
 | `JEV_COST_GATE_MAX` | integer ≥ 0 | `3` |
 | `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | a model identifier and comma-separated exact-match names | empty (disabled) |
@@ -282,3 +288,44 @@ python3 scripts/summarize_selection_benchmark.py scripts/testdata/selection-benc
 A self-reported `CHECK: PASS` alone is not treated as success. Costs are reported only when the unit price and its source are both available, and missing data is never converted into 0 or into a reduction rate. Groups whose comparison conditions (compaction, reasoning, task) do not match are not comparable. A selection comparison without a baseline revision does not produce an improvement rate.
 
 A single-run difference is affected by model variance, prompt caching, and service congestion. To claim an effect, run multiple times and compare the median of each condition. Passing a mock fixture is not called a measured efficiency improvement.
+
+## Claude Code
+
+Launch with `jev-routing run claude` as shown in [Running](#running). By default an ordinary Claude request is forwarded unchanged and Jev is never called; `JEV_CLAUDE_ADVISE=on` re-enables the previous tool-selection advice path, but it does not reduce tokens (see below).
+
+Token reduction instead comes from Anthropic's native [context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing): `JEV_CLAUDE_CLEAR_TOOL_USES=on` makes the proxy append the `clear_tool_uses_20250919` edit to Claude requests, so old tool results are cleared server-side. The `clear_thinking_20251015` edit Claude Code already sends is kept as-is. This has been verified working under subscription (claude.ai) login. Related variables (`JEV_CLAUDE_CLEAR_TRIGGER`, `JEV_CLAUDE_CLEAR_AT_LEAST`, `JEV_CLAUDE_CLEAR_KEEP`, `JEV_CLAUDE_CLEAR_EXCLUDE`) are listed with the rest of the Claude variables in [Comparison experiments](#comparison-experiments-disabled-by-default).
+
+```bash
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+JEV_CLAUDE_CLEAR_TOOL_USES=on jev-routing serve --host claude &
+claude
+```
+
+To measure it with the benchmark:
+
+```bash
+jev-routing bench --agent claude --tasks chess-bugfix --modes off,on --reps 6 --claude-clear --claude-clear-trigger 30000 --claude-clear-at-least 10000 --claude-clear-keep 3
+```
+
+`bench` gives each agent its own `/tmp` via `bwrap` when available on Linux.
+
+### Why tool-call replacement was abandoned for Claude Code
+
+Claude Code runs with extended thinking on, and the Anthropic API refuses `tool_choice` forcing while thinking; changing the tool list or `tool_choice` also breaks the prompt cache. That leaves only advising the next tool, not steering it, and advice cannot narrow the upstream request or history size — only the per-turn Jev judgment cost, which stacks every turn.
+
+| Investigation | Method | Result |
+|---|---|---|
+| Structural cost of advice | `dual-facts` (fixed-path task), claude-sonnet-5/medium, 6 pairs | Median total tokens −27.25% (increase); 99% of the increase is the Jev judgment cost |
+| Reducing the Jev cost | Skip judgment for requests advice can't attach to, shorten candidate descriptions | Improves to −6.20%, still a net increase; best case only ties the baseline |
+| Replacement headroom in real sessions | Reproduced the same judgment call against 200 real Claude Code turns | Real-session Jev input has a median of 7,406 tokens; net is negative at every threshold |
+| Deterministic synthesis without Jev | Rule-based synthesis over real sessions | 17.9% accuracy, 0.28% savings ceiling |
+| Cross-check against another product's bench | [jev-gateway](https://github.com/vinilana/jev-gateway#benchmark)'s `hint` approach | Its own author describes Claude Code results as "not lower cost" |
+
+### Measured results for native context editing
+
+The reported figure is a same-path net-savings metric: bytes cleared from a request's input, minus the extra cache-write tokens that clearing caused, minus rework (turns that re-issued a call identical to one dropped from context). The v1 series (12 pairs) had a median of 12.0% (2.8%–17.7%). A pre-registered confirmation series had a median of 8.5% (4.8%–14.8%). Across both series, all 17 runs where clearing occurred were net-positive, and quality passed on all 36/36 runs. Run-to-run total-token comparisons were not used as evidence: on an A/A-equivalent series they ranged from −271% to +90%, dominated by main-model path variance rather than the edit.
+
+### Limitations
+
+Measured on one task (`chess-bugfix`) and one model (claude-sonnet-5, medium). The thresholds are bench-tuned (30000 trigger) and unverified as defaults for real work. Rework only counts exact-repeat calls. The feature is off by default (`JEV_CLAUDE_CLEAR_TOOL_USES=on` to enable).
