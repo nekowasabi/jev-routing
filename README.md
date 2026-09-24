@@ -113,21 +113,25 @@ Devin CLI is assumed to use `/messages` and `/sessions` under `DEVIN_API_URL` (d
 
 ## Benchmark
 
-`jev-routing bench` runs the chess-engine comparison ported from [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench) (MIT, Copyright (c) 2026 Vinicius Lana). The same task is given to an agent with routing on and with routing off. On is `JEV_ROUTING_MODE=filter` (or `--on-mode forced`). Off is `baseline`: the proxy meters the request and does not rewrite it. Each run gets a new workspace and a new proxy. A hidden verifier scores the workspace. A cheaper run that fails the checks is not a saving.
+`jev-routing bench` runs the chess tasks ported from [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench) (MIT, Copyright (c) 2026 Vinicius Lana), plus shared `x-cell`, two-tool, skill, and child-session tasks. On is `JEV_ROUTING_MODE=filter` (or `--on-mode forced`); off is metered `baseline`. `direct` bypasses the proxy and is always incomparable for total-token savings. Each run has a fresh workspace and an external verifier.
 
 ```bash
 jev-routing bench --list
 jev-routing bench selftest
 jev-routing bench --agent fake --tasks chess-bugfix --reps 1
 jev-routing bench --agent codex --tasks chess-bugfix --reps 1
+JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks dual-facts --catalog 2 --reps 2
+JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks skill-proof --reps 1
+JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks child-facts --reps 1
+JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks xcell-module --modes direct,off,on
 jev-routing bench report results/<dir> --prices 1.25,0.125,10
 ```
 
-Agents are `codex`, `claude`, `grok`, `devin`, and `fake`. Real agents spend real quota. Start with one task and `--reps 1`. `--agent fake` sends a few requests through the proxy and writes the reference solution, so the pipeline can be checked without a model. With no API key, `hybrid` does not narrow an uncertain request; set `JEV_SELECTION_MODE=local` to measure the on-device classifier. Node.js is required to score the chess tasks. The proxy itself still does not need Node.
+Agents are `codex`, `claude`, `grok`, `devin`, and `fake`. Real agents spend real quota. Start with one task and `--reps 1`. `--agent fake` checks the pipeline without a model. Live Jev intervention requires a TypeSafe key; set `JEV_SELECTION_MODE=local` to measure only the on-device classifier. Node.js is required to score chess tasks.
 
 `--prices` takes `in,cached,out[,cachewrite]` in USD per million tokens; cache write defaults to 1.25× input and applies only to `claude`. Input totals include cache: for `claude` that adds the cache reads and cache writes Anthropic reports apart from input; for `codex` and `grok` cached tokens are already inside input.
 
-Results land in `results/<timestamp>/` (`runs.jsonl`, `summary.md`, and a directory per run). A run that reads a file outside its sandbox that it did not create is marked contaminated and left out of the summary. `bench audit` re-reads agent logs. `bench chart` writes `comparison-light.svg` and `comparison-dark.svg`.
+Results land in `results/<timestamp>/` (`runs.jsonl`, `comparison.json`, `summary.md`, and a directory per run). `comparison.json` records total tokens and savings only for pairs with matching settings, successful quality checks, Jev application, required tool results, and complete usage. Other pairs carry reasons and no savings number. Claude Code and Codex main-model usage is reconciled against their CLI totals; a child-session task additionally requires unique parent/child attribution. Additional model calls such as Codex auto-review remain in the proxy total. Grok's complete headless CLI usage can reconcile a canceled response without assigning it a fabricated per-request zero. Devin's validated ATIF step totals can supply a session total when the Connect responses omit usage. Child runs remain incomparable unless every child's usage and model are attributable. Per-run `proxy-events.json` is a local diagnostic record. `bench audit` re-reads agent logs.
 
 ### How to measure
 
@@ -136,10 +140,10 @@ jev-routing bench --agent codex --model gpt-5.6-terra --reps 4 --catalog 40 --pr
 JEV_TRANSFORMS=filter=off jev-routing bench --agent codex --model gpt-5.6-terra --reps 4 --catalog 40 --modes on --prices 1.25,0.125,10
 ```
 
-- Pin the model with `--model` and give `--prices`. Judge by cost per solved task and wall-clock seconds, not by total input tokens. Rewriting history or tools can shrink input while breaking the provider's prompt-cache prefix, and uncached input costs about 10× cached. The summary's `…uncached, median` row shows this.
-- Use an even `--reps`, 4 or more. The on/off order alternates per rep, so an even count cancels the warm-cache advantage of whichever mode runs second. With `--reps 1`, on always runs first.
-- `--catalog N` (`codex` and `claude` only, N up to 60) adds a stub MCP server with N extra tools: a fixed, reproducible mix of unrelated SaaS/ops tools and distractors that overlap the built-ins. Calls return an error. Without it the agent sees only 3–6 built-in tools, so tool selection has almost nothing to choose. Prefer it over `--user-tools`, which depends on the local setup.
-- `JEV_TRANSFORMS` (e.g. `filter=off`, `compact=off`) ablates the on runs only; off is always the baseline. With `--modes on` you can reuse an earlier off baseline from the same commit.
+- Pin the model with `--model` and reasoning with `--effort`. Use comparable pairs in `comparison.json` as the measured token KPI; `summary.md`, uncached input, cost, and wall-clock time are diagnostic. Rewriting history or tools can shrink the input while disrupting the provider's prompt cache.
+- Use an even `--reps`, at least 6 for an effect decision. The on/off order alternates per rep, so an even count balances which mode runs second. With `--reps 1`, on always runs first.
+- `--catalog N` (`codex` and `claude` only) adds a reproducible MCP catalog. Its first two tools return separate facts for `dual-facts`; remaining tools are error-returning distractors. Prefer it over `--user-tools`, which depends on the local setup.
+- `JEV_TRANSFORMS` (e.g. `filter=off`, `compact=off`) ablates the on runs only; off is always the baseline. On-only results need a matching off baseline before a relative chart can be generated.
 - Per-request decisions are in `results/<dir>/<task>.<mode>.<rep>/gateway.log` (tools before→after, chosen, apply, conf).
 - The current tasks are short (a few minutes, tens of requests), so agent-requested compaction rarely triggers. They do not measure long sessions.
 
@@ -198,6 +202,7 @@ The read-only `http://127.0.0.1:<port>/dashboard` can be opened only while liste
 
 ```bash
 jev-routing run --dashboard grok
+JEV_SELECTION_MODE=local jev-routing serve --host codex --listen 127.0.0.1:8787
 ```
 
 `run --dashboard` opens the dashboard in a browser after startup. With `serve`, open the same URL by hand. The page refreshes every 2 seconds and covers only the current process.
@@ -208,7 +213,7 @@ jev-routing run --dashboard grok
 - Token consumption aggregated from upstream responses (input, output, cache, reasoning)
 - Recent requests (sequence number, host, decision source, application, selected tool, reason, changes, tool substitution, jev, tokens, time)
 - Filters by host / decision source / application, and per-row detail (decision ID, operation ID). j/k moves between rows, Enter opens the detail, r reconnects
-- Pasting Comparison JSON (displayed locally only; nothing is sent)
+- Selecting saved `comparison.json` at the top of the page shows measured token savings, quality, comparable-pair count, and reasons. The file stays in the browser.
 
 The browser side keeps up to 1000 entries and the table shows the most recent 200. When the connection drops it shows the last update time and "disconnected", and reconnecting re-fetches the history. `?sample=1` shows mock values for checking the display and is labeled as a sample on the page.
 

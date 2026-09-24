@@ -113,21 +113,27 @@ Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`�
 
 ## ベンチマーク
 
-`jev-routing bench` は [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench)（MIT、Copyright (c) 2026 Vinicius Lana）のチェス課題を、このプロキシの上で routing on / off として比較します。on は `JEV_ROUTING_MODE=filter`（`--on-mode forced` も可）、off は `baseline` で、計測はしますがリクエストは書き換えません。実行ごとに新しいワークスペースと新しいプロキシを使い、エージェントには見せない検証器で採点します。チェックに落ちた実行は、安くても節約ではありません。
+`jev-routing bench` は既存のチェス課題に加え、`x-cell` の読取、２ツール、スキル、子セッションの課題を共通ランナーで扱います。チェス課題は [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench)（MIT、Copyright (c) 2026 Vinicius Lana）から移植しました。on は `JEV_ROUTING_MODE=filter`（`--on-mode forced` も可）、off は `baseline` で、計測はしますがリクエストは書き換えません。`direct` はプロキシを通さない接続確認で、総使用量を保証できないため削減量は比較不能です。実行ごとに新しいワークスペースと採点器を使います。
 
 ```bash
 jev-routing bench --list
 jev-routing bench selftest
 jev-routing bench --agent fake --tasks chess-bugfix --reps 1
 jev-routing bench --agent codex --tasks chess-bugfix --reps 1
+JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks dual-facts --catalog 2 --reps 2
+JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks skill-proof --reps 1
+JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks child-facts --reps 1
+JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks xcell-module --modes direct,off,on
 jev-routing bench report results/<dir> --prices 1.25,0.125,10
 ```
 
-エージェントは `codex`、`claude`、`grok`、`devin`、`fake` です。本物のエージェントはクォータを消費します。まずは課題を一つ、`--reps 1` から始めてください。`--agent fake` はプロキシに数回リクエストを送り、参照実装を書き込むので、モデルなしで一連の流れを確認できます。API キーがないとき `hybrid` は不確実な要求を絞りません。端末上の分類器を測るときは `JEV_SELECTION_MODE=local` にしてください。チェス課題の採点には Node.js が必要です。プロキシ自体は Node を必要としません。
+エージェントは `codex`、`claude`、`grok`、`devin`、`fake` です。本物のエージェントはクォータを消費します。まずは課題を一つ、`--reps 1` から始めてください。`--agent fake` はプロキシに数回リクエストを送り、参照実装を書き込むので、モデルなしで一連の流れを確認できます。実 Jev の介入条件には TypeSafe の鍵が必要です。端末上の分類器を測るときは `JEV_SELECTION_MODE=local` にしてください。チェス課題の採点には Node.js が必要です。プロキシ自体は Node を必要としません。
 
 `--prices` は 100 万トークンあたりの USD を `in,cached,out[,cachewrite]` で受け取ります。cache write を省くと input の 1.25 倍とみなし、`claude` にだけ適用します。入力トークン数はキャッシュ込みです。`claude` では Anthropic が input と別に報告する cache read と cache write を足し、`codex` と `grok` では cached が input に含まれています。
 
-結果は `results/<timestamp>/` に出ます（`runs.jsonl`、`summary.md`、実行ごとのディレクトリ）。サンドボックスの外で、自分で作っていないファイルを読んだ実行は contaminated として集計から外します。`bench audit` はエージェントログを読み直します。`bench chart` は `comparison-light.svg` と `comparison-dark.svg` を書きます。
+成果の合格と `comparison.json` の比較可能なペアの総トークン差を主に確認し、`summary.md` の中央値、非キャッシュ入力・費用・経過時間は補助情報とします。入力本文のバイト差やキャッシュを除いた入力だけでは、タスク全体の削減を判定しません。
+
+結果は `results/<timestamp>/` に出ます（`runs.jsonl`、`comparison.json`、`summary.md`、実行ごとのディレクトリ）。`comparison.json` は品質・Jev 適用・必要ツール結果・使用量が揃うペアだけに、対照と介入の総トークンおよび差分を記録します。欠測や不合格は理由付きの比較不能とし、削減量を空欄にします。Claude Code／Codex は CLI の主モデル使用量とプロキシのモデル別使用量も照合します。子セッション課題では親の CLI 使用量と要求ごとの使用量が一意に対応するときだけ子の総量を出します。Codex の自動承認審査など、CLI のターン使用量に入らない追加モデル要求もプロキシの総量に含めます。Grok Build のキャンセル応答は完全な CLI 集計で照合できる場合のみセッション総量を使い、要求別の欠測をゼロで埋めません。Devin CLI の Connect 応答に使用量がない場合は、検証済みの ATIF 手順合計をセッション総量として使えます。子の使用量・モデルを帰属できないランは比較不能です。実行ごとの `proxy-events.json` は原因調査用のローカル記録です。`bench audit` はエージェントログを読み直します。
 
 ## Compaction
 
@@ -184,9 +190,10 @@ jev-routing compact < transcript.json
 
 ```bash
 jev-routing run --dashboard grok
+JEV_SELECTION_MODE=local jev-routing serve --host codex --listen 127.0.0.1:8787
 ```
 
-`run --dashboard` は起動後にブラウザーでダッシュボードを開きます。`serve` のときは同じ URL を手で開きます。画面は現在のプロセスだけを 2 秒間隔で更新します。
+`run --dashboard` は起動後にブラウザーでダッシュボードを開きます。`serve` のときは同じ URL を手で開きます。先頭のベンチマーク欄で `results/<timestamp>/comparison.json` を選ぶと、削減量・品質・比較可能件数と課題別の理由を表示します。ファイルは送信されません。下段のライブ表示は現在のプロセスだけを 2 秒間隔で更新します。
 
 - ルーティング概要（判定元・適用の件数）
 - 六分類の状態（モデルとeffort、子エージェント、スキル、MCP、CLI、プラグイン、圧縮）。未観測は未観測のまま残す
@@ -194,7 +201,7 @@ jev-routing run --dashboard grok
 - 上流レスポンスから集計したトークン消費（入力・出力・キャッシュ・推論）
 - 直近のリクエスト（連番、ホスト、判定元、適用、採用ツール、理由、変更、ツール置換、jev、トークン、時間）
 - ホスト／判定元／適用の絞込みと行の詳細（判断ID・操作ID）。j/k で行移動、Enter で詳細、r で再接続
-- Comparison JSON の貼り付け（ローカル表示のみ。送信しません）
+- 保存済み `comparison.json` の読み込み（ローカル表示のみ。送信しません）
 
 ブラウザー側は最大 1000 件を保持し、表は直近 200 件です。通信が切れたときは最終更新時刻と「接続切れ」を出し、再接続で履歴を取り直します。`?sample=1` は表示確認用の模擬値で、画面にサンプルと出します。
 
