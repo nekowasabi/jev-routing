@@ -2,6 +2,8 @@
 
 記録開始日：2026-09-24。コード・文書の調査、固定通信試験、実ホスト試験の経過を時系列で残す。初期の「未実施」「未修正」は記録時点の状態を指し、現在の状態は次節を正本とする。
 
+**最新の引き継ぎは末尾の「引き継ぎ（2026-09-25 セッション終了時）」を参照。**
+
 ## 現状の骨子と当面の作業（2026-09-24 更新）
 
 ### 判断の前提
@@ -748,3 +750,52 @@ on ラン別（節約／追加書込／手戻り／純削減／率）：92,560�
 実際の削減は、ゲートが `keep` を選ぶ会話と手戻りの分だけ、この上限より小さくなる。実走の参考値（ベンチ閾値 30000・10000）は、`chess-bugfix`（clear）が同一経路純削減2.9%／11.1%／14.2%（最低／中央値／最高）、`child-survey`（keep）が0%で、いずれも品質は満点だった。既定値（trigger 100000）で clear 側が実走で効くことは、まだ確認していない。
 
 **未完了**：実作業規模の長いセッションでの既定値の実走確認。実作業の多様な課題での、ゲート判定の妥当性の点検。README の Claude Code 節にこの経緯と設定を反映した。
+
+## 引き継ぎ（2026-09-25 セッション終了時）
+
+### 現在地
+
+- すべての変更は `origin/main` にプッシュ済み（最新 `d21a40f`）。この引き継ぎ節だけは、追記した時点で未コミット。
+- Claude Code：ツール選択による置き換えは断念し（`JEV_CLAUDE_ADVISE` は既定で無効）、削減の本線は Anthropic のネイティブ context editing ＋ Jev の消去ゲートとした。推奨設定は `JEV_CLAUDE_CLEAR_TOOL_USES=on`・`JEV_CLAUDE_CLEAR_GATE=jev`・trigger 100000・clear_at_least 40000・keep 3（context editing 自体は既定で無効）。経緯と数値は本メモの「Claude Code：…」各節と README の `## Claude Code` 節を参照。
+- 利用者の方針：Claude Code は、しばらく実際に使って記録を集める。次の改善対象は Codex。
+- 利用者の判断として確定済みのこと：使う予定のあるスキル・エージェント・プラグインを無効にして固定接頭辞を削る案は採らない（jev-routing による削減ではないため）。ベンチの基準は親子とも `claude-sonnet-5`／`medium`（Codex は `gpt-5.6-terra`／`medium`）。
+
+### Claude Code：実利用での記録手順（利用者が実施）
+
+```bash
+cd ~/repos/jev-routing && go build -o ~/.local/bin/jev-routing ./cmd/jev-routing && mkdir -p ~/jev-dogfood
+# プロキシ常駐（TYPESAFE_API_KEY か JEV_API_KEY が必要。JEV_COMPACTION=off は context editing だけを測るため）
+JEV_CLAUDE_CLEAR_TOOL_USES=on JEV_CLAUDE_CLEAR_GATE=jev JEV_COMPACTION=off \
+  nohup jev-routing serve --host claude --listen 127.0.0.1:8787 >> ~/jev-dogfood/serve.log 2>&1 &
+# イベントの永続化（プロキシはメモリに直近1000件しか持たない。使用量は後から追記されるので100件ずつ重ねて取り、集計時に (instanceId, seq) の最後の行を採る）
+nohup bash -c '
+U=http://127.0.0.1:8787/dashboard/events; F=~/jev-dogfood/events.jsonl; since=0; cur=
+while sleep 30; do
+  r=$(curl -s "$U?since=$since") || continue
+  iid=$(jq -r .router.instanceId <<<"$r") || continue
+  if [ "$iid" != "$cur" ]; then cur=$iid; since=0; r=$(curl -s "$U?since=0") || continue; fi
+  jq -c --arg i "$iid" ".events[]|.+{instanceId:\$i}" <<<"$r" >> "$F"
+  max=$(jq "[.events[].seq]|max // 0" <<<"$r")
+  [ "$max" -gt 0 ] && since=$(( max>100 ? max-100 : 0 ))
+done' > /dev/null 2>&1 &
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude
+```
+
+`jev-routing run claude` でも同じ環境変数で使える（引数は `--` の後ろ）。ただし、イベントはプロセスの終了とともに消えるため、集計には `serve` を使う。非 first-party の `ANTHROPIC_BASE_URL` では ToolSearch の既定が変わり、固定接頭辞が約5,000小さくなる。そのため、プロキシなしの過去セッションとは直接比較しない。
+
+**１〜２週間後の作業（未着手）**：`~/jev-dogfood/events.jsonl` と `~/.claude/projects/**` を突き合わせる集計スクリプトを作る。要求ごとの使用量と `clearedInputTokens` から同一経路純削減（`internal/bench/clearnet.go` と同じ式）、手戻り（消去済みの呼出の同一内容の再取得）、ゲート判定（`clearGate`：clear／keep／error、`clearGateReason`）の内訳、Jev の使用量を出す。確認したいのは、既定値（trigger 100000）で clear 側が実際に効くか。ネイティブ圧縮（`JEV_COMPACTION` 既定 on：Claude Code の `/compact`・自動圧縮を Jev の drop/truncate 結果で置き換える）を評価する場合は、別の期間に分けて比べる。
+
+### Codex：次にやること（未着手）
+
+1. **増加の原因分解**：`dual-facts` を２〜３ペア取り直し（`jev-routing bench --agent codex --model gpt-5.6-terra --effort medium --tasks dual-facts --catalog 2 --modes off,on --reps 3`、`JEV_SELECTION_MODE=jev`、推論設定は bench が `preserve` を固定）、要求ごとに (a) Jev 判定費用、(b) 上流のキャッシュ読取・書込の変化（候補の絞り込みでツール一覧が要求ごとに変わり、プロンプトキャッシュを崩している疑い。未検証）、(c) 要求数・`codex-auto-review` の補助要求の変化に分ける。Claude では増加の99%が Jev 費用だった。前回の６ペア（削減率中央値 −9.55%、区間がゼロをまたいで保留）の生ログは前のマシンにしかない。
+2. **実セッションの削減余地（オフライン、費用なし）**：`~/.codex/sessions` の記録から、固定接頭辞・ツール結果・キャッシュ・サブエージェントの内訳を集計し、ツール選択・履歴縮小・圧縮のどれに余地があるかを試算する（Claude で使った手法は下記スクリプト参照）。
+3. 1・2 に基づいて方針を選ぶ（Jev 費用の削減、会話ごとに一度だけ絞って固定するキャッシュ安定な選択、ネイティブ圧縮置換の評価、または何もしない）。
+4. 実装し、事前登録した６ペアで判定する。`xcell-locate` は候補が少なく、費用の足切りで Jev が呼ばれなかった。Codex のサブエージェント試行は子の起動失敗で0/3だった。これらも課題選びの注意点とする。
+
+### 作業上の注意
+
+- ベンチの計測値の生データ（`survey-reps6-sonnet/`・`survey-gate6/`・`bugfix-gate6/`・`gate2-*/` など）と、分析スクリプト（`extract.py`・`sim.py`〔観測した消去規則 `stateless_min`、selftest あり〕・`sweep.py`・`calib.py`・`prefix/relay.py`）は、前セッションのスクラッチパッド（`/private/tmp/claude-502/…/scratchpad/ctxedit/`）にあり、セッション終了とともに消える可能性が高い。数値は本メモに転記済み。必要ならスクリプトは作り直す。
+- Claude Code の中からベンチを起動すると、以前は親セッションの `CLAUDE_CODE_*` 環境変数が子に漏れていた（修正済み）。`CLAUDE_CODE_SUBAGENT_MODEL` は意図的に引き継ぎ、記録と比較キーに含める。比較可能なランを得るには、明示的に固定する（例：`CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5`）。
+- ベンチのラン間比較（対照と介入を別々に走らせた総トークン差）は、Claude では同一条件同士（A/A）でも −271%〜+90% 散る。効果の根拠には、同一経路の指標と品質・手戻りを使い、結果を見る前に判定条件を本メモへ事前登録する。
+- 本メモ冒頭の「当面の作業リスト」（V1〜E1）のチェックは古く、多くは後の節で実装済みである。更新は未実施。
