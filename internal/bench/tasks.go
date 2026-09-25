@@ -106,6 +106,69 @@ func writeFiles(workspace string, files map[string]string) error {
 	return nil
 }
 
+// large-facts writes six deterministic, low-entropy log files (~32KB each,
+// ~8K tokens at ordinary text's ~4 bytes/token) with one fact line hidden in
+// each: files 1-2 near the start (~5%), 3-4 near the middle (~50%), 5-6 near
+// the end (~95%). It exercises JEV_CODEX_TOOL_OUTPUT_MAX truncation, which
+// cuts the middle of any tool output over the threshold -- so a fact placed
+// there is only recoverable by re-reading with a narrower command, while
+// head/tail facts survive the cut.
+//
+// The filler is realistic log text (timestamp, worker id, job id, duration,
+// status), not random hex: Codex's own code-mode exec truncates a command's
+// output by *token* count (~10K tokens), and high-entropy hex text runs
+// about 2.3 bytes/token -- a 36.8KB hex file was already cut to ~10KB by
+// Codex itself before jev-routing's proxy ever saw it, well under the
+// 20000-byte threshold. Ordinary text's ~4 bytes/token keeps a ~32KB file
+// under Codex's own ~10K-token cap while staying over the proxy's 20000-byte
+// threshold, matching what real sessions' large tool results look like
+// (docs/MEMO.md: ordinary text, not high-entropy blobs).
+const largeFactsLines = 430
+
+var largeFactsPosition = map[int]float64{1: 0.05, 2: 0.05, 3: 0.5, 4: 0.5, 5: 0.95, 6: 0.95}
+
+func largeFactValue(file int) int { return 1000 + file*37 }
+
+// largeFactsLogLine is a realistic, low-entropy log line: a timestamp, a
+// small fixed vocabulary, and small counters that increment deterministically
+// (so every line is unique without any random or high-entropy content).
+func largeFactsLogLine(file, i int) string {
+	sec := i % 86400
+	hour, min, s := sec/3600, (sec/60)%60, sec%60
+	worker := i % 8
+	job := file*100000 + i
+	duration := 5 + (i*7)%250
+	status := "ok"
+	if i%37 == 0 {
+		status = "warn"
+	}
+	return fmt.Sprintf("2026-09-25T%02d:%02d:%02dZ INFO worker-%d processed job %d in %dms status=%s\n",
+		hour, min, s, worker, job, duration, status)
+}
+
+func largeFactsFiles() map[string]string {
+	files := make(map[string]string, 6)
+	for f := 1; f <= 6; f++ {
+		factLine := int(float64(largeFactsLines) * largeFactsPosition[f])
+		if factLine < 1 {
+			factLine = 1
+		}
+		if factLine > largeFactsLines {
+			factLine = largeFactsLines
+		}
+		var log strings.Builder
+		for i := 1; i <= largeFactsLines; i++ {
+			if i == factLine {
+				fmt.Fprintf(&log, "fact%d=%d\n", f, largeFactValue(f))
+				continue
+			}
+			log.WriteString(largeFactsLogLine(f, i))
+		}
+		files[fmt.Sprintf("logs/large-%d.txt", f)] = log.String()
+	}
+	return files
+}
+
 // Tasks is the chess suite: build, debug, extend. Routing may pay off on one kind of turn and not another.
 func Tasks() ([]Task, error) {
 	spec := mustAsset("SPEC.md")
@@ -149,6 +212,32 @@ func Tasks() ([]Task, error) {
 			},
 			Reference: func(workspace string) error {
 				return writeFiles(workspace, map[string]string{"answer.json": `{"first":37,"last":61,"sum":98}` + "\n"})
+			},
+		},
+		{
+			ID: "large-facts", Title: "Recover six facts hidden across six large logs", TimeoutMinutes: 12,
+			Prompt: "Read logs/large-1.txt through logs/large-6.txt. For each file, run `cat` on the complete file, as its own tool call, before you answer; do not skip a file or summarize instead of reading it. Show each file's full output at once; do not let the output get cut off partway through (if your command-execution tool lets you set an output limit, set max_output_tokens to at least 12000). Each file contains exactly one line of the form factN=VALUE. After reading all six files, write answer.json with integer keys fact1 through fact6, one value per file. Do not modify the logs.",
+			Setup: func(workspace string) error {
+				return writeFiles(workspace, largeFactsFiles())
+			},
+			Verify: func(workspace string) (verdict, error) {
+				want := map[string]any{}
+				for f := 1; f <= 6; f++ {
+					want[fmt.Sprintf("fact%d", f)] = float64(largeFactValue(f))
+				}
+				return verifyAnswer(workspace, want)
+			},
+			Reference: func(workspace string) error {
+				var b strings.Builder
+				b.WriteString("{")
+				for f := 1; f <= 6; f++ {
+					if f > 1 {
+						b.WriteString(",")
+					}
+					fmt.Fprintf(&b, `"fact%d":%d`, f, largeFactValue(f))
+				}
+				b.WriteString("}\n")
+				return writeFiles(workspace, map[string]string{"answer.json": b.String()})
 			},
 		},
 		{

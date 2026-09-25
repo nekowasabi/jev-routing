@@ -43,6 +43,8 @@ Options:
   --catalog N                            add N bench MCP tools (first 2 return evidence; default 0)
   --codex-compact-limit N                Codex native auto-compact limit for "on"
   --codex-compact-baseline-limit N       Codex native auto-compact limit for "off" (requires --codex-compact-limit)
+  --codex-tool-output-max N              Truncate Codex tool outputs over N bytes on "on" only
+                                          (requires --agent codex --modes on,off)
   --tasks a,b                            task ids (default: chess suite)
   --modes on,off[,direct]                routing states to compare (default on,off)
   --on-mode filter|forced                what "on" means (default filter; "off" is always baseline)
@@ -68,6 +70,7 @@ Tasks:
   child-survey   Delegate an 8-file source survey to one child session (15 min)
   dual-facts     Obtain two independent facts from bench MCP tools (5 min; --catalog 2)
   compact-facts  Read staged logs and recover two facts after compaction (10 min)
+  large-facts    Read six large logs and recover a fact from each (12 min; --codex-tool-output-max)
   skill-proof    Apply a routed skill and prove its use (5 min; Claude Code)
   xcell-module   Read go.mod facts from this source tree (10 min)
   xcell-locate   Locate five definitions in this source tree (10 min)
@@ -81,6 +84,9 @@ its full token total is unverified and cannot prove a saving.
 The command writes comparison.json; load it in the local dashboard to view the token KPI.
 With --codex-compact-limit, both modes pass through the proxy; only Codex's
 native auto-compaction token limit differs. Jev selection and replacement are off.
+With --codex-tool-output-max, both modes pass through the same baseline proxy
+path; only "on" truncates tool outputs over N bytes. Jev selection and
+replacement are off on both sides.
 
 Real agents spend real quota. Start with one task and --reps 1.
 --agent fake writes the reference solution through the proxy and spends nothing.
@@ -125,6 +131,7 @@ func runCmd(args []string) int {
 	catalog := fs.Int("catalog", 0, "stub MCP tools")
 	codexCompactLimit := fs.Int("codex-compact-limit", 0, "Codex native auto-compact limit for on")
 	codexCompactBaselineLimit := fs.Int("codex-compact-baseline-limit", 0, "Codex native auto-compact limit for off")
+	codexToolOutputMax := fs.Int("codex-tool-output-max", 0, "Truncate Codex tool outputs over N bytes on the on side only")
 	taskIDs := fs.String("tasks", "", "task ids")
 	modeFlag := fs.String("modes", "on,off", "on,off")
 	onMode := fs.String("on-mode", proxy.ModeFilter, "filter|forced")
@@ -185,6 +192,14 @@ func runCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "Codex compaction comparison requires --codex-compact-limit N and a larger --codex-compact-baseline-limit N")
 		return 2
 	}
+	if *codexToolOutputMax < 0 {
+		fmt.Fprintln(os.Stderr, "--codex-tool-output-max must be >= 0")
+		return 2
+	}
+	if *codexToolOutputMax > 0 && agent != "codex" {
+		fmt.Fprintln(os.Stderr, "--codex-tool-output-max requires --agent codex")
+		return 2
+	}
 	if *effort != "low" && *effort != "medium" && *effort != "high" {
 		fmt.Fprintln(os.Stderr, "--effort must be low, medium, or high")
 		return 2
@@ -236,6 +251,10 @@ func runCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "--codex-compact-limit requires --modes on,off")
 		return 2
 	}
+	if *codexToolOutputMax > 0 && (len(modes) != 2 || !contains(modes, "on") || !contains(modes, "off")) {
+		fmt.Fprintln(os.Stderr, "--codex-tool-output-max requires --modes on,off")
+		return 2
+	}
 	if agent == "fake" && contains(modes, "direct") {
 		fmt.Fprintln(os.Stderr, "direct requires a real agent")
 		return 2
@@ -263,12 +282,12 @@ func runCmd(args []string) int {
 		"JEV_COMPACTION": "off", "JEV_REASONING": "preserve", "JEV_AUTO_APPLY": "off",
 		"JEV_KIND_MODES": "skill=observe,mcp_tool=observe,cli=observe,plugin=observe",
 	}
-	if *codexCompactLimit > 0 {
+	if *codexCompactLimit > 0 || *codexToolOutputMax > 0 {
 		controlled["JEV_TRANSFORMS"] = "compact=off,filter=off,criteria=off"
 		controlled["JEV_SELECTION_MODE"] = "local"
 		controlled["JEV_CODEX_NATIVE_COMPACTION"] = "off"
 	}
-	if _, set := os.LookupEnv("JEV_SELECTION_MODE"); !set && agent != "fake" && *codexCompactLimit == 0 {
+	if _, set := os.LookupEnv("JEV_SELECTION_MODE"); !set && agent != "fake" && *codexCompactLimit == 0 && *codexToolOutputMax == 0 {
 		controlled["JEV_SELECTION_MODE"] = "jev"
 	}
 	restore := overrideBenchEnv(controlled)
@@ -348,6 +367,8 @@ func runCmd(args []string) int {
 	fmt.Printf("%d run%s with %s%s; results in %s\n\n", len(plan), plural, agent, catalogNote, outDir)
 	if *codexCompactLimit > 0 {
 		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Comparing Codex native auto-compaction limits; Jev selection and replacement are off.")
+	} else if *codexToolOutputMax > 0 {
+		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Comparing Codex tool-output truncation on vs off; Jev selection and replacement are off.")
 	} else {
 		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Routing on rewrites; routing off is a metering baseline.")
 	}
@@ -423,6 +444,12 @@ func runCmd(args []string) int {
 				gatewayEnv["JEV_KIND_MODES"] = "skill=apply,mcp_tool=observe,cli=observe,plugin=observe"
 			}
 		}
+		// Why: only "on" truncates, so the same requests baseline "off" sends
+		// unmodified are truncated deterministically on "on" -- both sides
+		// stay on the same baseline proxy path (see comparison.go and MEMO.md).
+		if *codexToolOutputMax > 0 && step.mode == "on" {
+			gatewayEnv["JEV_CODEX_TOOL_OUTPUT_MAX"] = strconv.Itoa(*codexToolOutputMax)
+		}
 		// Why: JEV_CLAUDE_ADVISE defaults off (docs/MEMO.md), which would make
 		// Claude's "on" bench condition indistinguishable from "off". The bench
 		// still needs advise applied to measure it, so force it on here only.
@@ -442,7 +469,7 @@ func runCmd(args []string) int {
 			gatewayEnv["JEV_CLAUDE_CLEAR_GATE"] = *claudeClearGate
 		}
 		gatewayMode := routingMode(step.mode == "on", *onMode)
-		if *codexCompactLimit > 0 {
+		if *codexCompactLimit > 0 || *codexToolOutputMax > 0 {
 			gatewayMode = proxy.ModeBaseline
 		}
 		if step.mode == "direct" {
@@ -569,6 +596,9 @@ func runCmd(args []string) int {
 		if agent == "codex" && step.task.ID == "compact-facts" {
 			record.EvidenceComplete = codexCompactEvidence(agentLog, workspace)
 		}
+		if agent == "codex" && step.task.ID == "large-facts" {
+			record.EvidenceComplete, record.LargeFactsRefetches = largeFactsEvidence(agentLog, workspace)
+		}
 		record.Task = step.task.ID
 		record.Agent = agent
 		record.AgentModel = *model
@@ -577,6 +607,7 @@ func runCmd(args []string) int {
 		record.EffectMinSavingsPct = *minSavingsPct
 		record.CodexCompactLimit = *codexCompactLimit
 		record.CodexCompactBaselineLimit = *codexCompactBaselineLimit
+		record.CodexToolOutputMax = *codexToolOutputMax
 		record.ApprovalMode = map[string]string{"claude": "acceptEdits", "codex": "approve-for-me", "grok": "bypassPermissions", "devin": "dangerous", "fake": "none"}[agent]
 		record.SourceRevision = sourceRevision()
 		// Why: Instead of clearing CLAUDE_CODE_SUBAGENT_MODEL, keep it and key on
@@ -594,6 +625,7 @@ func runCmd(args []string) int {
 			CodexNativeCompaction:     opt.CodexNativeCompaction,
 			CodexCompactLimit:         *codexCompactLimit,
 			CodexCompactBaselineLimit: *codexCompactBaselineLimit,
+			CodexToolOutputMax:        *codexToolOutputMax,
 			Transforms:                opt.Transforms, CostGate: opt.CostGateMax, KindModes: opt.KindModes,
 			ApplicationPolicy: opt.ApplicationPolicy, Shadow: opt.Shadow,
 			ClaudeClear: *claudeClear, ClaudeClearTrigger: *claudeClearTrigger,
@@ -807,6 +839,7 @@ type compareKeySettings struct {
 	CodexNativeCompaction                                   bool
 	CodexCompactLimit                                       int
 	CodexCompactBaselineLimit                               int
+	CodexToolOutputMax                                      int
 	Transforms                                              proxy.TransformOptions
 	KindModes                                               map[string]string
 	ClaudeClear                                             bool
@@ -851,6 +884,105 @@ func codexCompactEvidence(agentLog, workspace string) bool {
 		stage++
 	}
 	return stage == 21
+}
+
+// largeFactsEvidence reports whether every logs/large-N.txt (N=1..6) was
+// fully `cat`'d at least once (aggregated_output equal to the file's full
+// content), and how many additional command_execution calls after that
+// touched the same file -- e.g. sed/rg re-reads after a truncated output.
+// Unlike codexCompactEvidence, extra commands do not fail the evidence:
+// JEV_CODEX_TOOL_OUTPUT_MAX truncation legitimately requires narrower
+// re-reads to recover a fact cut from the middle.
+func largeFactsEvidence(agentLog, workspace string) (complete bool, refetches int) {
+	raw, err := os.ReadFile(agentLog)
+	if err != nil {
+		return false, 0
+	}
+	fullyRead := map[int]bool{}
+	touches := map[int]int{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		var event struct {
+			Type string `json:"type"`
+			Item struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Command string `json:"command"`
+				Output  string `json:"aggregated_output"`
+			} `json:"item"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil || event.Type != "item.completed" || event.Item.Type != "command_execution" || event.Item.Status != "completed" {
+			continue
+		}
+		for _, f := range largeFactsReferencedFiles(event.Item.Command) {
+			touches[f]++
+			name := fmt.Sprintf("logs/large-%d.txt", f)
+			if strings.HasSuffix(event.Item.Command, "cat "+name+"'") {
+				want, err := os.ReadFile(filepath.Join(workspace, name))
+				if err == nil && event.Item.Output == string(want) {
+					fullyRead[f] = true
+				}
+			}
+		}
+	}
+	complete = true
+	for f := 1; f <= 6; f++ {
+		if !fullyRead[f] {
+			complete = false
+		}
+		if touches[f] > 1 {
+			refetches += touches[f] - 1
+		}
+	}
+	return complete, refetches
+}
+
+// largeFactsBraceRe matches a shell brace expansion over logs/large-N.txt,
+// e.g. logs/large-{1,2,3,4,5,6}.txt or logs/large-{1..6}.txt.
+var largeFactsBraceRe = regexp.MustCompile(`logs/large-\{([^}]*)\}\.txt`)
+
+// largeFactsReferencedFiles returns the file numbers (1-6) a command touches,
+// whether named literally (logs/large-N.txt) or via a shell brace expansion
+// (comma list, ".." range, or both) -- so a re-fetch with rg/sed/grep/head/tail
+// or a brace-expanded cat/rg/sed over several files is still counted for each
+// file it actually reads, not just an exact single-file match.
+func largeFactsReferencedFiles(command string) []int {
+	seen := map[int]bool{}
+	for f := 1; f <= 6; f++ {
+		if strings.Contains(command, fmt.Sprintf("logs/large-%d.txt", f)) {
+			seen[f] = true
+		}
+	}
+	for _, m := range largeFactsBraceRe.FindAllStringSubmatch(command, -1) {
+		for _, part := range strings.Split(m[1], ",") {
+			part = strings.TrimSpace(part)
+			if lo, hi, ok := strings.Cut(part, ".."); ok {
+				lon, errLo := strconv.Atoi(strings.TrimSpace(lo))
+				hin, errHi := strconv.Atoi(strings.TrimSpace(hi))
+				if errLo != nil || errHi != nil {
+					continue
+				}
+				if lon > hin {
+					lon, hin = hin, lon
+				}
+				for f := lon; f <= hin; f++ {
+					if f >= 1 && f <= 6 {
+						seen[f] = true
+					}
+				}
+				continue
+			}
+			if n, err := strconv.Atoi(part); err == nil && n >= 1 && n <= 6 {
+				seen[n] = true
+			}
+		}
+	}
+	out := make([]int, 0, len(seen))
+	for f := 1; f <= 6; f++ {
+		if seen[f] {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // computeCompareKey hashes compareKeySettings; two runs get the same

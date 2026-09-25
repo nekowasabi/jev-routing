@@ -176,6 +176,9 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			if k.task == "compact-facts" && (!p.off.EvidenceComplete || !p.on.EvidenceComplete) {
 				row.Reasons = append(row.Reasons, "full_log_reads_unverified")
 			}
+			if k.task == "large-facts" && (!p.off.EvidenceComplete || !p.on.EvidenceComplete) {
+				row.Reasons = append(row.Reasons, "full_log_reads_unverified")
+			}
 			childTask := k.task == "child-facts" || k.task == "child-survey"
 			if childTask && (!p.off.EvidenceComplete || !p.on.EvidenceComplete || !p.off.ParentChildVerified || !p.on.ParentChildVerified || p.off.ChildSessions < 1 || p.on.ChildSessions < 1) {
 				row.Reasons = append(row.Reasons, "child_session_unverified")
@@ -196,7 +199,7 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			// Why: Instead of requiring a compact request on either side, compare
 			// all limit-policy runs. Reason: requiring one would select only some
 			// execution paths; request counts are reported separately.
-			if p.on.CodexCompactLimit == 0 && !p.on.ClaudeClear && (p.on.JevCalls == 0 || p.on.JevApplied == 0) {
+			if p.on.CodexCompactLimit == 0 && p.on.CodexToolOutputMax == 0 && !p.on.ClaudeClear && (p.on.JevCalls == 0 || p.on.JevApplied == 0) {
 				row.Reasons = append(row.Reasons, "jev_not_applied")
 			}
 			if len(row.Reasons) == 0 {

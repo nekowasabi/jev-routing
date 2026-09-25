@@ -74,6 +74,14 @@ type RunRecord struct {
 	CompactSavedTokens        int `json:"compactSavedTokens"`
 	CodexCompactLimit         int `json:"codexCompactLimit,omitempty"`
 	CodexCompactBaselineLimit int `json:"codexCompactBaselineLimit,omitempty"`
+	// CodexToolOutputMax is --codex-tool-output-max; see internal/proxy
+	// Options.CodexToolOutputMax and JEV_CODEX_TOOL_OUTPUT_MAX.
+	CodexToolOutputMax int `json:"codexToolOutputMax,omitempty"`
+	// LargeFactsRefetches counts command_execution calls after the initial
+	// full `cat` that touched the same logs/large-N.txt file again (e.g. a
+	// narrower sed/rg re-read to recover a fact truncation cut from the
+	// middle). Only populated for the large-facts task.
+	LargeFactsRefetches int `json:"largeFactsRefetches,omitempty"`
 
 	// ClaudeClear marks the Claude "on" condition as native context editing
 	// (clear_tool_uses_20250919) rather than JEV_CLAUDE_ADVISE; see --claude-clear.
@@ -89,6 +97,10 @@ type RunRecord struct {
 	ClaudeClearGate    string `json:"claudeClearGate,omitempty"`
 	ClearedToolUses    int    `json:"clearedToolUses,omitempty"`
 	ClearedInputTokens int    `json:"clearedInputTokens,omitempty"`
+	// ToolOutputTruncated/ToolOutputTruncatedBytes sum internal/proxy Event's
+	// per-request toolOutputTruncated(Bytes) -- see --codex-tool-output-max.
+	ToolOutputTruncated      int `json:"toolOutputTruncated,omitempty"`
+	ToolOutputTruncatedBytes int `json:"toolOutputTruncatedBytes,omitempty"`
 
 	// ClearNet* is the same-path net reduction native context editing gave
 	// this "on" run against its own counterfactual (see clearnet.go), as

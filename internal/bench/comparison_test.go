@@ -172,6 +172,34 @@ func TestComparisonClaudeClearIsComparableWithoutJevCalls(t *testing.T) {
 	}
 }
 
+// TestComparisonCodexToolOutputMaxIsComparableWithoutJevCalls covers the
+// --codex-tool-output-max condition: it deliberately makes no Jev calls
+// (selection and compaction are both off), so jev_not_applied must not gate
+// it, mirroring the --codex-compact-limit and --claude-clear bypasses above.
+func TestComparisonCodexToolOutputMaxIsComparableWithoutJevCalls(t *testing.T) {
+	base := RunRecord{
+		Task: "large-facts", Agent: "codex", AgentModel: "gpt-5.6-terra", CompareKey: "same",
+		Models: []string{"gpt-5.6-terra"}, Mode: "off", Rep: 1, Requests: 1, Metered: 1,
+		Input: 100, Output: 10, Passed: 6, Total: 6, Solved: true, HostUsageVerified: true,
+		EvidenceComplete: true,
+	}
+	on := base
+	on.Mode = "on"
+	on.Input = 70
+	on.CodexToolOutputMax = 20000
+	on.ToolOutputTruncated = 4
+	on.ToolOutputTruncatedBytes = 12000
+	row := BuildComparisons([]RunRecord{base, on}).Comparisons[0]
+	if row.Status != "comparable" {
+		t.Fatalf("codex-tool-output-max pair with no Jev calls must be comparable: %+v", row)
+	}
+	for _, reason := range row.Reasons {
+		if reason == "jev_not_applied" {
+			t.Fatalf("jev_not_applied must not gate a codex-tool-output-max run: %+v", row)
+		}
+	}
+}
+
 // TestEffectReportsClearedPairRatio covers "消去が発生したペア数／全ペア数":
 // AssessEffects must count how many pairs actually cleared, separately from
 // whether they were statistically comparable.
