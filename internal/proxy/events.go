@@ -80,6 +80,8 @@ type Event struct {
 	ClearedInputTokens int                `json:"clearedInputTokens,omitempty"`
 	ClearGate          string             `json:"clearGate,omitempty"`
 	ClearGateReason    string             `json:"clearGateReason,omitempty"`
+
+	NativeCompactionRequested bool `json:"nativeCompactionRequested,omitempty"`
 }
 
 // SavedTokens is an estimate of input tokens avoided before an upstream call.

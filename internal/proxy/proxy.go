@@ -545,6 +545,10 @@ func (s *Server) Handler() http.Handler {
 			}
 			origBytes := len(raw)
 			origJSON := json.Valid(raw)
+			nativeKind := ""
+			if origJSON {
+				nativeKind = nativeCompactionKindJSON(raw, s.Host)
+			}
 			sessionKey := sessionKeyFromBody(raw, s.events.InstanceID)
 			shape := catalogShape(raw)
 			var urlHosts []string
@@ -575,8 +579,13 @@ func (s *Server) Handler() http.Handler {
 				attemptsMu.Unlock()
 			})
 			stats := RewriteStats{}
-			if err == nil && json.Valid(raw) && nativeCompactionEnabled(s.Options) {
-				kind := nativeCompactionKindJSON(raw, s.Host)
+			if err == nil && origJSON && nativeCompactionEnabled(s.Options) {
+				kind := nativeKind
+				// Why: Codex's host summary keeps task progress; the retained
+				// transcript still caused repeated compaction in real CLI runs.
+				if kind == "codex" && !s.Options.CodexNativeCompaction {
+					kind = ""
+				}
 				var text string
 				var nstats RewriteStats
 				if kind != "" {
@@ -586,6 +595,12 @@ func (s *Server) Handler() http.Handler {
 					// Like fast-jev-compaction, let Claude Code's own summary run instead.
 					if why := claudeFallback(nstats); why != "" {
 						s.Log.Printf("fast-jev-native: claude compaction forwarded upstream: %s", why)
+						kind = ""
+					}
+				}
+				if kind == "codex" {
+					if why := codexFallback(text, nstats); why != "" {
+						s.Log.Printf("fast-jev-native: codex compaction forwarded upstream: %s", why)
 						kind = ""
 					}
 				}
@@ -604,6 +619,7 @@ func (s *Server) Handler() http.Handler {
 					s.mu.Unlock()
 					s.Log.Print(FormatStats(stats))
 					ev := EventFromStats(stats)
+					ev.NativeCompactionRequested = nativeKind != ""
 					ev.SessionKey = sessionKey
 					ev.RequestPath = r.URL.Path
 					ev.Method = r.Method
@@ -711,6 +727,7 @@ func (s *Server) Handler() http.Handler {
 				}
 			}
 			ev := EventFromStats(stats)
+			ev.NativeCompactionRequested = nativeKind != ""
 			ev.SessionKey = sessionKey
 			ev.RequestPath = r.URL.Path
 			ev.Method = r.Method

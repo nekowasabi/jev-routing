@@ -48,6 +48,8 @@ type Options struct {
 	KindModes         map[string]string
 	AfterRewrite      func(context.Context, []byte) []byte
 	Shadow            bool
+
+	CodexNativeCompaction bool
 	// ClaudeAdvise enables the Jev call on Claude's advise path (reminder-only
 	// hint, no tool_choice narrowing). Off by default: it costs a Jev judgment
 	// without narrowing tools[], a net token cost. See docs/MEMO.md.
@@ -123,6 +125,16 @@ func OptionsFromEnv() (Options, error) {
 			o.Compaction = v
 		default:
 			return o, fmt.Errorf("invalid JEV_COMPACTION %q (off|on)", v)
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_CODEX_NATIVE_COMPACTION")); v != "" {
+		switch v {
+		case CompactionOn:
+			o.CodexNativeCompaction = true
+		case CompactionOff:
+			o.CodexNativeCompaction = false
+		default:
+			return o, fmt.Errorf("invalid JEV_CODEX_NATIVE_COMPACTION %q (off|on)", v)
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("JEV_REASONING")); v != "" {

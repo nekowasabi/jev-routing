@@ -43,12 +43,17 @@ func nativeCompactionEnabled(opt Options) bool {
 }
 
 func nativeCompactionKind(root map[string]any) string {
+	msgs, _ := locateHistory(root)
+	// Why: Codex appends its compact prompt last; searching for the latest user
+	// would still mistake an older prompt followed by tool output for a new one.
+	if codexCompactPromptAtEnd(msgs) {
+		return "codex"
+	}
 	if s, _ := root["instructions"].(string); s != "" {
-		if k := markerKind(s); k != "" {
+		if k := markerKind(s); k != "" && k != "codex" {
 			return k
 		}
 	}
-	msgs, _ := locateHistory(root)
 	for _, raw := range msgs {
 		m, ok := raw.(map[string]any)
 		if !ok {
@@ -62,11 +67,19 @@ func nativeCompactionKind(root map[string]any) string {
 		if role != "user" && role != "developer" && role != "" && typ != "message" {
 			continue
 		}
-		if k := markerKind(textOf(m)); k != "" {
+		if k := markerKind(textOf(m)); k != "" && k != "codex" {
 			return k
 		}
 	}
 	return ""
+}
+
+func codexCompactPromptAtEnd(msgs []any) bool {
+	if len(msgs) == 0 {
+		return false
+	}
+	m, ok := msgs[len(msgs)-1].(map[string]any)
+	return ok && m["role"] == "user" && markerKind(textOf(m)) == "codex"
 }
 
 // Claude Code's compact prompt (full and partial variants) opens with the
@@ -151,6 +164,18 @@ func claudeFallback(stats RewriteStats) string {
 	return ""
 }
 
+func codexFallback(text string, stats RewriteStats) string {
+	if !stats.CompactApplied {
+		return "retention failed: " + stats.Reason
+	}
+	// Why: Compare the returned text instead of only tool-item reduction;
+	// Codex stores that text as its new history, including earlier summaries.
+	if stats.CharsBefore == 0 || float64(stats.CharsBefore-len(text))/float64(stats.CharsBefore) < claudeMinReduction {
+		return fmt.Sprintf("summary reduction below %.0f%% (%d -> %d chars)", claudeMinReduction*100, stats.CharsBefore, len(text))
+	}
+	return ""
+}
+
 func markerKind(s string) string {
 	switch {
 	case strings.Contains(s, "CONTEXT CHECKPOINT COMPACTION"):
@@ -181,6 +206,10 @@ func retainNative(ctx context.Context, raw []byte, client *jev.Client, opt Optio
 	msgs, _ := locateHistory(root)
 	if kind == "claude" {
 		msgs = withoutCompactPrompt(msgs)
+	} else if kind == "codex" && codexCompactPromptAtEnd(msgs) {
+		// Why: Use the original task as Jev's goal instead of Codex's synthetic
+		// compaction instruction, which otherwise replaces the last user request.
+		msgs = msgs[:len(msgs)-1]
 	}
 	items, user := itemsFromMessages(msgs)
 	preserve := 2

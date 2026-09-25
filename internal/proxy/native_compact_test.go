@@ -13,6 +13,7 @@ import (
 
 	"github.com/nekowasabi/jev-routing/internal/compact"
 	"github.com/nekowasabi/jev-routing/internal/host"
+	"github.com/nekowasabi/jev-routing/internal/jev"
 )
 
 func TestNativeCompactionKindMarkers(t *testing.T) {
@@ -40,6 +41,23 @@ func TestNativeCompactionKindMarkers(t *testing.T) {
 	}}
 	if nativeCompactionKind(quoted) != "" {
 		t.Fatal("tool output must not trigger native compaction")
+	}
+}
+
+func TestCodexCompactionMarkerMustBeInCurrentUserTurn(t *testing.T) {
+	root := map[string]any{"input": []any{
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "CONTEXT CHECKPOINT COMPACTION"}}},
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "Continue the task."}}},
+	}}
+	if got := nativeCompactionKind(root); got != "" {
+		t.Fatalf("stale marker classified as %q", got)
+	}
+	root["input"] = []any{
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "CONTEXT CHECKPOINT COMPACTION"}}},
+		map[string]any{"type": "custom_tool_call_output", "call_id": "c1", "output": "done"},
+	}
+	if got := nativeCompactionKind(root); got != "" {
+		t.Fatalf("marker followed by tool result classified as %q", got)
 	}
 }
 
@@ -111,7 +129,9 @@ func TestCodexNativeCompactionDoesNotHitUpstream(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(payload)
-	s, upstream := testProxy(t, host.Codex, nil, DefaultOptions())
+	opt := DefaultOptions()
+	opt.CodexNativeCompaction = true
+	s, upstream := testProxy(t, host.Codex, nil, opt)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(raw)))
 	req.RemoteAddr = "127.0.0.1:9"
 	rec := httptest.NewRecorder()
@@ -134,6 +154,107 @@ func TestCodexNativeCompactionDoesNotHitUpstream(t *testing.T) {
 	}
 	if !strings.Contains(out, "jev-compaction truncated") {
 		t.Fatalf("stale shell result was not truncated: %s", out)
+	}
+}
+
+func TestCodexNativeCompactionDefaultsToHost(t *testing.T) {
+	opt := DefaultOptions()
+	if opt.CodexNativeCompaction {
+		t.Fatal("Codex native replacement must be opt-in")
+	}
+	s, upstream := testProxy(t, host.Codex, nil, opt)
+	body := `{"model":"gpt-test","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"CONTEXT CHECKPOINT COMPACTION"}]}]}`
+	s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body)))
+	events, _, _, _ := s.Events().Snapshot(0)
+	if *upstream != 1 || len(events) != 1 || !events[0].NativeCompactionRequested || events[0].CompactApplied {
+		t.Fatalf("default Codex compaction did not reach host: upstream=%d events=%+v", *upstream, events)
+	}
+}
+
+func TestCodexNativeCompactionOption(t *testing.T) {
+	t.Setenv("JEV_CODEX_NATIVE_COMPACTION", "on")
+	opt, err := OptionsFromEnv()
+	if err != nil || !opt.CodexNativeCompaction {
+		t.Fatalf("on: opt=%+v err=%v", opt, err)
+	}
+	t.Setenv("JEV_CODEX_NATIVE_COMPACTION", "off")
+	opt, err = OptionsFromEnv()
+	if err != nil || opt.CodexNativeCompaction {
+		t.Fatalf("off: opt=%+v err=%v", opt, err)
+	}
+	t.Setenv("JEV_CODEX_NATIVE_COMPACTION", "invalid")
+	if _, err := OptionsFromEnv(); err == nil {
+		t.Fatal("invalid value accepted")
+	}
+}
+
+func TestCodexNativeCompactionFallsBackWhenPriorSummaryWouldGrow(t *testing.T) {
+	prior := "Another language model started to solve this problem and produced a summary of its thinking process. Here is the summary:\nEARLYFACT=37\n" + strings.Repeat("retained earlier context\n", 400)
+	root := map[string]any{"model": "gpt-test", "input": []any{
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": prior}}},
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary."}}},
+	}}
+	raw, _ := json.Marshal(root)
+	text, stats := retainNative(t.Context(), raw, nil, DefaultOptions(), "codex")
+	if !strings.Contains(text, "EARLYFACT=37") || codexFallback(text, stats) == "" {
+		t.Fatalf("previous summary was lost or growth not rejected: reason=%q before=%d summary=%d", codexFallback(text, stats), stats.CharsBefore, len(text))
+	}
+	opt := DefaultOptions()
+	opt.CodexNativeCompaction = true
+	s, upstream := testProxy(t, host.Codex, nil, opt)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(raw))))
+	events, _, _, _ := s.Events().Snapshot(0)
+	if *upstream != 1 || len(events) != 1 || !events[0].NativeCompactionRequested || events[0].CompactApplied {
+		t.Fatalf("large summary not forwarded upstream: upstream=%d events=%+v", *upstream, events)
+	}
+}
+
+func TestCodexNativeCompactionUsesOriginalTaskAsJevGoal(t *testing.T) {
+	goals := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			State struct {
+				Goal string `json:"goal"`
+			} `json:"state"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		goals <- request.State.Goal
+		_, _ = io.WriteString(w, `{"answers":{}}`)
+	}))
+	defer server.Close()
+	msgs := []any{map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "Read logs/stage-1.txt through logs/stage-6.txt and write answer.json."}}}}
+	for _, id := range []string{"a", "b"} {
+		msgs = append(msgs,
+			map[string]any{"type": "function_call", "call_id": id, "name": "read", "arguments": `{"path":"logs/stage-1.txt"}`},
+			map[string]any{"type": "function_call_output", "call_id": id, "output": "ordinary log data"})
+	}
+	msgs = append(msgs, map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "CONTEXT CHECKPOINT COMPACTION"}}})
+	raw, _ := json.Marshal(map[string]any{"model": "gpt-test", "input": msgs})
+	client := &jev.Client{APIKey: "test", BaseURL: server.URL, Model: "test", HTTP: server.Client()}
+	retainNative(t.Context(), raw, client, DefaultOptions(), "codex")
+	select {
+	case goal := <-goals:
+		if !strings.Contains(goal, "Read logs/stage-1.txt") || strings.Contains(goal, "CONTEXT CHECKPOINT") {
+			t.Fatalf("wrong Jev goal: %q", goal)
+		}
+	default:
+		t.Fatal("Jev compaction was not asked")
+	}
+}
+
+func TestCodexBaselineRecordsCompactionRequest(t *testing.T) {
+	opt := DefaultOptions()
+	opt.Mode = ModeBaseline
+	s, upstream := testProxy(t, host.Codex, nil, opt)
+	body := `{"model":"gpt-test","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"CONTEXT CHECKPOINT COMPACTION"}]}]}`
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body)))
+	events, _, _, _ := s.Events().Snapshot(0)
+	if *upstream != 1 || len(events) != 1 || !events[0].NativeCompactionRequested || events[0].CompactApplied {
+		t.Fatalf("baseline compaction event = %+v, upstream = %d", events, *upstream)
 	}
 }
 
