@@ -157,7 +157,53 @@ func TestCodexNativeCompactionDoesNotHitUpstream(t *testing.T) {
 	}
 }
 
-func TestCodexNativeCompactionDefaultsToHost(t *testing.T) {
+// TestCodexNativeCompactionRecordsSyntheticRoute checks the bench-facing
+// bookkeeping added for docs/MEMO.md "計測上の教訓": a synthesized compaction
+// reply must record the apparent usage the host was told (compactUsage's
+// fixed input_tokens=1 and the estimated output_tokens) and the retained
+// transcript's byte length, so a later reconciliation can subtract exactly
+// what Codex's CLI folded into its own turn usage.
+func TestCodexNativeCompactionRecordsSyntheticRoute(t *testing.T) {
+	output := "HEADMARKER\n" + strings.Repeat("x", 2000) + "\nTAILMARKER"
+	payload := map[string]any{
+		"model": "gpt-test",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "Fix the failing test. Never edit src/generated."}}},
+			map[string]any{"type": "local_shell_call", "call_id": "old", "action": map[string]any{"command": []any{"ls", "-la"}}},
+			map[string]any{"type": "local_shell_call_output", "call_id": "old", "output": output},
+			map[string]any{"type": "apply_patch_call", "call_id": "p1", "input": "*** Begin Patch"},
+			map[string]any{"type": "apply_patch_call_output", "call_id": "p1", "output": "patched"},
+			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary."}}},
+		},
+	}
+	raw, _ := json.Marshal(payload)
+	opt := DefaultOptions()
+	opt.CodexNativeCompaction = true
+	s, _ := testProxy(t, host.Codex, nil, opt)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(raw)))
+	req.RemoteAddr = "127.0.0.1:9"
+	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	events, _, _, _ := s.Events().Snapshot(0)
+	if len(events) != 1 {
+		t.Fatalf("want 1 event, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.CompactRoute != "synthetic" || ev.CompactForwardReason != "" {
+		t.Fatalf("route=%q reason=%q", ev.CompactRoute, ev.CompactForwardReason)
+	}
+	if ev.CompactApparentInput != 1 {
+		t.Fatalf("apparent input = %d, want 1 (compactUsage's fixed value)", ev.CompactApparentInput)
+	}
+	if ev.CompactApparentOutput <= 0 || ev.CompactSummaryBytes <= 0 {
+		t.Fatalf("apparent output=%d summaryBytes=%d, want both positive", ev.CompactApparentOutput, ev.CompactSummaryBytes)
+	}
+}
+
+// TestCodexNativeCompactionRecordsForwardedRouteWhenDisabled checks that a
+// native-compaction candidate that goes upstream because CodexNativeCompaction
+// is off (the default) is still tagged as an identified compaction request
+// that was forwarded, with a reason -- see docs/MEMO.md "圧縮の同一経路指標".
+func TestCodexNativeCompactionRecordsForwardedRouteWhenDisabled(t *testing.T) {
 	opt := DefaultOptions()
 	if opt.CodexNativeCompaction {
 		t.Fatal("Codex native replacement must be opt-in")
@@ -168,6 +214,33 @@ func TestCodexNativeCompactionDefaultsToHost(t *testing.T) {
 	events, _, _, _ := s.Events().Snapshot(0)
 	if *upstream != 1 || len(events) != 1 || !events[0].NativeCompactionRequested || events[0].CompactApplied {
 		t.Fatalf("default Codex compaction did not reach host: upstream=%d events=%+v", *upstream, events)
+	}
+	if events[0].CompactRoute != "forwarded" || events[0].CompactForwardReason != "native_compaction_off" {
+		t.Fatalf("route=%q reason=%q", events[0].CompactRoute, events[0].CompactForwardReason)
+	}
+}
+
+// TestCodexNativeCompactionRecordsForwardedRouteOnFallback checks the
+// claudeFallback/codexFallback bailout path also tags CompactRoute and
+// records a non-empty reason (the fallback explanation).
+func TestCodexNativeCompactionRecordsForwardedRouteOnFallback(t *testing.T) {
+	prior := "Another language model started to solve this problem and produced a summary of its thinking process. Here is the summary:\nEARLYFACT=37\n" + strings.Repeat("retained earlier context\n", 400)
+	root := map[string]any{"model": "gpt-test", "input": []any{
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": prior}}},
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary."}}},
+	}}
+	raw, _ := json.Marshal(root)
+	opt := DefaultOptions()
+	opt.CodexNativeCompaction = true
+	s, upstream := testProxy(t, host.Codex, nil, opt)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(raw))))
+	events, _, _, _ := s.Events().Snapshot(0)
+	if *upstream != 1 || len(events) != 1 {
+		t.Fatalf("large summary not forwarded upstream: upstream=%d events=%+v", *upstream, events)
+	}
+	if events[0].CompactRoute != "forwarded" || events[0].CompactForwardReason == "" {
+		t.Fatalf("route=%q reason=%q", events[0].CompactRoute, events[0].CompactForwardReason)
 	}
 }
 

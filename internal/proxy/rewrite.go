@@ -189,6 +189,15 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 			stats.ToolOutputTruncatedBytes = b
 		}
 	}
+	// Why: JEV_CODEX_STEER replaces the filter/forced/cost-gate path below
+	// entirely for Codex requests -- it is a separate ported pipeline (see
+	// codex_steer.go), not another mode of the local/hybrid selection
+	// engine. Tool-output truncation above still applies either way.
+	if h == host.Codex && opt.CodexSteer {
+		steered, a, e := rewriteCodexSteer(ctx, body, root, client, &stats)
+		asked, callErr = a, e
+		return steered, stats, nil
+	}
 
 	if opt.Mode == ModeBaseline {
 		stats.Chosen = "passthrough:" + reasonBaseline

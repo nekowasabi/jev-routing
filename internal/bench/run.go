@@ -47,6 +47,17 @@ Options:
                                           (fixed 20000-byte threshold; on by default outside this
                                           comparison -- see JEV_CODEX_TOOL_OUTPUT_TRUNCATE; requires
                                           --agent codex --modes on,off)
+  --codex-native-compaction              Compare Codex native compaction replacement (Jev's synthesized
+                                          retained transcript) explicitly on vs off; "off" forwards
+                                          Codex's own compaction summary upstream, "on" replaces it with
+                                          Jev's -- see JEV_CODEX_NATIVE_COMPACTION. Requires --agent codex
+                                          --modes off,on and --codex-compact-limit N (same limit both
+                                          sides, so both trigger compaction)
+  --codex-steer                          Compare the ported jev-gateway Codex tool-steering path
+                                          explicitly on vs off -- see JEV_CODEX_STEER. "off" is the
+                                          baseline-equivalent proxy path; "on" asks Jev which tool (if
+                                          any) to call next and rewrites tool_choice accordingly.
+                                          Requires --agent codex --modes off,on.
   --tasks a,b                            task ids (default: chess suite)
   --modes on,off[,direct]                routing states to compare (default on,off)
   --on-mode filter|forced                what "on" means (default filter; "off" is always baseline)
@@ -136,6 +147,8 @@ func runCmd(args []string) int {
 	codexCompactLimit := fs.Int("codex-compact-limit", 0, "Codex native auto-compact limit for on")
 	codexCompactBaselineLimit := fs.Int("codex-compact-baseline-limit", 0, "Codex native auto-compact limit for off")
 	codexToolOutputTruncateFlag := fs.Bool("codex-tool-output-truncate", false, "Compare Codex tool-output truncation on vs off explicitly")
+	codexNativeCompactionFlag := fs.Bool("codex-native-compaction", false, "Compare Codex native compaction replacement (JEV_CODEX_NATIVE_COMPACTION) on vs off explicitly")
+	codexSteerFlag := fs.Bool("codex-steer", false, "Compare Codex tool-steering (JEV_CODEX_STEER) on vs off explicitly")
 	taskIDs := fs.String("tasks", "", "task ids")
 	modeFlag := fs.String("modes", "on,off", "on,off")
 	onMode := fs.String("on-mode", proxy.ModeFilter, "filter|forced")
@@ -192,12 +205,25 @@ func runCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "--no-hooks is supported for claude only")
 		return 2
 	}
-	if *codexCompactLimit < 0 || *codexCompactBaselineLimit < 0 || (*codexCompactLimit > 0 && (agent != "codex" || *codexCompactBaselineLimit <= *codexCompactLimit)) || (*codexCompactLimit == 0 && *codexCompactBaselineLimit != 0) {
+	// Why: --codex-native-compaction reuses --codex-compact-limit but gives
+	// the SAME N to both sides (both must trigger compaction; only whether
+	// Jev replaces it differs), unlike the threshold comparison below which
+	// requires a larger --codex-compact-baseline-limit for "off".
+	if *codexNativeCompactionFlag {
+		if agent != "codex" || *codexCompactLimit <= 0 || *codexCompactBaselineLimit != 0 {
+			fmt.Fprintln(os.Stderr, "--codex-native-compaction requires --agent codex, --codex-compact-limit N, and no --codex-compact-baseline-limit (the same N triggers compaction on both sides)")
+			return 2
+		}
+	} else if *codexCompactLimit < 0 || *codexCompactBaselineLimit < 0 || (*codexCompactLimit > 0 && (agent != "codex" || *codexCompactBaselineLimit <= *codexCompactLimit)) || (*codexCompactLimit == 0 && *codexCompactBaselineLimit != 0) {
 		fmt.Fprintln(os.Stderr, "Codex compaction comparison requires --codex-compact-limit N and a larger --codex-compact-baseline-limit N")
 		return 2
 	}
 	if *codexToolOutputTruncateFlag && agent != "codex" {
 		fmt.Fprintln(os.Stderr, "--codex-tool-output-truncate requires --agent codex")
+		return 2
+	}
+	if *codexSteerFlag && agent != "codex" {
+		fmt.Fprintln(os.Stderr, "--codex-steer requires --agent codex")
 		return 2
 	}
 	if *effort != "low" && *effort != "medium" && *effort != "high" {
@@ -255,6 +281,14 @@ func runCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "--codex-tool-output-truncate requires --modes on,off")
 		return 2
 	}
+	if *codexNativeCompactionFlag && (len(modes) != 2 || !contains(modes, "on") || !contains(modes, "off")) {
+		fmt.Fprintln(os.Stderr, "--codex-native-compaction requires --modes off,on")
+		return 2
+	}
+	if *codexSteerFlag && (len(modes) != 2 || !contains(modes, "on") || !contains(modes, "off")) {
+		fmt.Fprintln(os.Stderr, "--codex-steer requires --modes off,on")
+		return 2
+	}
 	if agent == "fake" && contains(modes, "direct") {
 		fmt.Fprintln(os.Stderr, "direct requires a real agent")
 		return 2
@@ -282,12 +316,18 @@ func runCmd(args []string) int {
 		"JEV_COMPACTION": "off", "JEV_REASONING": "preserve", "JEV_AUTO_APPLY": "off",
 		"JEV_KIND_MODES": "skill=observe,mcp_tool=observe,cli=observe,plugin=observe",
 	}
-	if *codexCompactLimit > 0 || *codexToolOutputTruncateFlag {
+	if *codexCompactLimit > 0 || *codexToolOutputTruncateFlag || *codexSteerFlag {
 		controlled["JEV_TRANSFORMS"] = "compact=off,filter=off,criteria=off"
 		controlled["JEV_SELECTION_MODE"] = "local"
-		controlled["JEV_CODEX_NATIVE_COMPACTION"] = "off"
+		// Why: --codex-native-compaction toggles this per step.mode below
+		// instead (off vs on is the axis under test); every other Codex
+		// compaction/truncation/steering comparison forces it off on both
+		// sides -- see the spec's "Jev compaction/replacement disabled".
+		if !*codexNativeCompactionFlag {
+			controlled["JEV_CODEX_NATIVE_COMPACTION"] = "off"
+		}
 	}
-	if _, set := os.LookupEnv("JEV_SELECTION_MODE"); !set && agent != "fake" && *codexCompactLimit == 0 && !*codexToolOutputTruncateFlag {
+	if _, set := os.LookupEnv("JEV_SELECTION_MODE"); !set && agent != "fake" && *codexCompactLimit == 0 && !*codexToolOutputTruncateFlag && !*codexSteerFlag {
 		controlled["JEV_SELECTION_MODE"] = "jev"
 	}
 	restore := overrideBenchEnv(controlled)
@@ -365,10 +405,14 @@ func runCmd(args []string) int {
 		catalogNote = fmt.Sprintf(" (catalog: %d stub MCP tools)", *catalog)
 	}
 	fmt.Printf("%d run%s with %s%s; results in %s\n\n", len(plan), plural, agent, catalogNote, outDir)
-	if *codexCompactLimit > 0 {
+	if *codexNativeCompactionFlag {
+		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Comparing Codex native compaction replacement on vs off at the same auto-compact limit; Jev selection is off, tool-output truncation stays at its default on both sides.")
+	} else if *codexCompactLimit > 0 {
 		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Comparing Codex native auto-compaction limits; Jev selection and replacement are off.")
 	} else if *codexToolOutputTruncateFlag {
 		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Comparing Codex tool-output truncation on vs off; Jev selection and replacement are off.")
+	} else if *codexSteerFlag {
+		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Comparing Codex tool-steering (JEV_CODEX_STEER) on vs off; the local/hybrid selection engine and Jev compaction/replacement are off on both sides.")
 	} else {
 		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Routing on rewrites; routing off is a metering baseline.")
 	}
@@ -451,6 +495,18 @@ func runCmd(args []string) int {
 		if *codexToolOutputTruncateFlag {
 			gatewayEnv["JEV_CODEX_TOOL_OUTPUT_TRUNCATE"] = step.mode
 		}
+		// Why: --codex-steer is the on-vs-off axis under test; step.mode is
+		// already "off"/"on", matching JEV_CODEX_STEER's own values.
+		// Tool-output truncation stays at its default (not forced here), per
+		// the spec.
+		if *codexSteerFlag {
+			gatewayEnv["JEV_CODEX_STEER"] = step.mode
+		}
+		// Why: --codex-native-compaction is the on-vs-off axis under test;
+		// step.mode is already "off"/"on", matching the env var's values.
+		if *codexNativeCompactionFlag {
+			gatewayEnv["JEV_CODEX_NATIVE_COMPACTION"] = step.mode
+		}
 		// Why: JEV_CLAUDE_ADVISE defaults off (docs/MEMO.md), which would make
 		// Claude's "on" bench condition indistinguishable from "off". The bench
 		// still needs advise applied to measure it, so force it on here only.
@@ -470,7 +526,7 @@ func runCmd(args []string) int {
 			gatewayEnv["JEV_CLAUDE_CLEAR_GATE"] = *claudeClearGate
 		}
 		gatewayMode := routingMode(step.mode == "on", *onMode)
-		if *codexCompactLimit > 0 || *codexToolOutputTruncateFlag {
+		if *codexCompactLimit > 0 || *codexToolOutputTruncateFlag || *codexSteerFlag {
 			gatewayMode = proxy.ModeBaseline
 		}
 		if step.mode == "direct" {
@@ -523,7 +579,10 @@ func runCmd(args []string) int {
 			}
 			if *codexCompactLimit > 0 {
 				limit := *codexCompactLimit
-				if step.mode == "off" {
+				// Why: --codex-native-compaction gives both sides the same N
+				// (both must trigger compaction); only the threshold
+				// comparison uses a different, larger baseline limit for "off".
+				if step.mode == "off" && !*codexNativeCompactionFlag {
 					limit = *codexCompactBaselineLimit
 				}
 				cmd.Args = append([]string{"-c", "model_auto_compact_token_limit=" + strconv.Itoa(limit)}, cmd.Args...)
@@ -596,6 +655,7 @@ func runCmd(args []string) int {
 		record := usage
 		if agent == "codex" && step.task.ID == "compact-facts" {
 			record.EvidenceComplete = codexCompactEvidence(agentLog, workspace)
+			record.CompactFactsRefetches = compactFactsRefetches(agentLog, workspace)
 		}
 		if agent == "codex" && step.task.ID == "large-facts" {
 			record.EvidenceComplete, record.LargeFactsRefetches = largeFactsEvidence(agentLog, workspace)
@@ -614,6 +674,12 @@ func runCmd(args []string) int {
 		}
 		record.CodexToolOutputTruncateFlag = *codexToolOutputTruncateFlag
 		record.CodexToolOutputTruncate = codexToolOutputTruncateEffective
+		record.CodexNativeCompaction = opt.CodexNativeCompaction
+		record.CodexNativeCompactionFlag = *codexNativeCompactionFlag
+		record.CodexSteerFlag = *codexSteerFlag
+		if *codexSteerFlag && gw != nil {
+			record.CodexSteerForced, record.CodexSteerNone, record.CodexSteerPassthrough = codexSteerCounts(gw.snapshot)
+		}
 		record.ApprovalMode = map[string]string{"claude": "acceptEdits", "codex": "approve-for-me", "grok": "bypassPermissions", "devin": "dangerous", "fake": "none"}[agent]
 		record.SourceRevision = sourceRevision()
 		// Why: Instead of clearing CLAUDE_CODE_SUBAGENT_MODEL, keep it and key on
@@ -623,15 +689,27 @@ func runCmd(args []string) int {
 		if agent == "claude" {
 			subagentModel = os.Getenv("CLAUDE_CODE_SUBAGENT_MODEL")
 		}
+		// Why: --codex-native-compaction's whole point is toggling
+		// CodexNativeCompaction between off and on per step.mode; hashing
+		// that per-mode value would make every off/on pair report
+		// settings_mismatch. Hash a constant instead and let
+		// CodexNativeCompactionFlag (identical on both sides) distinguish
+		// this comparison from an ordinary run.
+		compareKeyNativeCompaction := opt.CodexNativeCompaction
+		if *codexNativeCompactionFlag {
+			compareKeyNativeCompaction = false
+		}
 		record.CompareKey = computeCompareKey(compareKeySettings{
 			Task: step.task.ID, Agent: agent, Model: *model, Effort: *effort,
 			Approval: record.ApprovalMode, MinPairs: *minPairs, MinSavingsPct: *minSavingsPct,
 			UserTools: *userTools, NoHooks: *noHooks, Catalog: *catalog, Source: record.SourceRevision,
 			Selection: opt.SelectionMode, Reasoning: opt.Reasoning, Compaction: opt.Compaction,
-			CodexNativeCompaction:       opt.CodexNativeCompaction,
+			CodexNativeCompaction:       compareKeyNativeCompaction,
+			CodexNativeCompactionFlag:   *codexNativeCompactionFlag,
 			CodexCompactLimit:           *codexCompactLimit,
 			CodexCompactBaselineLimit:   *codexCompactBaselineLimit,
 			CodexToolOutputTruncateFlag: *codexToolOutputTruncateFlag,
+			CodexSteerFlag:              *codexSteerFlag,
 			Transforms:                  opt.Transforms, CostGate: opt.CostGateMax, KindModes: opt.KindModes,
 			ApplicationPolicy: opt.ApplicationPolicy, Shadow: opt.Shadow,
 			ClaudeClear: *claudeClear, ClaudeClearTrigger: *claudeClearTrigger,
@@ -680,6 +758,11 @@ func runCmd(args []string) int {
 			}
 		}
 		if step.mode != "direct" && (agent == "claude" || agent == "codex") {
+			if agent == "codex" && (record.CompactApparentInput > 0 || record.CompactApparentOutput > 0) {
+				record.HostUsageCompactCorrected = true
+				record.HostUsageCompactCorrectionInput = record.CompactApparentInput
+				record.HostUsageCompactCorrectionOutput = record.CompactApparentOutput
+			}
 			mainKey, err := matchHostSession(record, agentLog)
 			if err == nil {
 				record.HostUsageVerified = true
@@ -843,9 +926,11 @@ type compareKeySettings struct {
 	SubagentModel                                           string `json:",omitempty"`
 	Selection, Reasoning, Compaction, ApplicationPolicy     string
 	CodexNativeCompaction                                   bool
+	CodexNativeCompactionFlag                               bool
 	CodexCompactLimit                                       int
 	CodexCompactBaselineLimit                               int
 	CodexToolOutputTruncateFlag                             bool
+	CodexSteerFlag                                          bool
 	Transforms                                              proxy.TransformOptions
 	KindModes                                               map[string]string
 	ClaudeClear                                             bool
@@ -890,6 +975,56 @@ func codexCompactEvidence(agentLog, workspace string) bool {
 		stage++
 	}
 	return stage == 21
+}
+
+// compactFactsRefetches counts, for the compact-facts task, additional
+// command_execution calls after a logs/stage-N.txt (N=1..20) was already
+// fully `cat`'d once -- the same pattern as largeFactsEvidence's refetch
+// count, per docs/MEMO.md "圧縮の同一経路指標". Unlike codexCompactEvidence
+// (the strict EvidenceComplete gate, which rejects any duplicate read
+// outright), this is purely diagnostic: it measures how often a legitimate
+// compaction forced Codex to re-read a file it already had, and never
+// affects EvidenceComplete.
+func compactFactsRefetches(agentLog, workspace string) int {
+	raw, err := os.ReadFile(agentLog)
+	if err != nil {
+		return 0
+	}
+	fullyRead := map[int]bool{}
+	refetches := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		var event struct {
+			Type string `json:"type"`
+			Item struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Command string `json:"command"`
+				Output  string `json:"aggregated_output"`
+			} `json:"item"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil || event.Type != "item.completed" || event.Item.Type != "command_execution" || event.Item.Status != "completed" {
+			continue
+		}
+		if !strings.Contains(event.Item.Command, "logs/stage-") {
+			continue
+		}
+		for stage := 1; stage <= 20; stage++ {
+			name := fmt.Sprintf("logs/stage-%d.txt", stage)
+			if !strings.HasSuffix(event.Item.Command, "cat "+name+"'") {
+				continue
+			}
+			if fullyRead[stage] {
+				refetches++
+				break
+			}
+			want, err := os.ReadFile(filepath.Join(workspace, name))
+			if err == nil && event.Item.Output == string(want) {
+				fullyRead[stage] = true
+			}
+			break
+		}
+	}
+	return refetches
 }
 
 // largeFactsEvidence reports whether every logs/large-N.txt (N=1..6) was

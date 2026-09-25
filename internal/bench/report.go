@@ -213,7 +213,10 @@ func Summarize(all []RunRecord, prices *Prices) string {
 			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.Reasoning) }))
 		}, fmtInt, false},
-		{"Total tokens incl. Jev, median", func(g []RunRecord) *float64 {
+		// Total tokens is the primary savings metric: upstream input (incl.
+		// cache) + upstream output only. Jev's own tokens are excluded here
+		// and reported separately below -- see docs/MEMO.md "主指標から Jev を除外".
+		{"Total tokens (upstream), median", func(g []RunRecord) *float64 {
 			var totals []float64
 			for _, r := range g {
 				total, ok := taskTokenTotal(r)
@@ -233,6 +236,12 @@ func Summarize(all []RunRecord, prices *Prices) string {
 			}
 			return median(floatField(g, func(r RunRecord) float64 { return float64(r.JevCalls) }))
 		}, fmtInt, true},
+		{"Jev tokens (separate from total), median", func(g []RunRecord) *float64 {
+			if !measuredRuns(g) {
+				return nil
+			}
+			return median(floatField(g, func(r RunRecord) float64 { return float64(r.JevInput + r.JevOutput) }))
+		}, fmtInt, false},
 		{"Requests Jev steered", func(g []RunRecord) *float64 {
 			if !measuredRuns(g) {
 				return nil

@@ -92,6 +92,62 @@ type RunRecord struct {
 	// narrower sed/rg re-read to recover a fact truncation cut from the
 	// middle). Only populated for the large-facts task.
 	LargeFactsRefetches int `json:"largeFactsRefetches,omitempty"`
+	// CompactFactsRefetches is the same pattern as LargeFactsRefetches but
+	// for compact-facts' logs/stage-N.txt files: how many times a file
+	// already fully read was `cat`'d again, which only a legitimate
+	// compaction should force. Unlike codexCompactEvidence (the strict
+	// EvidenceComplete gate, which still rejects any duplicate read), this
+	// counter is purely diagnostic and never affects EvidenceComplete.
+	CompactFactsRefetches int `json:"compactFactsRefetches,omitempty"`
+
+	// CodexNativeCompaction is this run's effective JEV_CODEX_NATIVE_COMPACTION
+	// setting (opt.CodexNativeCompaction). CodexNativeCompactionFlag is
+	// --codex-native-compaction: true only when this run is part of an
+	// explicit on-vs-off native-compaction-replacement comparison (both
+	// "off" and "on" runs of that comparison set it, mirroring
+	// CodexToolOutputTruncateFlag above). computeCompareKey hashes a
+	// constant (false) for CodexNativeCompaction on those runs instead of
+	// the per-mode value, or the toggled axis under test would make every
+	// off/on pair report settings_mismatch.
+	CodexNativeCompaction     bool `json:"codexNativeCompaction,omitempty"`
+	CodexNativeCompactionFlag bool `json:"codexNativeCompactionFlag,omitempty"`
+
+	// CompactRequests (above) already counts the synthetic (native
+	// replacement) route; CompactForwardedRequests is the same
+	// NativeCompactionRequested candidates that instead went upstream
+	// (fallback, or native replacement disabled for this run).
+	CompactForwardedRequests int `json:"compactForwardedRequests,omitempty"`
+	// CompactEvents is one entry per identified compaction request
+	// (synthetic or forwarded) in request order, with the token cost paid
+	// and the resulting summary size -- see gateway.go's meter loop.
+	CompactEvents []CompactEventRecord `json:"compactEvents,omitempty"`
+	// CompactApparentInput/Output is the sum, across this run's synthetic
+	// compaction responses, of the apparent usage (see internal/proxy
+	// native_compact.go compactUsage) reported to the CLI even though the
+	// proxy never sent that request upstream. host_usage.go adds it back to
+	// the proxy-side usage total before reconciling against the CLI's
+	// reported total -- see docs/MEMO.md "計測上の教訓" and
+	// HostUsageCompactCorrected below.
+	CompactApparentInput  int `json:"compactApparentInput,omitempty"`
+	CompactApparentOutput int `json:"compactApparentOutput,omitempty"`
+	// HostUsageCompactCorrected/HostUsageCompactCorrectionInput/Output
+	// record whether and how much of CompactApparentInput/Output was added
+	// back to the proxy-side usage total before comparing it with the CLI's
+	// reported total (see host_usage.go matchHostSession). This never
+	// changes TaskTokens/UsageSource, which already exclude the apparent
+	// usage by construction (gateway.go only counts a synthetic event's
+	// Usage, which stays nil since it was never sent upstream).
+	HostUsageCompactCorrected        bool `json:"hostUsageCompactCorrected,omitempty"`
+	HostUsageCompactCorrectionInput  int  `json:"hostUsageCompactCorrectionInput,omitempty"`
+	HostUsageCompactCorrectionOutput int  `json:"hostUsageCompactCorrectionOutput,omitempty"`
+	// CompactPostRequests/CompactFirstPostInput/CompactFirstPostCached
+	// describe what happened after this run's LAST identified compaction
+	// request: how many upstream requests followed it, and the first one's
+	// input tokens and cache-read tokens (a near-zero cache read would mean
+	// the compaction destroyed the prompt cache prefix).
+	CompactPostRequests    int `json:"compactPostRequests,omitempty"`
+	CompactFirstPostInput  int `json:"compactFirstPostInput,omitempty"`
+	CompactFirstPostCached int `json:"compactFirstPostCached,omitempty"`
 
 	// ClaudeClear marks the Claude "on" condition as native context editing
 	// (clear_tool_uses_20250919) rather than JEV_CLAUDE_ADVISE; see --claude-clear.
@@ -111,6 +167,19 @@ type RunRecord struct {
 	// per-request toolOutputTruncated(Bytes) -- see --codex-tool-output-max.
 	ToolOutputTruncated      int `json:"toolOutputTruncated,omitempty"`
 	ToolOutputTruncatedBytes int `json:"toolOutputTruncatedBytes,omitempty"`
+
+	// CodexSteerFlag is --codex-steer: true only when this run is part of an
+	// explicit on-vs-off Codex tool-steering comparison (both "on" and "off"
+	// runs of that comparison set it, mirroring CodexToolOutputTruncateFlag
+	// above). It is also the jev_not_applied bypass signal in comparison.go.
+	CodexSteerFlag bool `json:"codexSteerFlag,omitempty"`
+	// CodexSteerForced/None count this run's codex-steer decisions by mode
+	// (tool_choice forced to a specific tool, or forced to "none").
+	// CodexSteerPassthrough breaks down the rest by passthrough reason.
+	// Populated only when CodexSteerFlag is set -- see codex_steer.go.
+	CodexSteerForced      int            `json:"codexSteerForced,omitempty"`
+	CodexSteerNone        int            `json:"codexSteerNone,omitempty"`
+	CodexSteerPassthrough map[string]int `json:"codexSteerPassthrough,omitempty"`
 
 	// ClearNet* is the same-path net reduction native context editing gave
 	// this "on" run against its own counterfactual (see clearnet.go), as
@@ -146,6 +215,22 @@ type SessionUsage struct {
 	JevCalls   int `json:"jevCalls"`
 	JevInput   int `json:"jevInput"`
 	JevOutput  int `json:"jevOutput"`
+}
+
+// CompactEventRecord is one native-compaction-identified request. For a
+// "forwarded" route, InputTokens/OutputTokens/SummaryTokens are the real
+// upstream usage (the cost was paying for the host's own summary). For a
+// "synthetic" route, InputTokens/OutputTokens are the Jev cost of producing
+// the retained transcript and SummaryTokens is only an estimate (summary
+// bytes / 4, SummaryEstimated true) since no token count was ever reported
+// for text the proxy never sent upstream.
+type CompactEventRecord struct {
+	Route            string `json:"route"` // "synthetic" | "forwarded"
+	Reason           string `json:"reason,omitempty"`
+	InputTokens      int    `json:"inputTokens"`
+	OutputTokens     int    `json:"outputTokens"`
+	SummaryTokens    int    `json:"summaryTokens"`
+	SummaryEstimated bool   `json:"summaryEstimated,omitempty"`
 }
 
 type HostTranscriptUsage struct {

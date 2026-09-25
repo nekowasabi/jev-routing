@@ -179,9 +179,14 @@ type dashEvent struct {
 		OutputTokens *int    `json:"outputTokens"`
 		Cached       bool    `json:"cached"`
 	} `json:"jevAttempts"`
-	CompactApplied            bool `json:"compactApplied"`
-	NativeCompactionRequested bool `json:"nativeCompactionRequested"`
-	CompactDropped            int  `json:"compactDropped"`
+	CompactApplied            bool   `json:"compactApplied"`
+	NativeCompactionRequested bool   `json:"nativeCompactionRequested"`
+	CompactDropped            int    `json:"compactDropped"`
+	CompactRoute              string `json:"compactRoute"`
+	CompactForwardReason      string `json:"compactForwardReason"`
+	CompactApparentInput      int    `json:"compactApparentInput"`
+	CompactApparentOutput     int    `json:"compactApparentOutput"`
+	CompactSummaryBytes       int    `json:"compactSummaryBytes"`
 	SavedTokens               *struct {
 		CompactionInput int `json:"compactionInput"`
 	} `json:"savedTokens"`
@@ -221,7 +226,6 @@ func (g *gateway) meter(tasks ...string) (RunRecord, error) {
 		Applications     []dashApplication `json:"applications"`
 		EventsTruncated  bool              `json:"eventsTruncated"`
 		HistoryTruncated bool              `json:"historyTruncated"`
-		JevHTTP          *int              `json:"jevHTTP"`
 		Router           struct {
 			OldestSeq int64 `json:"oldestSeq"`
 		} `json:"router"`
@@ -297,21 +301,17 @@ func (g *gateway) meter(tasks ...string) (RunRecord, error) {
 			out.LLMSeconds += ms / 1000
 		}
 		out.JevCalls += event.JevCalls
-		jevAttempts := 0
 		for _, attempt := range event.JevAttempts {
 			if attempt.Cached {
 				continue
 			}
-			jevAttempts++
 			out.JevInput += deref(attempt.InputTokens)
 			out.JevOutput += deref(attempt.OutputTokens)
 			out.JevSeconds += attempt.Ms / 1000
-			if attempt.InputTokens == nil || attempt.OutputTokens == nil {
-				incomplete = append(incomplete, fmt.Sprintf("event %d: Jev usage incomplete", i+1))
-			}
-		}
-		if jevAttempts != event.JevCalls {
-			incomplete = append(incomplete, fmt.Sprintf("event %d: Jev attempts %d != calls %d", i+1, jevAttempts, event.JevCalls))
+			// Why: Jev's own usage is recorded (JevInput/JevOutput) but is no
+			// longer part of the primary token metric (taskTokenTotal), so a
+			// gap in it must not block measured()/comparability -- only
+			// upstream usage gaps do. See docs/MEMO.md "主指標から Jev を除外".
 		}
 		if event.SessionKey == "" {
 			if upstream {
@@ -346,6 +346,55 @@ func (g *gateway) meter(tasks ...string) (RunRecord, error) {
 		out.CompactDropped += event.CompactDropped
 		if event.SavedTokens != nil {
 			out.CompactSavedTokens += event.SavedTokens.CompactionInput
+		}
+		if event.CompactRoute != "" {
+			rec := CompactEventRecord{Route: event.CompactRoute, Reason: event.CompactForwardReason}
+			switch event.CompactRoute {
+			case "synthetic":
+				out.CompactApparentInput += event.CompactApparentInput
+				out.CompactApparentOutput += event.CompactApparentOutput
+				for _, attempt := range event.JevAttempts {
+					if !attempt.Cached {
+						rec.InputTokens += deref(attempt.InputTokens)
+						rec.OutputTokens += deref(attempt.OutputTokens)
+					}
+				}
+				// Why: no token count was ever reported for a summary the
+				// proxy never sent upstream -- bytes/4 is an estimate, not
+				// a measured value (see docs/MEMO.md "圧縮の同一経路指標").
+				rec.SummaryTokens = event.CompactSummaryBytes / 4
+				rec.SummaryEstimated = true
+			case "forwarded":
+				out.CompactForwardedRequests++
+				if event.Usage != nil {
+					rec.InputTokens = deref(event.Usage.InputTokens)
+					rec.OutputTokens = deref(event.Usage.OutputTokens)
+					rec.SummaryTokens = deref(event.Usage.OutputTokens)
+				}
+			}
+			out.CompactEvents = append(out.CompactEvents, rec)
+			// Why: recomputed on every compaction event instead of tracked
+			// incrementally, so CompactPostRequests/CompactFirstPost* end up
+			// describing what followed the LAST one in this run -- the
+			// request stream that continued after the run's final
+			// compaction, not every compaction in a multi-compaction run.
+			out.CompactPostRequests = 0
+			out.CompactFirstPostInput = 0
+			out.CompactFirstPostCached = 0
+			firstSet := false
+			for _, nxt := range body.Events[i+1:] {
+				if nxt.UsageMissing == "not_called" {
+					continue
+				}
+				out.CompactPostRequests++
+				if !firstSet {
+					firstSet = true
+					if nxt.Usage != nil {
+						out.CompactFirstPostInput = deref(nxt.Usage.InputTokens)
+						out.CompactFirstPostCached = deref(nxt.Usage.CachedTokens)
+					}
+				}
+			}
 		}
 		out.ClearedToolUses += event.ClearedToolUses
 		out.ClearedInputTokens += event.ClearedInputTokens
@@ -411,9 +460,6 @@ func (g *gateway) meter(tasks ...string) (RunRecord, error) {
 	}
 	if hostInferences == 0 {
 		incomplete = append(incomplete, "no inference requests recorded")
-	}
-	if body.JevHTTP != nil && *body.JevHTTP != out.JevCalls {
-		incomplete = append(incomplete, fmt.Sprintf("Jev HTTP requests %d != event calls %d", *body.JevHTTP, out.JevCalls))
 	}
 	out.OnlyUsageMissing = usageMissingIssues > 0 && usageMissingIssues == len(incomplete)
 	if len(incomplete) > 0 {

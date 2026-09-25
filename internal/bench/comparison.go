@@ -37,6 +37,15 @@ type Comparison struct {
 
 	BaselineCompactRequested  *int `json:"baselineCompactRequested,omitempty"`
 	SelectionCompactRequested *int `json:"selectionCompactRequested,omitempty"`
+	// *CompactSynthesized/*CompactForwarded split CompactRequested by route
+	// (see RunRecord.CompactRequests/CompactForwardedRequests). Populated
+	// alongside *CompactRequested. A zero SelectionCompactSynthesized on the
+	// "on" side of a --codex-native-compaction comparison is reported here,
+	// not treated as incomparable -- see docs/MEMO.md "圧縮の同一経路指標".
+	BaselineCompactSynthesized  *int `json:"baselineCompactSynthesized,omitempty"`
+	BaselineCompactForwarded    *int `json:"baselineCompactForwarded,omitempty"`
+	SelectionCompactSynthesized *int `json:"selectionCompactSynthesized,omitempty"`
+	SelectionCompactForwarded   *int `json:"selectionCompactForwarded,omitempty"`
 	// SelectionClearedToolUses/SelectionClearedInputTokens report the
 	// intervention side's native context editing activity (--claude-clear).
 	// Populated for every pair with an "on" run, not just ClaudeClear ones,
@@ -48,6 +57,14 @@ type Comparison struct {
 	// separate from the on-vs-off comparison the rest of this row reports.
 	SelectionClaudeClear bool     `json:"selectionClaudeClear,omitempty"`
 	SelectionClearNetPct *float64 `json:"selectionClearNetPct,omitempty"`
+	// SelectionCodexSteer* report the on-side's --codex-steer mode
+	// breakdown: how many requests were forced to a tool, how many were
+	// forced to tool_choice:"none", and a reason->count breakdown of the
+	// rest (passthrough). Populated only when the pair's on run set
+	// CodexSteerFlag.
+	SelectionCodexSteerForced      *int           `json:"selectionCodexSteerForced,omitempty"`
+	SelectionCodexSteerNone        *int           `json:"selectionCodexSteerNone,omitempty"`
+	SelectionCodexSteerPassthrough map[string]int `json:"selectionCodexSteerPassthrough,omitempty"`
 }
 
 // BuildComparisons never invents a token total for a missing or failed pair.
@@ -120,12 +137,20 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			row.SelectionApplied = p.on.JevApplied > 0
 			if p.on.CodexCompactLimit > 0 {
 				row.SelectionCompactRequested = &p.on.CompactRequested
+				row.SelectionCompactSynthesized = &p.on.CompactRequests
+				row.SelectionCompactForwarded = &p.on.CompactForwardedRequests
 			}
 			row.SelectionUsageSource = p.on.UsageSource
 			row.SelectionClearedToolUses = &p.on.ClearedToolUses
 			row.SelectionClearedInputTokens = &p.on.ClearedInputTokens
 			row.SelectionClaudeClear = p.on.ClaudeClear
 			row.SelectionClearNetPct = p.on.ClearNetPct
+			if p.on.CodexSteerFlag {
+				forced, none := p.on.CodexSteerForced, p.on.CodexSteerNone
+				row.SelectionCodexSteerForced = &forced
+				row.SelectionCodexSteerNone = &none
+				row.SelectionCodexSteerPassthrough = p.on.CodexSteerPassthrough
+			}
 			if p.on.ParentChildVerified {
 				row.SelectionChildSessions = &p.on.ChildSessions
 				row.SelectionChildTokens = &p.on.ChildTokens
@@ -136,6 +161,8 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 		if p.off != nil {
 			if p.off.CodexCompactLimit > 0 {
 				row.BaselineCompactRequested = &p.off.CompactRequested
+				row.BaselineCompactSynthesized = &p.off.CompactRequests
+				row.BaselineCompactForwarded = &p.off.CompactForwardedRequests
 			}
 			if row.Model == "" {
 				row.Model = p.off.AgentModel
@@ -199,8 +226,16 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			// Why: Instead of requiring a compact request on either side, compare
 			// all limit-policy runs. Reason: requiring one would select only some
 			// execution paths; request counts are reported separately.
-			if p.on.CodexCompactLimit == 0 && !p.on.CodexToolOutputTruncateFlag && !p.on.ClaudeClear && (p.on.JevCalls == 0 || p.on.JevApplied == 0) {
+			if p.on.CodexCompactLimit == 0 && !p.on.CodexToolOutputTruncateFlag && !p.on.ClaudeClear && !p.on.CodexSteerFlag && (p.on.JevCalls == 0 || p.on.JevApplied == 0) {
 				row.Reasons = append(row.Reasons, "jev_not_applied")
+			}
+			// Why: --codex-steer's own applied signal is its forced/none mode
+			// counts, not JevApplied (the local/hybrid selection engine is off
+			// for this comparison -- see run.go). A run where steering never
+			// fired is a distinct, separately-surfaced condition, not silently
+			// folded into jev_not_applied (see the task spec).
+			if p.on.CodexSteerFlag && p.on.CodexSteerForced == 0 && p.on.CodexSteerNone == 0 {
+				row.Reasons = append(row.Reasons, "codex_steer_not_applied")
 			}
 			if len(row.Reasons) == 0 {
 				baseline := baselineTokens

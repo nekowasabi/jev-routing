@@ -78,6 +78,13 @@ type Options struct {
 	// so the prompt-cache prefix stays stable across requests that resend the
 	// same history. See docs/MEMO.md.
 	CodexToolOutputTruncate bool
+	// CodexSteer enables the ported jev-gateway Codex (Responses API)
+	// tool-steering path: on a Codex request it skips the existing
+	// filter/forced/cost-gate path entirely and instead asks Jev which tool
+	// (if any) the assistant should call next, then sets tool_choice
+	// accordingly. Off by default; set JEV_CODEX_STEER=on to enable. See
+	// codex_steer.go.
+	CodexSteer bool
 	// hints is shared by every copy of these Options (one per proxy server).
 	hints *hintStore
 	// clearGates is shared like hints: per-conversation clear-gate decisions.
@@ -170,6 +177,16 @@ func OptionsFromEnv() (Options, error) {
 			o.CodexToolOutputTruncate = false
 		default:
 			return o, fmt.Errorf("invalid JEV_CODEX_TOOL_OUTPUT_TRUNCATE %q (off|on)", v)
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_CODEX_STEER")); v != "" {
+		switch v {
+		case CompactionOn:
+			o.CodexSteer = true
+		case CompactionOff:
+			o.CodexSteer = false
+		default:
+			return o, fmt.Errorf("invalid JEV_CODEX_STEER %q (off|on)", v)
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("JEV_SHADOW")); v != "" {

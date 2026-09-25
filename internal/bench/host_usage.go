@@ -23,6 +23,16 @@ func matchHostSession(run RunRecord, agentLog string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("host model usage missing")
 	}
+	if run.Agent == "codex" {
+		// Why: Codex CLI folds the apparent usage of a Jev-synthesized
+		// compaction response into its own turn total, even though the
+		// proxy never sent that request upstream -- see docs/MEMO.md
+		// "計測上の教訓". Add it back to the proxy side instead of
+		// subtracting it from the CLI side: both describe the same set of
+		// real upstream calls once corrected.
+		want.Input += run.CompactApparentInput
+		want.Output += run.CompactApparentOutput
+	}
 	got, err := reportedHostUsage(run.Agent, agentLog)
 	if err != nil {
 		return "", err

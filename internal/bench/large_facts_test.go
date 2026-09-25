@@ -205,3 +205,22 @@ func TestCodexToolOutputTruncateFlagValidation(t *testing.T) {
 		t.Fatalf("modes != on,off: want exit 2, got %d", code)
 	}
 }
+
+// TestCodexNativeCompactionFlagValidation covers run.go's
+// --codex-native-compaction guardrails: it requires --agent codex,
+// --codex-compact-limit N with no --codex-compact-baseline-limit (the same
+// N must trigger compaction on both sides), and --modes off,on.
+func TestCodexNativeCompactionFlagValidation(t *testing.T) {
+	if code := runCmd([]string{"--agent", "codex", "--codex-native-compaction", "--tasks", "compact-facts"}); code != 2 {
+		t.Fatalf("missing --codex-compact-limit: want exit 2, got %d", code)
+	}
+	if code := runCmd([]string{"--agent", "claude", "--codex-native-compaction", "--codex-compact-limit", "55000", "--tasks", "compact-facts"}); code != 2 {
+		t.Fatalf("non-codex agent: want exit 2, got %d", code)
+	}
+	if code := runCmd([]string{"--agent", "codex", "--codex-native-compaction", "--codex-compact-limit", "55000", "--codex-compact-baseline-limit", "900000", "--tasks", "compact-facts"}); code != 2 {
+		t.Fatalf("baseline-limit combined: want exit 2, got %d", code)
+	}
+	if code := runCmd([]string{"--agent", "codex", "--codex-native-compaction", "--codex-compact-limit", "55000", "--modes", "on", "--tasks", "compact-facts"}); code != 2 {
+		t.Fatalf("modes != off,on: want exit 2, got %d", code)
+	}
+}

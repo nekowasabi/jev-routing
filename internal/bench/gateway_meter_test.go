@@ -28,9 +28,12 @@ func TestMeterSeparatesInferenceAndRequiresCompleteUsage(t *testing.T) {
 			wantError: "upstream usage incomplete", requests: 1,
 		},
 		{
-			name:      "missing Jev output",
-			response:  `{"events":[{"usage":{"inputTokens":12,"outputTokens":3},"jevCalls":1,"jevAttempts":[{"inputTokens":5}]}]}`,
-			wantError: "Jev usage incomplete", requests: 1, metered: 1, input: 12, output: 3, jevInput: 5,
+			// Jev's own usage is no longer part of the primary token metric
+			// (see docs/MEMO.md "主指標から Jev を除外"), so a gap in it must
+			// not fail the meter -- only upstream usage gaps do.
+			name:     "missing Jev output does not block the meter",
+			response: `{"events":[{"usage":{"inputTokens":12,"outputTokens":3},"jevCalls":1,"jevAttempts":[{"inputTokens":5}]}]}`,
+			requests: 1, metered: 1, input: 12, output: 3, jevInput: 5,
 		},
 		{
 			name:      "history truncated by event limit",
@@ -53,9 +56,11 @@ func TestMeterSeparatesInferenceAndRequiresCompleteUsage(t *testing.T) {
 			wantError: "no inference requests recorded", controls: 1,
 		},
 		{
-			name:      "unattributed Jev capability call",
-			response:  `{"jevHTTP":2,"events":[{"usage":{"inputTokens":12,"outputTokens":3},"jevCalls":1,"jevAttempts":[{"purpose":"selection","inputTokens":5,"outputTokens":2}]}]}`,
-			wantError: "Jev HTTP requests 2 != event calls 1", requests: 1, metered: 1, input: 12, output: 3, jevInput: 5, jevOutput: 2,
+			// An unattributed Jev HTTP call no longer fails the meter for the
+			// same reason: it is a Jev-side accounting gap, not an upstream one.
+			name:     "unattributed Jev capability call does not block the meter",
+			response: `{"jevHTTP":2,"events":[{"usage":{"inputTokens":12,"outputTokens":3},"jevCalls":1,"jevAttempts":[{"purpose":"selection","inputTokens":5,"outputTokens":2}]}]}`,
+			requests: 1, metered: 1, input: 12, output: 3, jevInput: 5, jevOutput: 2,
 		},
 	}
 	for _, tc := range cases {
@@ -198,5 +203,51 @@ func TestMeterKeepsMissingUsageScopeForHostAggregate(t *testing.T) {
 				t.Fatalf("meter=%+v err=%v", got, err)
 			}
 		})
+	}
+}
+
+// TestMeterRecordsCompactRouteAndReconciliation covers docs/MEMO.md
+// "圧縮の同一経路指標": a synthesized compaction reply must be tallied separately
+// from a forwarded one, its apparent usage summed for the CLI/proxy
+// reconciliation correction, and never folded into the run's real Input/
+// Output totals (it was never sent upstream).
+func TestMeterRecordsCompactRouteAndReconciliation(t *testing.T) {
+	const response = `{"events":[` +
+		`{"usageMissing":"not_called","nativeCompactionRequested":true,"compactRoute":"synthetic",` +
+		`"compactApparentInput":1,"compactApparentOutput":42,"compactSummaryBytes":180,` +
+		`"jevCalls":1,"jevAttempts":[{"inputTokens":30,"outputTokens":12}]},` +
+		`{"usage":{"inputTokens":900,"outputTokens":60},"nativeCompactionRequested":true,` +
+		`"compactRoute":"forwarded","compactForwardReason":"native_compaction_off"},` +
+		`{"usage":{"inputTokens":500,"outputTokens":20,"cachedTokens":400}}` +
+		`]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(response)) }))
+	defer srv.Close()
+	got, err := (&gateway{origin: srv.URL}).meter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CompactApparentInput != 1 || got.CompactApparentOutput != 42 {
+		t.Fatalf("apparent usage = %d/%d, want 1/42", got.CompactApparentInput, got.CompactApparentOutput)
+	}
+	if got.CompactForwardedRequests != 1 {
+		t.Fatalf("forwarded requests = %d, want 1", got.CompactForwardedRequests)
+	}
+	if len(got.CompactEvents) != 2 {
+		t.Fatalf("compact events = %+v, want 2", got.CompactEvents)
+	}
+	synthetic, forwarded := got.CompactEvents[0], got.CompactEvents[1]
+	if synthetic.Route != "synthetic" || synthetic.InputTokens != 30 || synthetic.OutputTokens != 12 || synthetic.SummaryTokens != 45 || !synthetic.SummaryEstimated {
+		t.Fatalf("synthetic event = %+v", synthetic)
+	}
+	if forwarded.Route != "forwarded" || forwarded.Reason != "native_compaction_off" || forwarded.InputTokens != 900 || forwarded.OutputTokens != 60 || forwarded.SummaryTokens != 60 || forwarded.SummaryEstimated {
+		t.Fatalf("forwarded event = %+v", forwarded)
+	}
+	if got.CompactPostRequests != 1 || got.CompactFirstPostInput != 500 || got.CompactFirstPostCached != 400 {
+		t.Fatalf("post-compaction stats: requests=%d input=%d cached=%d", got.CompactPostRequests, got.CompactFirstPostInput, got.CompactFirstPostCached)
+	}
+	// The synthetic reply's apparent usage (input=1, output=42) must never
+	// reach the run's real Input/Output totals: it was never sent upstream.
+	if got.Input != 900+500 || got.Output != 60+20 {
+		t.Fatalf("real usage totals leaked apparent usage: input=%d output=%d", got.Input, got.Output)
 	}
 }

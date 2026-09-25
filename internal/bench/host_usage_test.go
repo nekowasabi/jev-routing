@@ -31,6 +31,34 @@ func TestVerifyHostUsageReconcilesMainModel(t *testing.T) {
 	}
 }
 
+// TestMatchHostSessionCorrectsCodexCompactApparentUsage covers docs/MEMO.md
+// "計測上の教訓": Codex CLI folds the apparent usage of a Jev-synthesized
+// compaction reply into its turn.completed total, even though the proxy
+// never sent that request upstream, so the raw proxy/CLI totals mismatch.
+// Adding CompactApparentInput/Output back to the proxy side must fix it.
+func TestMatchHostSessionCorrectsCodexCompactApparentUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.log")
+	// The CLI's turn total already includes the synthesized reply's apparent
+	// usage (input_tokens=1, output_tokens=42 -- native_compact.go
+	// compactUsage) on top of one real upstream call (40/6).
+	line := `{"type":"turn.completed","usage":{"input_tokens":41,"cached_input_tokens":20,"output_tokens":48}}`
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := RunRecord{
+		Agent: "codex", AgentModel: "gpt-5.6-terra",
+		ModelUsage: map[string]ModelUsage{"gpt-5.6-terra": {Input: 40, Cached: 20, Output: 6}},
+	}
+	if err := verifyHostUsage(run, path); err == nil {
+		t.Fatal("uncorrected mismatch must be rejected")
+	}
+	run.CompactApparentInput = 1
+	run.CompactApparentOutput = 42
+	if err := verifyHostUsage(run, path); err != nil {
+		t.Fatalf("corrected reconciliation still failed: %v", err)
+	}
+}
+
 func TestMatchHostSessionFindsParentAmongSameModelChildren(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.log")
 	line := `{"type":"result","usage":{"input_tokens":2,"cache_read_input_tokens":30,"cache_creation_input_tokens":4,"output_tokens":5}}`

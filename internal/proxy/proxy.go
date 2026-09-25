@@ -422,6 +422,29 @@ func (s *Server) Handler() http.Handler {
 			e.UpstreamStatus = &status
 			e.HeaderMs = &headerMs
 		})
+		// Why: mirrors jev-gateway app.js:138-152 -- a rewritten Codex request
+		// upstream rejected (400/422) is retried exactly once with the exact
+		// original body, so the router is never the reason a request fails.
+		// Must run before the body-observing wraps below so they see the
+		// response actually delivered to the client, not the rejected one.
+		if retry, ok := res.Request.Context().Value(codexSteerRetryCtxKey{}).(*codexSteerRetry); ok && retry != nil &&
+			(res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnprocessableEntity) {
+			if resent, rerr := s.resendCodexOriginal(res.Request, retry.original); rerr == nil {
+				_ = res.Body.Close()
+				*res = *resent
+				newStatus := res.StatusCode
+				reason := "upstream_rejected_" + retry.mode
+				s.events.Update(retry.seq, func(e *Event) {
+					e.Reason = reason
+					e.Chosen = "passthrough:" + reason
+					e.Apply = applyNone
+					e.UpstreamStatus = &newStatus
+				})
+				status = newStatus
+			} else {
+				s.Log.Printf("codex-steer: resend of original body after upstream %d failed: %v", res.StatusCode, rerr)
+			}
+		}
 		ct := res.Header.Get("content-type")
 		if strings.Contains(strings.ToLower(ct), "proto") {
 			res.Body = wrapProtoHosts(res.Body, func(hosts []string) {
@@ -579,12 +602,22 @@ func (s *Server) Handler() http.Handler {
 				attemptsMu.Unlock()
 			})
 			stats := RewriteStats{}
-			if err == nil && origJSON && nativeCompactionEnabled(s.Options) {
+			// Why: kept across the native block so the later (forwarded) event
+			// construction can record why a native-compaction candidate ended
+			// up going upstream instead of being synthesized -- see
+			// docs/MEMO.md "圧縮の同一経路指標".
+			compactForwardReason := ""
+			nativeEnabled := nativeCompactionEnabled(s.Options)
+			if !nativeEnabled && nativeKind != "" {
+				compactForwardReason = "native_compaction_disabled"
+			}
+			if err == nil && origJSON && nativeEnabled {
 				kind := nativeKind
 				// Why: Codex's host summary keeps task progress; the retained
 				// transcript still caused repeated compaction in real CLI runs.
 				if kind == "codex" && !s.Options.CodexNativeCompaction {
 					kind = ""
+					compactForwardReason = "native_compaction_off"
 				}
 				var text string
 				var nstats RewriteStats
@@ -596,12 +629,14 @@ func (s *Server) Handler() http.Handler {
 					if why := claudeFallback(nstats); why != "" {
 						s.Log.Printf("fast-jev-native: claude compaction forwarded upstream: %s", why)
 						kind = ""
+						compactForwardReason = why
 					}
 				}
 				if kind == "codex" {
 					if why := codexFallback(text, nstats); why != "" {
 						s.Log.Printf("fast-jev-native: codex compaction forwarded upstream: %s", why)
 						kind = ""
+						compactForwardReason = why
 					}
 				}
 				if kind != "" {
@@ -620,6 +655,15 @@ func (s *Server) Handler() http.Handler {
 					s.Log.Print(FormatStats(stats))
 					ev := EventFromStats(stats)
 					ev.NativeCompactionRequested = nativeKind != ""
+					ev.CompactRoute = "synthetic"
+					apparent := compactUsage(text)
+					if v, ok := apparent["input_tokens"].(int); ok {
+						ev.CompactApparentInput = v
+					}
+					if v, ok := apparent["output_tokens"].(int); ok {
+						ev.CompactApparentOutput = v
+					}
+					ev.CompactSummaryBytes = len(text)
 					ev.SessionKey = sessionKey
 					ev.RequestPath = r.URL.Path
 					ev.Method = r.Method
@@ -657,9 +701,18 @@ func (s *Server) Handler() http.Handler {
 					ctx = context.WithValue(ctx, clearGateCtxKey{}, gateKey)
 				}
 			}
+			var codexSteerOriginal []byte
 			if err == nil && json.Valid(raw) {
 				rewritten, st, rerr := RewriteWith(ctx, raw, s.Host, s.Client, s.Options)
 				stats = st
+				// Why: codex-steer's upstream-rejection recovery (mirrors
+				// jev-gateway app.js:138-152) needs the exact bytes the client
+				// sent, captured before `raw` below is reassigned to the
+				// rewritten body. Only kept for requests this path actually
+				// rewrote; see codex_steer.go and the ModifyResponse hook.
+				if s.Host == host.Codex && s.Options.CodexSteer && (stats.Apply == applyForced || stats.Apply == applyCodexNone) {
+					codexSteerOriginal = append([]byte(nil), raw...)
+				}
 				if rerr == nil {
 					s.mu.Lock()
 					s.Last = stats
@@ -728,6 +781,10 @@ func (s *Server) Handler() http.Handler {
 			}
 			ev := EventFromStats(stats)
 			ev.NativeCompactionRequested = nativeKind != ""
+			if ev.NativeCompactionRequested {
+				ev.CompactRoute = "forwarded"
+				ev.CompactForwardReason = compactForwardReason
+			}
 			ev.SessionKey = sessionKey
 			ev.RequestPath = r.URL.Path
 			ev.Method = r.Method
@@ -761,6 +818,13 @@ func (s *Server) Handler() http.Handler {
 			}
 			ctx = context.WithValue(ctx, eventSeqKey{}, ev.Seq)
 			ctx = context.WithValue(ctx, reqStartKey{}, time.Now())
+			if codexSteerOriginal != nil {
+				mode := "forced"
+				if stats.Apply == applyCodexNone {
+					mode = "none"
+				}
+				ctx = context.WithValue(ctx, codexSteerRetryCtxKey{}, &codexSteerRetry{original: codexSteerOriginal, mode: mode, seq: ev.Seq})
+			}
 			r = r.WithContext(ctx)
 			r.Body = io.NopCloser(bytes.NewReader(raw))
 			r.ContentLength = int64(len(raw))

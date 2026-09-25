@@ -84,6 +84,24 @@ type Event struct {
 	ToolOutputTruncatedBytes int                `json:"toolOutputTruncatedBytes,omitempty"`
 
 	NativeCompactionRequested bool `json:"nativeCompactionRequested,omitempty"`
+
+	// CompactRoute/CompactForwardReason cover only NativeCompactionRequested
+	// events: "synthetic" when the proxy answered with a Jev-built retained
+	// transcript instead of calling upstream, "forwarded" when the
+	// compaction request (including a claudeFallback/codexFallback bailout,
+	// or native replacement disabled for this run) went upstream normally --
+	// see docs/MEMO.md "計測上の教訓".
+	CompactRoute         string `json:"compactRoute,omitempty"`
+	CompactForwardReason string `json:"compactForwardReason,omitempty"`
+	// CompactApparentInput/Output and CompactSummaryBytes are set only on a
+	// "synthetic" route: the usage the host was told it consumed
+	// (compactUsage's fixed input_tokens=1 and the estimated output_tokens),
+	// and the retained-transcript summary's byte length. The proxy never
+	// sent this request upstream, so Usage stays nil; a bench CLI/proxy
+	// usage reconciliation must add these back before comparing totals.
+	CompactApparentInput  int `json:"compactApparentInput,omitempty"`
+	CompactApparentOutput int `json:"compactApparentOutput,omitempty"`
+	CompactSummaryBytes   int `json:"compactSummaryBytes,omitempty"`
 }
 
 // SavedTokens is an estimate of input tokens avoided before an upstream call.

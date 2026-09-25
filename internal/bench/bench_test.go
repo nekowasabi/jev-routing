@@ -46,14 +46,21 @@ func TestSummarizeMissingMeterDoesNotClaimSavings(t *testing.T) {
 	}
 }
 
-func TestSummarizeTotalTokensIncludesJevOutput(t *testing.T) {
+// TestSummarizeTotalTokensExcludesJevEvenWhenLarge is the fixed-data check
+// for docs/MEMO.md "主指標から Jev を除外": the primary token metric is
+// upstream input+output only, so a Jev usage far larger than the upstream
+// usage must not move it at all.
+func TestSummarizeTotalTokensExcludesJevEvenWhenLarge(t *testing.T) {
 	runs := []RunRecord{
-		{Task: "chess-bugfix", Agent: "codex", Mode: "on", Requests: 1, Metered: 1, Input: 10, Output: 2, JevInput: 3, JevOutput: 4},
+		{Task: "chess-bugfix", Agent: "codex", Mode: "on", Requests: 1, Metered: 1, Input: 10, Output: 2, JevInput: 50000, JevOutput: 90000},
 		{Task: "chess-bugfix", Agent: "codex", Mode: "off", Requests: 1, Metered: 1, Input: 20, Output: 2},
 	}
 	got := Summarize(runs, nil)
-	if !strings.Contains(got, "Total tokens incl. Jev, median | 19 (-14%) | 22 |") {
-		t.Fatalf("Jev output missing from total tokens:\n%s", got)
+	if !strings.Contains(got, "Total tokens (upstream), median | 12 (-45%) | 22 |") {
+		t.Fatalf("Jev tokens leaked into the primary total-tokens metric:\n%s", got)
+	}
+	if !strings.Contains(got, "Jev tokens (separate from total), median | 140,000 | 0 |") {
+		t.Fatalf("Jev tokens must still be reported separately:\n%s", got)
 	}
 }
 
@@ -64,7 +71,7 @@ func TestSummarizeUsesVerifiedSessionTotal(t *testing.T) {
 		{Task: "xcell-module", Mode: "on", Requests: 3, Metered: 2, MeterError: "canceled response", TaskTokens: &selection, UsageSource: "grok_cli_reconciled"},
 	}
 	got := Summarize(runs, nil)
-	if !strings.Contains(got, "Usage complete runs | 1 | 1 |") || !strings.Contains(got, "Total tokens incl. Jev, median | 150 (-25%) | 200 |") || !strings.Contains(got, "LLM requests, median | n/a | n/a |") {
+	if !strings.Contains(got, "Usage complete runs | 1 | 1 |") || !strings.Contains(got, "Total tokens (upstream), median | 150 (-25%) | 200 |") || !strings.Contains(got, "LLM requests, median | n/a | n/a |") {
 		t.Fatalf("session total and request-level missing usage confused:\n%s", got)
 	}
 }

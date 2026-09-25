@@ -112,8 +112,10 @@ func TestComparisonJSONUsesMeasuredJevAppliedPairsOnly(t *testing.T) {
 		t.Fatalf("shape: %+v", got)
 	}
 	row := got.Comparisons[0]
-	if row.Status != "comparable" || row.SavedTokens == nil || *row.SavedTokens != 33 {
-		t.Fatalf("wrong total (Claude cache rules and Jev output): %+v", row)
+	// Jev's 5+2 tokens are recorded (JevInput/JevOutput) but excluded from
+	// the primary total -- see docs/MEMO.md "主指標から Jev を除外".
+	if row.Status != "comparable" || row.SavedTokens == nil || *row.SavedTokens != 40 {
+		t.Fatalf("wrong total (Claude cache rules, Jev excluded): %+v", row)
 	}
 	on.JevApplied = 0
 	on.MeterError = "missing jev usage"
