@@ -71,6 +71,12 @@ type Options struct {
 	ClaudeClearGate string
 	Transforms      TransformOptions
 	CostGateMax     int
+	// CodexToolOutputMax, when >0, truncates the middle of any Codex tool
+	// output (function_call_output etc.) longer than this many bytes on every
+	// request, regardless of routing mode. 0 (default) disables it. Applied
+	// deterministically so the prompt-cache prefix stays stable across
+	// requests that resend the same history. See docs/MEMO.md.
+	CodexToolOutputMax int
 	// hints is shared by every copy of these Options (one per proxy server).
 	hints *hintStore
 	// clearGates is shared like hints: per-conversation clear-gate decisions.
@@ -153,6 +159,13 @@ func OptionsFromEnv() (Options, error) {
 		o.CostGateMax = n
 	} else {
 		o.CostGateMax = decidedCostGateMaxCandidates
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_CODEX_TOOL_OUTPUT_MAX")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return o, fmt.Errorf("invalid JEV_CODEX_TOOL_OUTPUT_MAX %q", v)
+		}
+		o.CodexToolOutputMax = n
 	}
 	if v := strings.TrimSpace(os.Getenv("JEV_SHADOW")); v != "" {
 		switch v {

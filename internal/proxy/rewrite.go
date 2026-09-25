@@ -122,6 +122,9 @@ type RewriteStats struct {
 	ProposedKept     []string           `json:"proposedKept,omitempty"`
 	Shadow           bool               `json:"shadow,omitempty"`
 	Transforms       []string           `json:"transforms,omitempty"`
+
+	ToolOutputTruncated      int `json:"toolOutputTruncated,omitempty"`
+	ToolOutputTruncatedBytes int `json:"toolOutputTruncatedBytes,omitempty"`
 }
 
 func Rewrite(body []byte, h host.ID, client *jev.Client) ([]byte, RewriteStats, error) {
@@ -171,6 +174,19 @@ func RewriteWith(ctx context.Context, body []byte, h host.ID, client *jev.Client
 		if b, err := json.Marshal(root); err == nil {
 			body = b
 			stats.Changed = true
+		}
+	}
+	// Why: applied before the ModeBaseline passthrough below (and independent
+	// of selection/compaction) so it runs on every Codex request, not just
+	// the ones jev-routing otherwise rewrites. See docs/MEMO.md.
+	if h == host.Codex && opt.CodexToolOutputMax > 0 {
+		if n, b := applyCodexToolOutputMax(root, opt.CodexToolOutputMax); n > 0 {
+			if nb, err := json.Marshal(root); err == nil {
+				body = nb
+				stats.Changed = true
+			}
+			stats.ToolOutputTruncated = n
+			stats.ToolOutputTruncatedBytes = b
 		}
 	}
 
