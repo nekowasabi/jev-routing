@@ -113,7 +113,7 @@ Devin CLI は `DEVIN_API_URL`（既定 `https://api.devin.ai`）の `/messages`�
 
 ## ベンチマーク
 
-`jev-routing bench` は既存のチェス課題に加え、`x-cell` の読取、２ツール、スキル、子セッションの課題を共通ランナーで扱います。チェス課題は [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench)（MIT、Copyright (c) 2026 Vinicius Lana）から移植しました。on は `JEV_ROUTING_MODE=filter`（`--on-mode forced` も可）、off は `baseline` で、計測はしますがリクエストは書き換えません。`direct` はプロキシを通さない接続確認で、総使用量を保証できないため削減量は比較不能です。実行ごとに新しいワークスペースと採点器を使います。
+`jev-routing bench` は既存のチェス課題に加え、`x-cell` の読取、２ツール、スキル、子セッションの課題を共通ランナーで扱います。チェス課題は [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench)（MIT、Copyright (c) 2026 Vinicius Lana）から移植しました。通常の選択比較では on は `JEV_ROUTING_MODE=filter`（`--on-mode forced` も可）、off は `baseline` です。Codex の圧縮閾値比較は両方 `baseline` で、ホストの閾値だけを変えます。`direct` はプロキシを通さない接続確認で、総使用量を保証できないため削減量は比較不能です。実行ごとに新しいワークスペースと採点器を使います。
 
 ```bash
 jev-routing bench --list
@@ -124,6 +124,7 @@ JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 
 JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks skill-proof --reps 1
 JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks child-facts --reps 1
 JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks xcell-module --modes direct,off,on
+jev-routing bench --agent codex --model gpt-5.6-terra --effort medium --tasks compact-facts --modes off,on --codex-compact-baseline-limit 900000 --codex-compact-limit 55000 --reps 6
 jev-routing bench report results/<dir> --prices 1.25,0.125,10
 ```
 
@@ -131,7 +132,7 @@ jev-routing bench report results/<dir> --prices 1.25,0.125,10
 
 `--prices` は 100 万トークンあたりの USD を `in,cached,out[,cachewrite]` で受け取ります。cache write を省くと input の 1.25 倍とみなし、`claude` にだけ適用します。入力トークン数はキャッシュ込みです。`claude` では Anthropic が input と別に報告する cache read と cache write を足し、`codex` と `grok` では cached が input に含まれています。
 
-成果の合格と `comparison.json` の比較可能なペアの総トークン差を主に確認し、`summary.md` の中央値、非キャッシュ入力・費用・経過時間は補助情報とします。入力本文のバイト差やキャッシュを除いた入力だけでは、タスク全体の削減を判定しません。
+成果の合格と `comparison.json` の比較可能なペアの総トークン差を主に確認し、`summary.md` の中央値、非キャッシュ入力・費用・経過時間は補助情報とします。`compact-facts` は20ファイルの全文読取と回答を外部検証し、両条件の Jev 選択・圧縮置換を止めて Codex 自身の文脈上限設定を測ります。圧縮要求が起きないランも設定比較に含め、件数を別に記録します。入力本文のバイト差やキャッシュを除いた入力だけでは、タスク全体の削減を判定しません。
 
 結果は `results/<timestamp>/` に出ます（`runs.jsonl`、`comparison.json`、`summary.md`、実行ごとのディレクトリ）。`comparison.json` は品質・Jev 適用・必要ツール結果・使用量が揃うペアだけに、対照と介入の総トークンおよび差分を記録します。欠測や不合格は理由付きの比較不能とし、削減量を空欄にします。Claude Code／Codex は CLI の主モデル使用量とプロキシのモデル別使用量も照合します。子セッション課題では親の CLI 使用量と要求ごとの使用量が一意に対応するときだけ子の総量を出します。Codex の自動承認審査など、CLI のターン使用量に入らない追加モデル要求もプロキシの総量に含めます。Grok Build のキャンセル応答は完全な CLI 集計で照合できる場合のみセッション総量を使い、要求別の欠測をゼロで埋めません。Devin CLI の Connect 応答に使用量がない場合は、検証済みの ATIF 手順合計をセッション総量として使えます。子の使用量・モデルを帰属できないランは比較不能です。実行ごとの `proxy-events.json` は原因調査用のローカル記録です。`bench audit` はエージェントログを読み直します。
 
@@ -151,7 +152,7 @@ Codex と Grok Build は、Claude Code の `session.compact` のように `PreCo
 - Codex のローカル圧縮（`codex-rs/core/src/compact.rs`）は、provider が OpenAI / Azure でないとき（`RemoteCompactionSupport::Unsupported`）に動く。`CONTEXT CHECKPOINT COMPACTION` の要約を求め、直近のユーザーメッセージとその要約だけを残す。ツール結果は置換後の履歴項目にならない。
 - Grok Build の full-replace（`xai-grok-compaction` の `code_compaction`）は `[system, user prefix, AGENTS.md, 最後のクエリ, 直近の尾, summary]` を組み直す。summary は番号付き節の `<summary>` で、掃除後 500 文字未満は退化する。それより古いツール呼び出しは summary の中にしか残らない。
 
-これらの圧縮プロンプトが届いたとき、jev-routing は要約モデルへ転送しない。同じ fast-jev 判定を行い、ホストが保存するアシスタントメッセージとして残ったトランスクリプトを返す。Codex は Responses の SSE、Grok は `<summary>` ブロック。Claude は Claude Code 自身が圧縮リクエストを送ったときだけ圧縮し、同じく残したトランスクリプトを `<summary>` で返す。削減が 25% 未満なら上流へ転送し、Claude Code 自身の要約に任せる。Claude の通常ターンは圧縮しないので、プロンプトキャッシュが保たれる。Codex と Grok の通常ターンではツール結果をその場で drop / truncate し、Codex の `local_shell_call`、`shell_call`、`apply_patch_call`、`mcp_call` も対象にする。
+Codex の圧縮要求は既定でホスト自身の要約処理へ転送する。実験用の `JEV_CODEX_NATIVE_COMPACTION=on` を指定すると、残した履歴による置換を有効にする。返却文が元の履歴より 25% 以上短くならない場合はホストの要約処理へ転送する。Grok の圧縮要求には残した履歴を `<summary>` ブロックで返す。Claude は Claude Code 自身が圧縮要求を送ったときだけ残した履歴を `<summary>` で返し、削減が 25% 未満ならホストの要約処理へ転送する。通常ターンの履歴は圧縮しない。
 
 ツール選択が不確実でも、安全に適用できる履歴圧縮は実行します。Claude の `system` 境界、署名付き思考、ツール参照、呼び出しと結果の対応は維持します。
 
@@ -213,6 +214,7 @@ JEV_SELECTION_MODE=local jev-routing serve --host codex --listen 127.0.0.1:8787
 |---|---|---|
 | `JEV_ROUTING_MODE` | `baseline` / `filter` / `forced` | `filter` |
 | `JEV_COMPACTION` | `off` / `on` | `on` |
+| `JEV_CODEX_NATIVE_COMPACTION` | `off` / `on` | `off`（実験用。既定では Codex 自身が要約する） |
 | `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
 | `JEV_SELECTION_MODE` | `local` / `jev` / `hybrid` | `hybrid` |
 | `JEV_SHADOW` | `on` / `off` | `off` |

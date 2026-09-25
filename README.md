@@ -113,7 +113,7 @@ Devin CLI is assumed to use `/messages` and `/sessions` under `DEVIN_API_URL` (d
 
 ## Benchmark
 
-`jev-routing bench` runs the chess tasks ported from [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench) (MIT, Copyright (c) 2026 Vinicius Lana), plus shared `x-cell`, two-tool, skill, and child-session tasks. On is `JEV_ROUTING_MODE=filter` (or `--on-mode forced`); off is metered `baseline`. `direct` bypasses the proxy and is always incomparable for total-token savings. Each run has a fresh workspace and an external verifier.
+`jev-routing bench` runs the chess tasks ported from [jev-gateway-bench](https://github.com/vinilana/jev-gateway-bench) (MIT, Copyright (c) 2026 Vinicius Lana), plus shared `x-cell`, two-tool, skill, and child-session tasks. In ordinary selection comparisons, on is `JEV_ROUTING_MODE=filter` (or `--on-mode forced`) and off is metered `baseline`. Codex context-limit comparisons use `baseline` on both sides and change only the host limit. `direct` bypasses the proxy and is always incomparable for total-token savings. Each run has a fresh workspace and an external verifier.
 
 ```bash
 jev-routing bench --list
@@ -124,6 +124,7 @@ JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 
 JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks skill-proof --reps 1
 JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks child-facts --reps 1
 JEV_SELECTION_MODE=jev jev-routing bench --agent claude --model claude-sonnet-5 --effort medium --tasks xcell-module --modes direct,off,on
+jev-routing bench --agent codex --model gpt-5.6-terra --effort medium --tasks compact-facts --modes off,on --codex-compact-baseline-limit 900000 --codex-compact-limit 55000 --reps 6
 jev-routing bench report results/<dir> --prices 1.25,0.125,10
 ```
 
@@ -131,7 +132,7 @@ Agents are `codex`, `claude`, `grok`, `devin`, and `fake`. Real agents spend rea
 
 `--prices` takes `in,cached,out[,cachewrite]` in USD per million tokens; cache write defaults to 1.25× input and applies only to `claude`. Input totals include cache: for `claude` that adds the cache reads and cache writes Anthropic reports apart from input; for `codex` and `grok` cached tokens are already inside input.
 
-Results land in `results/<timestamp>/` (`runs.jsonl`, `comparison.json`, `summary.md`, and a directory per run). `comparison.json` records total tokens and savings only for pairs with matching settings, successful quality checks, Jev application, required tool results, and complete usage. Other pairs carry reasons and no savings number. Claude Code and Codex main-model usage is reconciled against their CLI totals; a child-session task additionally requires unique parent/child attribution. Additional model calls such as Codex auto-review remain in the proxy total. Grok's complete headless CLI usage can reconcile a canceled response without assigning it a fabricated per-request zero. Devin's validated ATIF step totals can supply a session total when the Connect responses omit usage. Child runs remain incomparable unless every child's usage and model are attributable. Per-run `proxy-events.json` is a local diagnostic record. `bench audit` re-reads agent logs.
+Results land in `results/<timestamp>/` (`runs.jsonl`, `comparison.json`, `summary.md`, and a directory per run). `comparison.json` records total tokens and savings only for pairs with matching settings, successful quality checks, required application or task evidence when applicable, and complete usage. Codex `compact-facts` compares the host's context limits with Jev selection and replacement disabled; it checks full reads of 20 files and scores the answer. A run without an explicit compact request still counts in that setting comparison, with request counts reported separately. Other incomparable pairs carry reasons and no savings number. Claude Code and Codex main-model usage is reconciled against their CLI totals; a child-session task additionally requires unique parent/child attribution. Additional model calls such as Codex auto-review remain in the proxy total. Grok's complete headless CLI usage can reconcile a canceled response without assigning it a fabricated per-request zero. Devin's validated ATIF step totals can supply a session total when the Connect responses omit usage. Child runs remain incomparable unless every child's usage and model are attributable. Per-run `proxy-events.json` is a local diagnostic record. `bench audit` re-reads agent logs.
 
 ### How to measure
 
@@ -145,7 +146,7 @@ JEV_TRANSFORMS=filter=off jev-routing bench --agent codex --model gpt-5.6-terra 
 - `--catalog N` (`codex` and `claude` only) adds a reproducible MCP catalog. Its first two tools return separate facts for `dual-facts`; remaining tools are error-returning distractors. Prefer it over `--user-tools`, which depends on the local setup.
 - `JEV_TRANSFORMS` (e.g. `filter=off`, `compact=off`) ablates the on runs only; off is always the baseline. On-only results need a matching off baseline before a relative chart can be generated.
 - Per-request decisions are in `results/<dir>/<task>.<mode>.<rep>/gateway.log` (tools before→after, chosen, apply, conf).
-- The current tasks are short (a few minutes, tens of requests), so agent-requested compaction rarely triggers. They do not measure long sessions.
+- `compact-facts` uses an explicitly low Codex limit to exercise context management; its short task does not establish savings for long sessions at the normal limit.
 
 ## Compaction
 
@@ -163,7 +164,7 @@ Codex and Grok Build cannot return a replacement transcript from `PreCompact` th
 - Codex local compaction (`codex-rs/core/src/compact.rs`) runs when the provider is not OpenAI/Azure (`RemoteCompactionSupport::Unsupported` in `model-provider`). It asks for a `CONTEXT CHECKPOINT COMPACTION` summary, then keeps recent user messages plus that summary. Tool results are not items in the replacement history.
 - Grok Build full-replace (`xai-grok-compaction` `code_compaction`) rebuilds `[system, user prefix, AGENTS.md, last query, recent tail, summary]`. The summary must be one `<summary>` block of numbered sections, at least 500 characters after cleaning. Older tool calls survive only inside that block.
 
-When one of those compaction prompts arrives, jev-routing does not forward it to a summarizer. It runs the same fast-jev decisions and returns the retained transcript as the assistant message the host will store: Responses SSE for Codex, a `<summary>` block for Grok. Claude is compacted only when Claude Code sends its own compaction request; the answer is likewise a `<summary>` of the retained transcript, and when the reduction is under 25% the request goes upstream for Claude Code's own summary. Ordinary Claude turns are not compacted, so the prompt cache stays intact. Ordinary Codex and Grok turns still drop or truncate tool payloads in place, including Codex `local_shell_call`, `shell_call`, `apply_patch_call`, and `mcp_call` pairs.
+Codex compaction requests pass through to Codex's own summarizer by default. `JEV_CODEX_NATIVE_COMPACTION=on` enables the experimental retained-transcript replacement; it falls back to the host summarizer when the returned text is less than 25% shorter than the original history. Grok compaction requests receive a `<summary>` block of the retained transcript. Claude is compacted only when Claude Code sends its own compaction request; the answer is likewise a `<summary>` of the retained transcript, and when the reduction is under 25% the request goes upstream for Claude Code's own summary. Ordinary turns are not compacted.
 
 Even when tool selection is uncertain, history compaction is still applied where it is safe to do so. Claude's `system` boundary, signed thinking, tool references, and the pairing of calls with their results are all preserved.
 
@@ -225,6 +226,7 @@ These are read once at startup. Invalid values make startup fail.
 |---|---|---|
 | `JEV_ROUTING_MODE` | `baseline` / `filter` / `forced` | `filter` |
 | `JEV_COMPACTION` | `off` / `on` | `on` |
+| `JEV_CODEX_NATIVE_COMPACTION` | `off` / `on` | `off` (experimental Codex compaction replacement; Codex uses its own summary by default) |
 | `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
 | `JEV_SELECTION_MODE` | `local` / `jev` / `hybrid` | `hybrid` |
 | `JEV_SHADOW` | `on` / `off` | `off` |
