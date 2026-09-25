@@ -231,9 +231,10 @@ These are read once at startup. Invalid values make startup fail.
 | `JEV_CLAUDE_ADVISE` | `on` / `off` | `off` (Claude's advise path skips Jev and passes the request through unchanged) |
 | `JEV_CLAUDE_CLEAR_TOOL_USES` | `on` / `off` | `off` (appends Anthropic's native [context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing) `clear_tool_uses_20250919` edit to Claude requests) |
 | `JEV_CLAUDE_CLEAR_TRIGGER` | integer, `input_tokens` | `100000` |
-| `JEV_CLAUDE_CLEAR_AT_LEAST` | integer, `input_tokens` | `20000` |
+| `JEV_CLAUDE_CLEAR_AT_LEAST` | integer, `input_tokens` | `40000` |
 | `JEV_CLAUDE_CLEAR_KEEP` | integer, `tool_uses` | `3` |
 | `JEV_CLAUDE_CLEAR_EXCLUDE` | comma-separated tool names | empty (omits `exclude_tools`) |
+| `JEV_CLAUDE_CLEAR_GATE` | `off` / `jev` | `off` (`jev`: once a conversation's last context reaches the trigger and the request holds at least `clear_at_least` estimated clearable tool-result tokens, ask Jev once whether earlier tool outputs will be needed again, and add the edit only if not; Jev failure or no key means no clearing) |
 | `JEV_TRANSFORMS` | `compact=on/off,filter=on/off,criteria=on/off` | `compact=on,filter=on,criteria=off` |
 | `JEV_COST_GATE_MAX` | integer ≥ 0 | `3` |
 | `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | a model identifier and comma-separated exact-match names | empty (disabled) |
@@ -293,22 +294,36 @@ A single-run difference is affected by model variance, prompt caching, and servi
 
 Launch with `jev-routing run claude` as shown in [Running](#running). By default an ordinary Claude request is forwarded unchanged and Jev is never called; `JEV_CLAUDE_ADVISE=on` re-enables the previous tool-selection advice path, but it does not reduce tokens (see below).
 
-Token reduction instead comes from Anthropic's native [context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing): `JEV_CLAUDE_CLEAR_TOOL_USES=on` makes the proxy append the `clear_tool_uses_20250919` edit to Claude requests, so old tool results are cleared server-side. The `clear_thinking_20251015` edit Claude Code already sends is kept as-is. This has been verified working under subscription (claude.ai) login. Related variables (`JEV_CLAUDE_CLEAR_TRIGGER`, `JEV_CLAUDE_CLEAR_AT_LEAST`, `JEV_CLAUDE_CLEAR_KEEP`, `JEV_CLAUDE_CLEAR_EXCLUDE`) are listed with the rest of the Claude variables in [Comparison experiments](#comparison-experiments-disabled-by-default).
+The only reduction path kept for Claude Code is Anthropic's native [context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing): with `JEV_CLAUDE_CLEAR_TOOL_USES=on` the proxy appends the `clear_tool_uses_20250919` edit so old tool results are cleared server-side. The `clear_thinking_20251015` edit Claude Code already sends is kept as-is. It works under subscription (claude.ai) login. It is off by default. The variables are listed in [Comparison experiments](#comparison-experiments-disabled-by-default); details of every run are in [docs/MEMO.md](docs/MEMO.md).
+
+Recommended configuration:
+
+| Variable | Value | Note |
+|---|---|---|
+| `JEV_CLAUDE_CLEAR_TOOL_USES` | `on` | enables the edit |
+| `JEV_CLAUDE_CLEAR_GATE` | `jev` | Jev decides once per conversation whether to clear; needs a Jev key, otherwise it fails closed (no clearing) |
+| `JEV_CLAUDE_CLEAR_TRIGGER` | `100000` | default |
+| `JEV_CLAUDE_CLEAR_AT_LEAST` | `40000` | default |
+| `JEV_CLAUDE_CLEAR_KEEP` | `3` | default |
 
 ```bash
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
-JEV_CLAUDE_CLEAR_TOOL_USES=on jev-routing serve --host claude &
+JEV_CLAUDE_CLEAR_TOOL_USES=on JEV_CLAUDE_CLEAR_GATE=jev jev-routing serve --host claude &
 claude
 ```
 
-To measure it with the benchmark:
+To measure it with the benchmark (bench contexts do not reach 100k, so the thresholds are lowered):
 
 ```bash
-jev-routing bench --agent claude --tasks chess-bugfix --modes off,on --reps 6 --claude-clear --claude-clear-trigger 30000 --claude-clear-at-least 10000 --claude-clear-keep 3
+jev-routing bench --agent claude --tasks chess-bugfix --modes off,on --reps 6 \
+  --claude-clear --claude-clear-gate jev --claude-clear-trigger 30000 --claude-clear-at-least 10000
 ```
 
-`bench` gives each agent its own `/tmp` via `bwrap` when available on Linux.
+- `--user-tools` runs with the user's real tool configuration; add `--no-hooks` with it so the user's hooks do not run.
+- Task `child-survey` has a subagent read 8 source files and report at the end; it exercises clearing inside a subagent.
+- `CLAUDE_CODE_SUBAGENT_MODEL` is inherited from the environment and recorded. Pin it (for example `claude-sonnet-5`) for comparable runs.
+- `bench` gives each agent its own `/tmp` via `bwrap` when available on Linux.
 
 ### Why tool-call replacement was abandoned for Claude Code
 
@@ -322,10 +337,41 @@ Claude Code runs with extended thinking on, and the Anthropic API refuses `tool_
 | Deterministic synthesis without Jev | Rule-based synthesis over real sessions | 17.9% accuracy, 0.28% savings ceiling |
 | Cross-check against another product's bench | [jev-gateway](https://github.com/vinilana/jev-gateway#benchmark)'s `hint` approach | Its own author describes Claude Code results as "not lower cost" |
 
-### Measured results for native context editing
+### Context editing: what we tried
 
-The reported figure is a same-path net-savings metric: bytes cleared from a request's input, minus the extra cache-write tokens that clearing caused, minus rework (turns that re-issued a call identical to one dropped from context). The v1 series (12 pairs) had a median of 12.0% (2.8%–17.7%). A pre-registered confirmation series had a median of 8.5% (4.8%–14.8%). Across both series, all 17 runs where clearing occurred were net-positive, and quality passed on all 36/36 runs. Run-to-run total-token comparisons were not used as evidence: on an A/A-equivalent series they ranged from −271% to +90%, dominated by main-model path variance rather than the edit.
+Metric: same-path net savings = tokens cleared from a request's input, minus the extra cache-write tokens clearing caused, minus rework. Rework counts only re-fetches of calls that were actually cleared and returned identical content (earlier numbers also counted test re-runs, so they are conservative). Run-to-run total-token comparisons were A/A-level noise in every series and are not used as evidence.
+
+1. **Server behavior, measured live.** `clear_tool_uses` is recomputed on each request and clears the oldest eligible results only until `clear_at_least` is reached. Savings per request are therefore capped at about `clear_at_least`.
+2. **Bench v1** (`chess-bugfix`, trigger 30000 / at-least 10000 / keep 3): same-path net median 12.0% (12 pairs) and 8.5% (pre-registered confirmation series). Quality passed on every run.
+3. **Real work is different.** In 569 real main sessions (30 days) the first request is already a median 81,574-token fixed prefix (system prompt, tool definitions, agent and skill listings). Tool results are a median 3.8% of the final context. The offline replay ceiling for main sessions is about 3%. A pilot with the user's real tool configuration (`--user-tools --no-hooks`, chess-engine) never cleared.
+4. **Shrinking the prefix was rejected.** Disabling unused agents and plugins cut the prefix by 21%, but removing capabilities the user may use is not jev-routing's job.
+5. **Subagents matter as much as main sessions.** They consume about the same (subagents 1,173M vs main sessions 1,223M tokens in 30 days) and their context is mostly tool results (first request median 35k, median context 80k). Offline ceiling: about 10% of subagent tokens.
+6. **Subagents without a gate failed.** `child-survey`, 6 pairs, claude-sonnet-5/medium, 60000/40000: no effect. Clearing caused re-reading (rework up to 699,727 tokens in one run). The pre-registered decision failed.
+7. **Jev gate** (`JEV_CLAUDE_CLEAR_GATE=jev`). Once per conversation (parent and each subagent separately), when the conversation's context ≥ trigger and the estimated clearable tool results in the request ≥ `clear_at_least`, Jev chooses `clear_old_results` or `keep_all_results` from the task text and the tool-call history (no tool results). "clear" sticks for the rest of the conversation, because turning the edit off again would break the cache. Errors fail closed. Pre-registered, 2 × 6 pairs at 30000/10000:
+
+| Task | Gate decision | Same-path net savings | Rework | Quality |
+|---|---|---|---|---|
+| `child-survey` | keep 6/6 | no clearing | none | 16/16 |
+| `chess-bugfix` | clear 6/6 | median 11.1% (2.9%–14.2%) over the 5 runs that cleared | 34,344 in 1 of 6 runs, 0 in the rest | 36/36 |
+
+The gate costs about 800–1,400 input + 38 output tokens per conversation (0.1–0.2% of a run's total).
+
+### Expected effect with the recommended settings
+
+Offline estimate over 30 days of real sessions. It is an upper bound: it assumes the gate always clears and there is no rework.
+
+| | Overall reduction | Sessions where clearing fires | Min / median / max among those |
+|---|---|---|---|
+| Main (569) | 2.8% | 6% | 2.0% / 10.6% / 20.0% |
+| Subagents (583) | 9.9% | 22% | 1.4% / 15.8% / 30.2% |
+| Combined | ≈6.3% | — | per-session median 0% (most sessions never clear) |
+
+Price-weighted (cache read 0.1, 1h cache write 2.0) the recommended setting is about +0.5%, i.e. roughly cost-neutral.
 
 ### Limitations
 
-Measured on one task (`chess-bugfix`) and one model (claude-sonnet-5, medium). The thresholds are bench-tuned (30000 trigger) and unverified as defaults for real work. Rework only counts exact-repeat calls. The feature is off by default (`JEV_CLAUDE_CLEAR_TOOL_USES=on` to enable).
+- Two bench tasks and one model (claude-sonnet-5, medium).
+- The gate's generalization to real tasks is unverified.
+- The "clear" path has not been verified live at the default 100000 trigger; bench contexts do not reach it.
+- The same-path metric assumes the path would be unchanged without clearing.
+- Rework counts only identical re-fetches, so it is a lower bound.

@@ -219,9 +219,10 @@ JEV_SELECTION_MODE=local jev-routing serve --host codex --listen 127.0.0.1:8787
 | `JEV_CLAUDE_ADVISE` | `on` / `off` | `off`（Claude の advise 経路は Jev を呼ばず要求を無変更で通す） |
 | `JEV_CLAUDE_CLEAR_TOOL_USES` | `on` / `off` | `off`（Claude の要求に `clear_tool_uses_20250919`（[context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)）を追記する） |
 | `JEV_CLAUDE_CLEAR_TRIGGER` | `input_tokens` の整数 | `100000` |
-| `JEV_CLAUDE_CLEAR_AT_LEAST` | `input_tokens` の整数 | `20000` |
+| `JEV_CLAUDE_CLEAR_AT_LEAST` | `input_tokens` の整数 | `40000` |
 | `JEV_CLAUDE_CLEAR_KEEP` | `tool_uses` の整数 | `3` |
 | `JEV_CLAUDE_CLEAR_EXCLUDE` | カンマ区切りのツール名 | 空（`exclude_tools` を出力しない） |
+| `JEV_CLAUDE_CLEAR_GATE` | `off` / `jev` | `off`（`jev`: 会話の直近の文脈量が trigger 以上かつ要求中の消去可能なツール結果の推定トークンが `clear_at_least` 以上になった時点で、過去のツール出力を再び必要とするかを Jev に一度だけ問い、不要な場合のみ edit を追記する。Jev の失敗やキー未設定時は消去しない） |
 | `JEV_TRANSFORMS` | `compact=on/off,filter=on/off,criteria=on/off` | `compact=on,filter=on,criteria=off` |
 | `JEV_COST_GATE_MAX` | 0 以上の整数 | `3` |
 | `JEV_ARGS_MODEL` + `JEV_ARGS_TOOLS` | モデル識別子とカンマ区切りの完全一致名 | 空（無効） |
@@ -276,3 +277,89 @@ python3 scripts/summarize_selection_benchmark.py scripts/testdata/selection-benc
 `CHECK: PASS` の自己申告だけでは成功にしません。費用は単価と出典が揃うときだけ出し、欠測は 0 や削減率に変換しません。比較条件（圧縮・推論・課題）が揃わない群は比較不能です。基準リビジョンが無い選択比較は改善率を出しません。
 
 1 回の差分はモデルの揺れ、プロンプトキャッシュ、サービス混雑の影響を受けます。効果を主張する用途では複数回実行し、各条件の中央値を比較してください。模擬フィクスチャの合格を実測の効率改善とは呼びません。
+
+## Claude Code
+
+[起動](#起動) のとおり `jev-routing run claude` で起動します。既定では通常の Claude 要求をそのまま転送し、Jev は呼びません。`JEV_CLAUDE_ADVISE=on` で以前のツール選択助言を再度有効にできますが、トークンは減りません（後述）。
+
+Claude Code で残した削減手段は Anthropic ネイティブの [context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing) だけです。`JEV_CLAUDE_CLEAR_TOOL_USES=on` にすると、プロキシが `clear_tool_uses_20250919` edit を追記し、古いツール結果がサーバー側で消去されます。Claude Code が送る `clear_thinking_20251015` edit はそのまま残します。サブスクリプション（claude.ai）ログインで動作します。既定では無効です。変数の一覧は [比較実験](#比較実験既定では無効) にあります。各実験の詳細は [docs/MEMO.md](docs/MEMO.md) を参照してください。
+
+推奨設定:
+
+| 変数 | 値 | 備考 |
+|---|---|---|
+| `JEV_CLAUDE_CLEAR_TOOL_USES` | `on` | edit を有効にする |
+| `JEV_CLAUDE_CLEAR_GATE` | `jev` | 消去するかを会話ごとに一度だけ Jev が判断する。Jev キーが必要で、無ければ消去しない（fail closed） |
+| `JEV_CLAUDE_CLEAR_TRIGGER` | `100000` | 既定値 |
+| `JEV_CLAUDE_CLEAR_AT_LEAST` | `40000` | 既定値 |
+| `JEV_CLAUDE_CLEAR_KEEP` | `3` | 既定値 |
+
+```bash
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+JEV_CLAUDE_CLEAR_TOOL_USES=on JEV_CLAUDE_CLEAR_GATE=jev jev-routing serve --host claude &
+claude
+```
+
+ベンチマークで測る場合（ベンチの文脈は 100k に届かないため閾値を下げます）:
+
+```bash
+jev-routing bench --agent claude --tasks chess-bugfix --modes off,on --reps 6 \
+  --claude-clear --claude-clear-gate jev --claude-clear-trigger 30000 --claude-clear-at-least 10000
+```
+
+- `--user-tools` は利用者の実際のツール構成で実行します。利用者の hook を動かさないよう `--no-hooks` を併用してください。
+- 課題 `child-survey` はサブエージェントが 8 個のソースファイルを読み、最後に報告します。サブエージェント内の消去を試すための課題です。
+- `CLAUDE_CODE_SUBAGENT_MODEL` は環境から引き継がれ、記録されます。比較可能な実行にするには固定してください（例: `claude-sonnet-5`）。
+- Linux で `bwrap` が使える場合、`bench` はエージェントごとに専用の `/tmp` を用意します。
+
+### Claude Code でツール呼び出しの置き換えを断念した理由
+
+Claude Code は extended thinking を有効にして動き、Anthropic API は thinking 中の `tool_choice` 強制を拒否します。ツール一覧や `tool_choice` を変えるとプロンプトキャッシュも壊れます。残るのは次のツールを誘導ではなく助言することだけで、助言は上流の要求や履歴の大きさを減らせません。増えるのはターンごとに積み上がる Jev の判定コストだけです。
+
+| 調査 | 方法 | 結果 |
+|---|---|---|
+| 助言の構造的コスト | `dual-facts`（経路固定の課題）、claude-sonnet-5/medium、6 ペア | 総トークン中央値 −27.25%（増加）。増加分の 99% が Jev の判定コスト |
+| Jev コストの削減 | 助言を付けられない要求で判定を省略、候補説明を短縮 | −6.20% まで改善したが依然として純増。最良でも基準と同等 |
+| 実セッションでの置き換え余地 | 実際の Claude Code 200 ターンに同じ判定呼び出しを再現 | 実セッションの Jev 入力は中央値 7,406 トークン。どの閾値でも純減はマイナス |
+| Jev を使わない決定的な合成 | 実セッションに対するルールベース合成 | 正解率 17.9%、削減上限 0.28% |
+| 他製品ベンチとの照合 | [jev-gateway](https://github.com/vinilana/jev-gateway#benchmark) の `hint` 方式 | 作者自身が Claude Code の結果を「コストは下がらない」と記載 |
+
+### context editing で試したこと
+
+指標は同一経路の純削減です。要求の入力から消去したトークンから、消去で増えたキャッシュ書き込みトークンと手戻りを差し引きます。手戻りは、実際に消去された呼び出しを再取得し、同一内容が返ったものだけを数えます（以前の数値はテストの再実行も数えていたため、保守的な値です）。実行間の総トークン比較はどの系列でも A/A 相当のノイズだったため、根拠に使っていません。
+
+1. **サーバーの挙動を実測。** `clear_tool_uses` は要求ごとに再計算され、対象となる最も古い結果から `clear_at_least` に達するまでだけ消去します。そのため 1 要求あたりの削減はおよそ `clear_at_least` が上限です。
+2. **ベンチ v1**（`chess-bugfix`、trigger 30000 / at-least 10000 / keep 3）: 同一経路の純削減の中央値は 12.0%（12 ペア）と 8.5%（事前登録した確認系列）。品質は全実行で合格。
+3. **実作業は条件が違う。** 実際のメインセッション 569 件（30 日）では、最初の要求の時点で中央値 81,574 トークンの固定プレフィックス（システムプロンプト、ツール定義、エージェントとスキルの一覧）があります。ツール結果は最終文脈の中央値 3.8% です。メインセッションのオフライン再生による上限は約 3% です。利用者の実際のツール構成（`--user-tools --no-hooks`、chess-engine）での試行では一度も消去されませんでした。
+4. **プレフィックスの縮小は不採用。** 使っていないエージェントやプラグインを無効にするとプレフィックスは 21% 減りましたが、利用者が使うかもしれない機能を外すのは jev-routing の役割ではありません。
+5. **サブエージェントはメインと同程度に消費する。** 30 日でサブエージェント 1,173M、メイン 1,223M トークンで、文脈の大半はツール結果です（最初の要求の中央値 35k、文脈の中央値 80k）。オフライン上限はサブエージェントのトークンの約 10% です。
+6. **ゲートなしのサブエージェントは失敗。** `child-survey`、6 ペア、claude-sonnet-5/medium、60000/40000: 効果なし。消去により再読み込みが起き、1 回の実行で手戻りが最大 699,727 トークンに達しました。事前登録した判定は不合格でした。
+7. **Jev ゲート**（`JEV_CLAUDE_CLEAR_GATE=jev`）。会話ごとに一度だけ（親と各サブエージェントは別々に）、会話の文脈が trigger 以上かつ要求中の消去可能なツール結果の推定が `clear_at_least` 以上になった時点で、課題文とツール呼び出し履歴（ツール結果は含めない）から Jev が `clear_old_results` か `keep_all_results` を選びます。edit を途中で外すとキャッシュが壊れるため、「clear」はその会話の最後まで維持します。エラー時は消去しません。事前登録、30000/10000 で 2 × 6 ペア:
+
+| 課題 | ゲートの判断 | 同一経路の純削減 | 手戻り | 品質 |
+|---|---|---|---|---|
+| `child-survey` | keep 6/6 | 消去なし | なし | 16/16 |
+| `chess-bugfix` | clear 6/6 | 消去が起きた 5 回で中央値 11.1%（2.9%–14.2%） | 6 回中 1 回で 34,344、他は 0 | 36/36 |
+
+ゲートのコストは会話ごとに入力約 800–1,400 + 出力 38 トークン（実行全体の 0.1–0.2%）です。
+
+### 推奨設定での期待効果
+
+実セッション 30 日分に対するオフライン推定です。ゲートが常に消去を選び、手戻りが無いと仮定した上限値です。
+
+| | 全体の削減 | 消去が発生するセッション | そのうちの最小 / 中央値 / 最大 |
+|---|---|---|---|
+| メイン（569） | 2.8% | 6% | 2.0% / 10.6% / 20.0% |
+| サブエージェント（583） | 9.9% | 22% | 1.4% / 15.8% / 30.2% |
+| 合計 | ≈6.3% | — | セッション単位の中央値は 0%（大半のセッションは消去されない） |
+
+価格で重み付けすると（キャッシュ読み込み 0.1、1 時間キャッシュ書き込み 2.0）、推奨設定は約 +0.5% で、費用はほぼ中立です。
+
+### 制約
+
+- ベンチ課題は 2 つ、モデルは 1 つ（claude-sonnet-5、medium）だけです。
+- ゲートが実作業の課題に一般化するかは未検証です。
+- 既定の trigger 100000 での「clear」経路は実環境で未検証です。ベンチの文脈はそこまで届きません。
+- 同一経路の指標は、消去しなくても経路が変わらないことを前提にしています。
+- 手戻りは同一内容の再取得だけを数えるため、下限値です。
