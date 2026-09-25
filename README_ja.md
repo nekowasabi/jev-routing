@@ -215,6 +215,7 @@ JEV_SELECTION_MODE=local jev-routing serve --host codex --listen 127.0.0.1:8787
 | `JEV_ROUTING_MODE` | `baseline` / `filter` / `forced` | `filter` |
 | `JEV_COMPACTION` | `off` / `on` | `on` |
 | `JEV_CODEX_NATIVE_COMPACTION` | `off` / `on` | `off`（実験用。既定では Codex 自身が要約する） |
+| `JEV_CODEX_TOOL_OUTPUT_TRUNCATE` | `off` / `on` | `on`（Codex のツール結果のうち20000バイトを超えるものを、先頭・末尾を残して中央を省略する。毎要求、再送される履歴全件に同じ規則で適用し、プロンプトキャッシュの接頭辞を保つ） |
 | `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
 | `JEV_SELECTION_MODE` | `local` / `jev` / `hybrid` | `hybrid` |
 | `JEV_SHADOW` | `on` / `off` | `off` |

@@ -191,20 +191,17 @@ func TestLargeFactsReferencedFilesParsesBraceForms(t *testing.T) {
 	}
 }
 
-// TestCodexToolOutputMaxFlagValidation covers run.go's --codex-tool-output-max
-// guardrails: it requires --agent codex and --modes on,off, and rejects a
-// negative value.
-func TestCodexToolOutputMaxFlagValidation(t *testing.T) {
+// TestCodexToolOutputTruncateFlagValidation covers run.go's
+// --codex-tool-output-truncate guardrails: it requires --agent codex and
+// --modes on,off.
+func TestCodexToolOutputTruncateFlagValidation(t *testing.T) {
 	// --list/--help would short-circuit before these checks run, so it is
 	// deliberately omitted here: each case must fail validation (exit 2)
 	// before run.go ever reaches claimLock or spawns an agent.
-	if code := runCmd([]string{"--agent", "claude", "--codex-tool-output-max", "20000", "--tasks", "large-facts"}); code != 2 {
+	if code := runCmd([]string{"--agent", "claude", "--codex-tool-output-truncate", "--tasks", "large-facts"}); code != 2 {
 		t.Fatalf("non-codex agent: want exit 2, got %d", code)
 	}
-	if code := runCmd([]string{"--agent", "codex", "--codex-tool-output-max", "-1", "--tasks", "large-facts"}); code != 2 {
-		t.Fatalf("negative value: want exit 2, got %d", code)
-	}
-	if code := runCmd([]string{"--agent", "codex", "--codex-tool-output-max", "20000", "--modes", "on", "--tasks", "large-facts"}); code != 2 {
+	if code := runCmd([]string{"--agent", "codex", "--codex-tool-output-truncate", "--modes", "on", "--tasks", "large-facts"}); code != 2 {
 		t.Fatalf("modes != on,off: want exit 2, got %d", code)
 	}
 }

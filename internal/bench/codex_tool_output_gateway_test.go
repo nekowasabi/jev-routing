@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -14,11 +13,12 @@ import (
 )
 
 // TestCodexToolOutputMaxAppliesThroughGatewayEnv reproduces the exact
-// gatewayEnv/withEnv/startGateway wiring run.go uses for --codex-tool-output-max
-// "on": it verifies JEV_CODEX_TOOL_OUTPUT_MAX actually reaches the gateway's
-// proxy.Options and truncates a realistic custom_tool_call_output payload
-// (array-of-content-items shape, confirmed against live Codex CLI 0.158
-// traffic), not just internal/proxy's own unit tests.
+// gatewayEnv/withEnv/startGateway wiring run.go uses for
+// --codex-tool-output-truncate "on": it verifies JEV_CODEX_TOOL_OUTPUT_TRUNCATE
+// actually reaches the gateway's proxy.Options and truncates a realistic
+// custom_tool_call_output payload (array-of-content-items shape, confirmed
+// against live Codex CLI 0.158 traffic), not just internal/proxy's own unit
+// tests.
 func TestCodexToolOutputMaxAppliesThroughGatewayEnv(t *testing.T) {
 	var forwarded []byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,8 +30,8 @@ func TestCodexToolOutputMaxAppliesThroughGatewayEnv(t *testing.T) {
 	defer upstream.Close()
 
 	gatewayEnv := map[string]string{
-		"JEV_CODEX_TOOL_OUTPUT_MAX": strconv.Itoa(20000),
-		"CODEX_UPSTREAM":            upstream.URL,
+		"JEV_CODEX_TOOL_OUTPUT_TRUNCATE": "on",
+		"CODEX_UPSTREAM":                 upstream.URL,
 	}
 	var gw *gateway
 	err := withEnv(gatewayEnv, func() error {

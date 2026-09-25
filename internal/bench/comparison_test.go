@@ -173,7 +173,7 @@ func TestComparisonClaudeClearIsComparableWithoutJevCalls(t *testing.T) {
 }
 
 // TestComparisonCodexToolOutputMaxIsComparableWithoutJevCalls covers the
-// --codex-tool-output-max condition: it deliberately makes no Jev calls
+// --codex-tool-output-truncate condition: it deliberately makes no Jev calls
 // (selection and compaction are both off), so jev_not_applied must not gate
 // it, mirroring the --codex-compact-limit and --claude-clear bypasses above.
 func TestComparisonCodexToolOutputMaxIsComparableWithoutJevCalls(t *testing.T) {
@@ -186,7 +186,8 @@ func TestComparisonCodexToolOutputMaxIsComparableWithoutJevCalls(t *testing.T) {
 	on := base
 	on.Mode = "on"
 	on.Input = 70
-	on.CodexToolOutputMax = 20000
+	on.CodexToolOutputTruncateFlag = true
+	on.CodexToolOutputTruncate = true
 	on.ToolOutputTruncated = 4
 	on.ToolOutputTruncatedBytes = 12000
 	row := BuildComparisons([]RunRecord{base, on}).Comparisons[0]

@@ -8,10 +8,12 @@ import (
 	"github.com/nekowasabi/jev-routing/internal/host"
 )
 
-func codexOpt(max int) Options {
+// codexOpt returns baseline-mode Options with CodexToolOutputTruncate set
+// explicitly, so tests do not depend on the DefaultOptions() default.
+func codexOpt(truncate bool) Options {
 	o := DefaultOptions()
 	o.Mode = ModeBaseline
-	o.CodexToolOutputMax = max
+	o.CodexToolOutputTruncate = truncate
 	return o
 }
 
@@ -23,7 +25,7 @@ func TestCodexToolOutputMaxUnderThresholdUnchanged(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(20000))
+	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,13 +37,30 @@ func TestCodexToolOutputMaxUnderThresholdUnchanged(t *testing.T) {
 	}
 }
 
-func TestCodexToolOutputMaxDisabledByDefault(t *testing.T) {
+func TestCodexToolOutputMaxEnabledByDefault(t *testing.T) {
 	long := strings.Repeat("x", 50000)
 	req := map[string]any{
 		"input": []any{map[string]any{"type": "function_call_output", "call_id": "c1", "output": long}},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(0))
+	opt := DefaultOptions()
+	opt.Mode = ModeBaseline
+	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) == string(raw) || stats.ToolOutputTruncated != 1 {
+		t.Fatalf("expected truncation with untouched (default) Options: stats=%+v", stats)
+	}
+}
+
+func TestCodexToolOutputMaxOffDisables(t *testing.T) {
+	long := strings.Repeat("x", 50000)
+	req := map[string]any{
+		"input": []any{map[string]any{"type": "function_call_output", "call_id": "c1", "output": long}},
+	}
+	raw, _ := json.Marshal(req)
+	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +75,7 @@ func TestCodexToolOutputMaxNonCodexUnchanged(t *testing.T) {
 		"input": []any{map[string]any{"type": "function_call_output", "call_id": "c1", "output": long}},
 	}
 	raw, _ := json.Marshal(req)
-	opt := codexOpt(20000)
+	opt := codexOpt(true)
 	out, stats, err := RewriteWith(nil, raw, host.Claude, nil, opt)
 	if err != nil {
 		t.Fatal(err)
@@ -67,8 +86,7 @@ func TestCodexToolOutputMaxNonCodexUnchanged(t *testing.T) {
 }
 
 func TestCodexToolOutputMaxTruncatesOverThreshold(t *testing.T) {
-	max := 200
-	long := strings.Repeat("a", 1000)
+	long := strings.Repeat("a", 50000)
 	req := map[string]any{
 		"input": []any{
 			map[string]any{"type": "function_call_output", "call_id": "c1", "output": long},
@@ -76,15 +94,16 @@ func TestCodexToolOutputMaxTruncatesOverThreshold(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out1, stats1, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(max))
+	out1, stats1, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(true))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stats1.ToolOutputTruncated != 1 {
 		t.Fatalf("want 1 truncated item, got %+v", stats1)
 	}
-	if stats1.ToolOutputTruncatedBytes != 1000-max {
-		t.Fatalf("want %d omitted bytes, got %d", 1000-max, stats1.ToolOutputTruncatedBytes)
+	wantOmitted := 50000 - codexToolOutputMaxBytes
+	if stats1.ToolOutputTruncatedBytes != wantOmitted {
+		t.Fatalf("want %d omitted bytes, got %d", wantOmitted, stats1.ToolOutputTruncatedBytes)
 	}
 
 	var got map[string]any
@@ -93,7 +112,7 @@ func TestCodexToolOutputMaxTruncatesOverThreshold(t *testing.T) {
 	}
 	items := got["input"].([]any)
 	out := items[0].(map[string]any)["output"].(string)
-	if !strings.Contains(out, "[jev-routing: omitted 800 of 1000 bytes from the middle of this tool output") {
+	if !strings.Contains(out, "[jev-routing: omitted 30000 of 50000 bytes from the middle of this tool output") {
 		t.Fatalf("missing/mismatched note: %s", out)
 	}
 	if !strings.HasPrefix(out, "a") || !strings.HasSuffix(out, "a") {
@@ -106,7 +125,7 @@ func TestCodexToolOutputMaxTruncatesOverThreshold(t *testing.T) {
 	}
 
 	// Determinism: applying to the same raw input twice yields identical bytes.
-	out2, stats2, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(max))
+	out2, stats2, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,12 +138,12 @@ func TestCodexToolOutputMaxTruncatesOverThreshold(t *testing.T) {
 }
 
 func TestCodexToolOutputMaxAppliesUnderBaselineMode(t *testing.T) {
-	long := strings.Repeat("b", 1000)
+	long := strings.Repeat("b", 50000)
 	req := map[string]any{
 		"input": []any{map[string]any{"type": "shell_call_output", "call_id": "c1", "output": long}},
 	}
 	raw, _ := json.Marshal(req)
-	opt := codexOpt(200)
+	opt := codexOpt(true)
 	if opt.Mode != ModeBaseline {
 		t.Fatal("test setup expects baseline mode")
 	}
@@ -144,15 +163,15 @@ func TestCodexToolOutputMaxAppliesUnderBaselineMode(t *testing.T) {
 }
 
 func TestCodexToolOutputMaxUTF8Boundary(t *testing.T) {
-	// A multibyte rune (3-byte) straddling the cut points on both sides.
-	max := 40
-	middle := strings.Repeat("x", 200)
-	s := strings.Repeat("あ", 20) + middle + strings.Repeat("い", 20)
+	// Multibyte runes (3-byte) straddling both cut points around the fixed
+	// 20000-byte threshold (half = 10000): the head cut lands inside the
+	// leading run of "あ", the tail cut lands inside the trailing run of "い".
+	s := strings.Repeat("あ", 5000) + strings.Repeat("x", 15000) + strings.Repeat("い", 5000)
 	req := map[string]any{
 		"input": []any{map[string]any{"type": "custom_tool_call_output", "call_id": "c1", "output": s}},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(max))
+	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,8 +201,7 @@ func mustMarshal(t *testing.T, s string) []byte {
 }
 
 func TestCodexToolOutputMaxContentItemArray(t *testing.T) {
-	max := 100
-	longText := strings.Repeat("z", 500)
+	longText := strings.Repeat("z", 30000)
 	req := map[string]any{
 		"input": []any{
 			map[string]any{
@@ -197,7 +215,7 @@ func TestCodexToolOutputMaxContentItemArray(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(req)
-	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(max))
+	out, stats, err := RewriteWith(nil, raw, host.Codex, nil, codexOpt(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,24 +238,29 @@ func TestCodexToolOutputMaxContentItemArray(t *testing.T) {
 	}
 }
 
-func TestCodexToolOutputMaxEnvParsing(t *testing.T) {
-	t.Setenv("JEV_CODEX_TOOL_OUTPUT_MAX", "")
+func TestCodexToolOutputTruncateEnvParsing(t *testing.T) {
+	t.Setenv("JEV_CODEX_TOOL_OUTPUT_TRUNCATE", "")
 	o, err := OptionsFromEnv()
-	if err != nil || o.CodexToolOutputMax != 0 {
-		t.Fatalf("unset should default to 0/disabled: o=%+v err=%v", o, err)
+	if err != nil || !o.CodexToolOutputTruncate {
+		t.Fatalf("unset should default to on: o=%+v err=%v", o, err)
 	}
-	t.Setenv("JEV_CODEX_TOOL_OUTPUT_MAX", "20000")
+	t.Setenv("JEV_CODEX_TOOL_OUTPUT_TRUNCATE", "off")
 	o, err = OptionsFromEnv()
-	if err != nil || o.CodexToolOutputMax != 20000 {
-		t.Fatalf("want 20000: o=%+v err=%v", o, err)
+	if err != nil || o.CodexToolOutputTruncate {
+		t.Fatalf("off should disable: o=%+v err=%v", o, err)
 	}
-	t.Setenv("JEV_CODEX_TOOL_OUTPUT_MAX", "-1")
-	if _, err := OptionsFromEnv(); err == nil {
-		t.Fatal("expected error for negative value")
+	t.Setenv("JEV_CODEX_TOOL_OUTPUT_TRUNCATE", "on")
+	o, err = OptionsFromEnv()
+	if err != nil || !o.CodexToolOutputTruncate {
+		t.Fatalf("on should enable: o=%+v err=%v", o, err)
 	}
-	t.Setenv("JEV_CODEX_TOOL_OUTPUT_MAX", "notanumber")
+	t.Setenv("JEV_CODEX_TOOL_OUTPUT_TRUNCATE", "20000")
 	if _, err := OptionsFromEnv(); err == nil {
-		t.Fatal("expected error for non-numeric value")
+		t.Fatal("expected error for a non on/off value")
+	}
+	t.Setenv("JEV_CODEX_TOOL_OUTPUT_TRUNCATE", "notonoroff")
+	if _, err := OptionsFromEnv(); err == nil {
+		t.Fatal("expected error for an invalid value")
 	}
 }
 
@@ -246,8 +269,7 @@ func TestCodexToolOutputMaxEnvParsing(t *testing.T) {
 // truncated bytes for the item shared by both requests must match exactly,
 // or the upstream prompt-cache prefix breaks on every additional turn.
 func TestCodexToolOutputMaxStablePrefixAcrossGrowingHistory(t *testing.T) {
-	max := 300
-	shared := strings.Repeat("shared-log-line\n", 100)
+	shared := strings.Repeat("shared-log-line\n", 2000)
 	req1 := map[string]any{
 		"input": []any{
 			map[string]any{"type": "function_call_output", "call_id": "c1", "output": shared},
@@ -261,11 +283,11 @@ func TestCodexToolOutputMaxStablePrefixAcrossGrowingHistory(t *testing.T) {
 	}
 	raw1, _ := json.Marshal(req1)
 	raw2, _ := json.Marshal(req2)
-	out1, _, err := RewriteWith(nil, raw1, host.Codex, nil, codexOpt(max))
+	out1, _, err := RewriteWith(nil, raw1, host.Codex, nil, codexOpt(true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	out2, _, err := RewriteWith(nil, raw2, host.Codex, nil, codexOpt(max))
+	out2, _, err := RewriteWith(nil, raw2, host.Codex, nil, codexOpt(true))
 	if err != nil {
 		t.Fatal(err)
 	}

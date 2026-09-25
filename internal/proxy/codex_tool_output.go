@@ -5,6 +5,11 @@ import (
 	"unicode/utf8"
 )
 
+// codexToolOutputMaxBytes is the fixed threshold applyCodexToolOutputMax
+// truncates Codex tool outputs at. It is not configurable: only whether
+// truncation runs at all is (JEV_CODEX_TOOL_OUTPUT_TRUNCATE; see options.go).
+const codexToolOutputMaxBytes = 20000
+
 // applyCodexToolOutputMax truncates the output of function_call_output,
 // custom_tool_call_output, local_shell_call_output, and shell_call_output
 // items in root["input"] whose text exceeds max bytes. It mutates root in

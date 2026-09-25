@@ -227,6 +227,7 @@ These are read once at startup. Invalid values make startup fail.
 | `JEV_ROUTING_MODE` | `baseline` / `filter` / `forced` | `filter` |
 | `JEV_COMPACTION` | `off` / `on` | `on` |
 | `JEV_CODEX_NATIVE_COMPACTION` | `off` / `on` | `off` (experimental Codex compaction replacement; Codex uses its own summary by default) |
+| `JEV_CODEX_TOOL_OUTPUT_TRUNCATE` | `off` / `on` | `on` (truncates any Codex tool output over 20000 bytes, keeping the head and tail and omitting the middle; applied the same way to the entire resent history every request, so the prompt cache prefix survives) |
 | `JEV_REASONING` | `preserve` / `legacy` | `legacy` |
 | `JEV_SELECTION_MODE` | `local` / `jev` / `hybrid` | `hybrid` |
 | `JEV_SHADOW` | `on` / `off` | `off` |

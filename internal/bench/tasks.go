@@ -109,8 +109,8 @@ func writeFiles(workspace string, files map[string]string) error {
 // large-facts writes six deterministic, low-entropy log files (~32KB each,
 // ~8K tokens at ordinary text's ~4 bytes/token) with one fact line hidden in
 // each: files 1-2 near the start (~5%), 3-4 near the middle (~50%), 5-6 near
-// the end (~95%). It exercises JEV_CODEX_TOOL_OUTPUT_MAX truncation, which
-// cuts the middle of any tool output over the threshold -- so a fact placed
+// the end (~95%). It exercises JEV_CODEX_TOOL_OUTPUT_TRUNCATE truncation,
+// which cuts the middle of any tool output over the threshold -- so a fact placed
 // there is only recoverable by re-reading with a narrower command, while
 // head/tail facts survive the cut.
 //

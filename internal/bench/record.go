@@ -74,9 +74,19 @@ type RunRecord struct {
 	CompactSavedTokens        int `json:"compactSavedTokens"`
 	CodexCompactLimit         int `json:"codexCompactLimit,omitempty"`
 	CodexCompactBaselineLimit int `json:"codexCompactBaselineLimit,omitempty"`
-	// CodexToolOutputMax is --codex-tool-output-max; see internal/proxy
-	// Options.CodexToolOutputMax and JEV_CODEX_TOOL_OUTPUT_MAX.
-	CodexToolOutputMax int `json:"codexToolOutputMax,omitempty"`
+	// CodexToolOutputTruncateFlag is --codex-tool-output-truncate: true only
+	// when this run is part of an explicit on-vs-off truncation comparison
+	// (both "on" and "off" runs of that comparison set it, mirroring
+	// ClaudeClear below). It is the jev_not_applied bypass signal in
+	// comparison.go, not the run's actual truncation state.
+	CodexToolOutputTruncateFlag bool `json:"codexToolOutputTruncateFlag,omitempty"`
+	// CodexToolOutputTruncate is whether this specific run actually truncated
+	// large Codex tool outputs -- on by default since internal/proxy
+	// Options.CodexToolOutputTruncate defaults to true; see
+	// JEV_CODEX_TOOL_OUTPUT_TRUNCATE. Always serialized (no omitempty) so a
+	// run recorded before this default existed is distinguishable from one
+	// where truncation was explicitly off.
+	CodexToolOutputTruncate bool `json:"codexToolOutputTruncate"`
 	// LargeFactsRefetches counts command_execution calls after the initial
 	// full `cat` that touched the same logs/large-N.txt file again (e.g. a
 	// narrower sed/rg re-read to recover a fact truncation cut from the
