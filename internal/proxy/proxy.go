@@ -453,8 +453,10 @@ func (s *Server) Handler() http.Handler {
 				})
 			})
 		}
+		gateKey, _ := res.Request.Context().Value(clearGateCtxKey{}).(string)
 		res.Body = wrapUsage(res.Body, ct, func(u *NormalizedUsage, partial bool, missing, finish string) {
 			bodyMs := time.Since(started).Seconds() * 1000
+			s.Options.clearGates.observe(gateKey, u)
 			s.events.Update(seq, func(e *Event) {
 				e.Usage = u
 				e.UsagePartial = partial
@@ -627,6 +629,18 @@ func (s *Server) Handler() http.Handler {
 					return
 				}
 			}
+			// Why: the gate asks Jev before RewriteWith instead of next to the
+			// edit below. Reason: RewriteWith's branch folds this request's Jev
+			// attempts into s.JevHTTP, keeping the dashboard total equal to the
+			// sum of event JevCalls that the bench meter checks.
+			gateClear := true
+			var gateKey, gateState, gateReason string
+			if origJSON && s.Host == host.Claude && s.Options.ClaudeClearToolUses && s.Options.ClaudeClearGate == ClearGateJev {
+				gateKey, gateClear, gateState, gateReason = s.Options.clearGates.gate(ctx, s.Client, raw, s.Options)
+				if gateKey != "" {
+					ctx = context.WithValue(ctx, clearGateCtxKey{}, gateKey)
+				}
+			}
 			if err == nil && json.Valid(raw) {
 				rewritten, st, rerr := RewriteWith(ctx, raw, s.Host, s.Client, s.Options)
 				stats = st
@@ -691,7 +705,7 @@ func (s *Server) Handler() http.Handler {
 			// Why: applied independently of RewriteWith's outcome (including the
 			// claude_advise_disabled early return, rewrite.go's reasonClaudeAdviseOff)
 			// so the clear-tool-uses condition does not require advise to be on too.
-			if origJSON && s.Host == host.Claude {
+			if origJSON && s.Host == host.Claude && gateClear {
 				if edited, ok := applyClaudeClearToolUses(raw, r.Header, s.Options); ok {
 					raw = edited
 				}
@@ -711,6 +725,8 @@ func (s *Server) Handler() http.Handler {
 			ev.OtherJevCalls = jevHTTP - selectionJevCalls(attempts)
 			ev.JevCached = jevCache
 			ev.JevFailed = jevFail
+			ev.ClearGate = gateState
+			ev.ClearGateReason = gateReason
 			ev = s.events.Add(ev)
 			if stats.Direct && stats.DirectName != "" {
 				s.writeDirect(w, r, stats)

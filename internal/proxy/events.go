@@ -78,6 +78,8 @@ type Event struct {
 	Transforms         []string           `json:"transforms,omitempty"`
 	ClearedToolUses    int                `json:"clearedToolUses,omitempty"`
 	ClearedInputTokens int                `json:"clearedInputTokens,omitempty"`
+	ClearGate          string             `json:"clearGate,omitempty"`
+	ClearGateReason    string             `json:"clearGateReason,omitempty"`
 }
 
 // SavedTokens is an estimate of input tokens avoided before an upstream call.

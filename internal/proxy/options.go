@@ -63,10 +63,16 @@ type Options struct {
 	// never clear (Anthropic's exclude_tools field). Empty by default, which
 	// omits the key entirely; see docs/MEMO.md.
 	ClaudeClearExclude []string
-	Transforms         TransformOptions
-	CostGateMax        int
+	// ClaudeClearGate decides whether ClaudeClearToolUses actually adds the
+	// edit: "off" adds it on every request (the original behavior), "jev" asks
+	// Jev once per conversation whether old tool results will be needed again.
+	ClaudeClearGate string
+	Transforms      TransformOptions
+	CostGateMax     int
 	// hints is shared by every copy of these Options (one per proxy server).
 	hints *hintStore
+	// clearGates is shared like hints: per-conversation clear-gate decisions.
+	clearGates *clearGateStore
 }
 
 func DefaultOptions() Options {
@@ -83,7 +89,9 @@ func DefaultOptions() Options {
 		ClaudeClearTrigger: defaultClearTrigger,
 		ClaudeClearAtLeast: defaultClearAtLeast,
 		ClaudeClearKeep:    defaultClearKeep,
+		ClaudeClearGate:    ClearGateOff,
 		hints:              newHintStore(),
+		clearGates:         newClearGateStore(),
 	}
 }
 
@@ -183,6 +191,14 @@ func OptionsFromEnv() (Options, error) {
 			return o, fmt.Errorf("invalid JEV_CLAUDE_CLEAR_EXCLUDE %q: %w", v, err)
 		}
 		o.ClaudeClearExclude = names
+	}
+	if v := strings.TrimSpace(os.Getenv("JEV_CLAUDE_CLEAR_GATE")); v != "" {
+		switch v {
+		case ClearGateOff, ClearGateJev:
+			o.ClaudeClearGate = v
+		default:
+			return o, fmt.Errorf("invalid JEV_CLAUDE_CLEAR_GATE %q (off|jev)", v)
+		}
 	}
 	if v := strings.TrimSpace(os.Getenv("JEV_TRANSFORMS")); v != "" {
 		tr, err := parseTransforms(v)

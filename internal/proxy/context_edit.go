@@ -19,7 +19,11 @@ const (
 	contextManagementBeta   = "context-management-2025-06-27"
 
 	defaultClearTrigger = 100000
-	defaultClearAtLeast = 20000
+	// Why: 40000 instead of 20000. Reason: the offline sweep in docs/MEMO.md
+	// ("実作業向け閾値の試算") found trigger 40k-100k barely matters, while
+	// clear_at_least 40000 gave the largest total-token reduction and a
+	// non-negative price-weighted result.
+	defaultClearAtLeast = 40000
 	defaultClearKeep    = 3
 )
 
