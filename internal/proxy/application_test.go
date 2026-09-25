@@ -289,6 +289,53 @@ func TestObserveHostCallMatchesUniqueStarted(t *testing.T) {
 	}
 }
 
+func TestObserveResultCodexSpawnAgentFailureNotVerified(t *testing.T) {
+	store := NewAppStore()
+	app := &Application{DecisionID: "d1", CallID: "call-spawn", State: AppStarted, Kind: plan.KindSubagent, Host: string(host.Codex)}
+	store.put(app)
+	// Exact text observed in /tmp/jev-codex-steer-reps6/*/agent.log for a
+	// failed native collab spawn_agent call; ObserveHostCall always passes
+	// exitCode 0 for this path, so only the result text can reveal failure.
+	failureText := "collab spawn failed: no thread with id: 01a0d87b-43c1-7282-bdc6-c23950b85ff3"
+	if err := ObserveHostCall(store, "call-spawn", failureText, 0); err != nil {
+		t.Fatal(err)
+	}
+	got := store.Get("d1")
+	if got.State != AppFailed || got.Verified {
+		t.Fatalf("codex spawn_agent failure must not be verified: %+v", got)
+	}
+	if Success(got) {
+		t.Fatalf("codex spawn_agent failure must not count as success: %+v", got)
+	}
+}
+
+func TestObserveResultCodexSubagentSuccessStillVerified(t *testing.T) {
+	store := NewAppStore()
+	app := &Application{DecisionID: "d1", CallID: "call-spawn", State: AppStarted, Kind: plan.KindSubagent, Host: string(host.Codex)}
+	store.put(app)
+	if err := ObserveHostCall(store, "call-spawn", "jev-live-cli-ok", 0); err != nil {
+		t.Fatal(err)
+	}
+	got := store.Get("d1")
+	if got.State != AppVerified || !got.Verified {
+		t.Fatalf("apparently successful codex subagent result must stay verified: %+v", got)
+	}
+}
+
+func TestObserveResultSpawnFailureTextOnOtherHostUnaffected(t *testing.T) {
+	store := NewAppStore()
+	app := &Application{DecisionID: "d1", CallID: "call-spawn", State: AppStarted, Kind: plan.KindSubagent, Host: string(host.Claude)}
+	store.put(app)
+	failureText := "collab spawn failed: no thread with id: 01a0d87b-43c1-7282-bdc6-c23950b85ff3"
+	if err := ObserveHostCall(store, "call-spawn", failureText, 0); err != nil {
+		t.Fatal(err)
+	}
+	got := store.Get("d1")
+	if got.State != AppVerified {
+		t.Fatalf("non-codex hosts must not be affected by this check: %+v", got)
+	}
+}
+
 func TestAutoApplyEmptyUserDoesNotKeepDelivery(t *testing.T) {
 	s := &Server{
 		Host:          host.Grok,
@@ -417,6 +464,38 @@ func TestHandlerObservesResponsesFunctionCallAndResult(t *testing.T) {
 	got = srv.Apps.Get("call_exec")
 	if got == nil || got.State != AppVerified || !strings.Contains(got.Result, "jev-live-cli-ok") {
 		t.Fatalf("responses result not verified: %+v", got)
+	}
+}
+
+func TestHandlerObservesCodexSpawnAgentFailureAsFailed(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_spawn\",\"name\":\"spawn_agent\"}}\n\n"))
+	}))
+	defer upstream.Close()
+	t.Setenv("CODEX_UPSTREAM", upstream.URL)
+	srv, err := NewWithOptions("127.0.0.1:0", host.Codex, nil, io.Discard, localOpt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt","input":[{"role":"user","content":"fix the bug"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	got := srv.Apps.Get("call_spawn")
+	if got == nil || got.State != AppStarted || got.Kind != plan.KindSubagent {
+		t.Fatalf("spawn_agent call not started as subagent: %+v", got)
+	}
+	failureOutput := `{"type":"function_call_output","call_id":"call_spawn","output":"collab spawn failed: no thread with id: 01a0d87b-43c1-7282-bdc6-c23950b85ff3"}`
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt","input":[`+failureOutput+`]}`))
+	req2.Header.Set("Content-Type", "application/json")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req2)
+	got = srv.Apps.Get("call_spawn")
+	if got == nil || got.State != AppFailed {
+		t.Fatalf("codex spawn_agent failure must be recorded as failed, not verified: %+v", got)
 	}
 }
 

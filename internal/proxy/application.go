@@ -8,8 +8,16 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nekowasabi/jev-routing/internal/host"
 	"github.com/nekowasabi/jev-routing/internal/plan"
 )
+
+// codexSpawnAgentFailure is the exact text Codex's own function_call_output
+// carries when its native collab spawn_agent fails inside the Codex CLI
+// before any child HTTP request is made (observed verbatim in
+// /tmp/jev-codex-steer-reps6/*/agent.log). Matching only this literal
+// keeps the check tied to what was actually observed, not a guess.
+const codexSpawnAgentFailure = "collab spawn failed:"
 
 const (
 	AppSelected         = "selected"
@@ -270,6 +278,12 @@ func ObserveResult(store *AppStore, decisionID, callID, result string, exitCode 
 	}
 	app.Result = result
 	app.State = AppResultReceived
+	if app.Kind == plan.KindSubagent && app.Host == string(host.Codex) && strings.Contains(result, codexSpawnAgentFailure) {
+		app.Verified = false
+		app.State = AppFailed
+		store.put(app)
+		return nil
+	}
 	if exitCode != nil {
 		app.Verified = *exitCode == 0
 		if app.Verified {
