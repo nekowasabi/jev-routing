@@ -1,11 +1,93 @@
 package bench
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestCodexContextLimitComparisonIncludesNoCompaction(t *testing.T) {
+	baseTokens, onTokens := 100, 80
+	base := RunRecord{
+		Task: "compact-facts", Agent: "codex", AgentModel: "gpt-5.6-terra", Mode: "off", Rep: 1,
+		CompareKey: "same", CodexCompactLimit: 45000, CodexCompactBaselineLimit: 900000, Solved: true, Total: 3,
+		EvidenceComplete: true,
+		Models:           []string{"gpt-5.6-terra"}, HostUsageVerified: true,
+		TaskTokens: &baseTokens, UsageSource: "proxy",
+	}
+	on := base
+	on.Mode, on.TaskTokens, on.CompactRequested = "on", &onTokens, 1
+	rows := BuildComparisons([]RunRecord{base, on}).Comparisons
+	if len(rows) != 1 || rows[0].Status != "comparable" || rows[0].SavedTokens == nil || *rows[0].SavedTokens != 20 || rows[0].SelectionCompactRequested == nil || *rows[0].SelectionCompactRequested != 1 {
+		t.Fatalf("compaction pair = %+v", rows)
+	}
+	base.CompactRequested = 1
+	rows = BuildComparisons([]RunRecord{base, on}).Comparisons
+	if len(rows) != 1 || rows[0].Status != "comparable" || rows[0].BaselineCompactRequested == nil || *rows[0].BaselineCompactRequested != 1 {
+		t.Fatalf("baseline compact request excluded = %+v", rows)
+	}
+	base.CompactRequested = 0
+	on.CompactRequested = 0
+	rows = BuildComparisons([]RunRecord{base, on}).Comparisons
+	if len(rows) != 1 || rows[0].Status != "comparable" || rows[0].SelectionCompactRequested == nil || *rows[0].SelectionCompactRequested != 0 {
+		t.Fatalf("no-compaction policy pair = %+v", rows)
+	}
+}
+
+func TestCodexCompactEvidenceRequiresFullOrderedReads(t *testing.T) {
+	tasks, err := Tasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	for _, task := range tasks {
+		if task.ID != "compact-facts" {
+			continue
+		}
+		if err := task.Setup(workspace); err != nil {
+			t.Fatal(err)
+		}
+		var lines []byte
+		firstFive := 0
+		for stage := 1; stage <= 20; stage++ {
+			if stage == 6 {
+				firstFive = len(lines)
+			}
+			name := fmt.Sprintf("logs/stage-%d.txt", stage)
+			content, err := os.ReadFile(filepath.Join(workspace, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			event, _ := json.Marshal(map[string]any{"type": "item.completed", "item": map[string]any{"type": "command_execution", "status": "completed", "command": "/bin/zsh -lc 'cat " + name + "'", "aggregated_output": string(content)}})
+			lines = append(append(lines, event...), '\n')
+		}
+		log := filepath.Join(t.TempDir(), "agent.log")
+		if err := os.WriteFile(log, lines, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if !codexCompactEvidence(log, workspace) {
+			t.Fatal("complete ordered reads rejected")
+		}
+		first := lines[:bytes.IndexByte(lines, '\n')+1]
+		if err := os.WriteFile(log, append(append([]byte{}, first...), lines...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if codexCompactEvidence(log, workspace) {
+			t.Fatal("duplicate read accepted")
+		}
+		if err := os.WriteFile(log, lines[:firstFive], 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if codexCompactEvidence(log, workspace) {
+			t.Fatal("missing last read accepted")
+		}
+		return
+	}
+	t.Fatal("compact-facts task missing")
+}
 
 func TestComparisonJSONUsesMeasuredJevAppliedPairsOnly(t *testing.T) {
 	base := RunRecord{Task: "task", Agent: "claude", AgentModel: "claude-sonnet-5", CompareKey: "same", Models: []string{"claude-sonnet-5"}, Mode: "off", Rep: 1, Requests: 1, Metered: 1, Input: 100, Output: 10, Passed: 1, Total: 1, Solved: true, HostUsageVerified: true}

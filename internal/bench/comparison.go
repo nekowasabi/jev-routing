@@ -34,6 +34,9 @@ type Comparison struct {
 	BaselineTokens         *int     `json:"baselineTokens"`
 	SelectionTokens        *int     `json:"selectionTokens"`
 	SavedTokens            *int     `json:"savedTokens"`
+
+	BaselineCompactRequested  *int `json:"baselineCompactRequested,omitempty"`
+	SelectionCompactRequested *int `json:"selectionCompactRequested,omitempty"`
 	// SelectionClearedToolUses/SelectionClearedInputTokens report the
 	// intervention side's native context editing activity (--claude-clear).
 	// Populated for every pair with an "on" run, not just ClaudeClear ones,
@@ -115,6 +118,9 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			row.Model = p.on.AgentModel
 			row.SelectionSolved = p.on.Solved
 			row.SelectionApplied = p.on.JevApplied > 0
+			if p.on.CodexCompactLimit > 0 {
+				row.SelectionCompactRequested = &p.on.CompactRequested
+			}
 			row.SelectionUsageSource = p.on.UsageSource
 			row.SelectionClearedToolUses = &p.on.ClearedToolUses
 			row.SelectionClearedInputTokens = &p.on.ClearedInputTokens
@@ -128,6 +134,9 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			row.Reasons = append(row.Reasons, "missing_selection")
 		}
 		if p.off != nil {
+			if p.off.CodexCompactLimit > 0 {
+				row.BaselineCompactRequested = &p.off.CompactRequested
+			}
 			if row.Model == "" {
 				row.Model = p.off.AgentModel
 			}
@@ -164,6 +173,9 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			if k.task == "xcell-locate" && (!p.off.EvidenceComplete || !p.on.EvidenceComplete) {
 				row.Reasons = append(row.Reasons, "tool_sequence_unverified")
 			}
+			if k.task == "compact-facts" && (!p.off.EvidenceComplete || !p.on.EvidenceComplete) {
+				row.Reasons = append(row.Reasons, "full_log_reads_unverified")
+			}
 			childTask := k.task == "child-facts" || k.task == "child-survey"
 			if childTask && (!p.off.EvidenceComplete || !p.on.EvidenceComplete || !p.off.ParentChildVerified || !p.on.ParentChildVerified || p.off.ChildSessions < 1 || p.on.ChildSessions < 1) {
 				row.Reasons = append(row.Reasons, "child_session_unverified")
@@ -181,7 +193,10 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			// run where it never fired is still a legitimate result of the
 			// intervention, not an incomplete measurement. Gating those out
 			// would keep only the longest runs and bias the comparison.
-			if !p.on.ClaudeClear && (p.on.JevCalls == 0 || p.on.JevApplied == 0) {
+			// Why: Instead of requiring a compact request on either side, compare
+			// all limit-policy runs. Reason: requiring one would select only some
+			// execution paths; request counts are reported separately.
+			if p.on.CodexCompactLimit == 0 && !p.on.ClaudeClear && (p.on.JevCalls == 0 || p.on.JevApplied == 0) {
 				row.Reasons = append(row.Reasons, "jev_not_applied")
 			}
 			if len(row.Reasons) == 0 {

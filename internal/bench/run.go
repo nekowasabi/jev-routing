@@ -41,6 +41,8 @@ Options:
   --user-tools                           keep your MCP servers, plugins, skills and settings
   --no-hooks                             Claude: disable the user's hooks (use with --user-tools)
   --catalog N                            add N bench MCP tools (first 2 return evidence; default 0)
+  --codex-compact-limit N                Codex native auto-compact limit for "on"
+  --codex-compact-baseline-limit N       Codex native auto-compact limit for "off" (requires --codex-compact-limit)
   --tasks a,b                            task ids (default: chess suite)
   --modes on,off[,direct]                routing states to compare (default on,off)
   --on-mode filter|forced                what "on" means (default filter; "off" is always baseline)
@@ -65,6 +67,7 @@ Tasks:
   child-facts    Delegate one fact to a child session (6 min)
   child-survey   Delegate an 8-file source survey to one child session (15 min)
   dual-facts     Obtain two independent facts from bench MCP tools (5 min; --catalog 2)
+  compact-facts  Read staged logs and recover two facts after compaction (10 min)
   skill-proof    Apply a routed skill and prove its use (5 min; Claude Code)
   xcell-module   Read go.mod facts from this source tree (10 min)
   xcell-locate   Locate five definitions in this source tree (10 min)
@@ -76,6 +79,8 @@ Routing on is JEV_ROUTING_MODE=filter (or --on-mode forced). Routing off is base
 the proxy meters the request and does not rewrite it. Direct bypasses the proxy;
 its full token total is unverified and cannot prove a saving.
 The command writes comparison.json; load it in the local dashboard to view the token KPI.
+With --codex-compact-limit, both modes pass through the proxy; only Codex's
+native auto-compaction token limit differs. Jev selection and replacement are off.
 
 Real agents spend real quota. Start with one task and --reps 1.
 --agent fake writes the reference solution through the proxy and spends nothing.
@@ -118,6 +123,8 @@ func runCmd(args []string) int {
 	userTools := fs.Bool("user-tools", false, "keep user tools")
 	noHooks := fs.Bool("no-hooks", false, "Claude: disable the user's hooks")
 	catalog := fs.Int("catalog", 0, "stub MCP tools")
+	codexCompactLimit := fs.Int("codex-compact-limit", 0, "Codex native auto-compact limit for on")
+	codexCompactBaselineLimit := fs.Int("codex-compact-baseline-limit", 0, "Codex native auto-compact limit for off")
 	taskIDs := fs.String("tasks", "", "task ids")
 	modeFlag := fs.String("modes", "on,off", "on,off")
 	onMode := fs.String("on-mode", proxy.ModeFilter, "filter|forced")
@@ -174,6 +181,10 @@ func runCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "--no-hooks is supported for claude only")
 		return 2
 	}
+	if *codexCompactLimit < 0 || *codexCompactBaselineLimit < 0 || (*codexCompactLimit > 0 && (agent != "codex" || *codexCompactBaselineLimit <= *codexCompactLimit)) || (*codexCompactLimit == 0 && *codexCompactBaselineLimit != 0) {
+		fmt.Fprintln(os.Stderr, "Codex compaction comparison requires --codex-compact-limit N and a larger --codex-compact-baseline-limit N")
+		return 2
+	}
 	if *effort != "low" && *effort != "medium" && *effort != "high" {
 		fmt.Fprintln(os.Stderr, "--effort must be low, medium, or high")
 		return 2
@@ -221,6 +232,10 @@ func runCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	if *codexCompactLimit > 0 && (len(modes) != 2 || !contains(modes, "on") || !contains(modes, "off")) {
+		fmt.Fprintln(os.Stderr, "--codex-compact-limit requires --modes on,off")
+		return 2
+	}
 	if agent == "fake" && contains(modes, "direct") {
 		fmt.Fprintln(os.Stderr, "direct requires a real agent")
 		return 2
@@ -248,7 +263,12 @@ func runCmd(args []string) int {
 		"JEV_COMPACTION": "off", "JEV_REASONING": "preserve", "JEV_AUTO_APPLY": "off",
 		"JEV_KIND_MODES": "skill=observe,mcp_tool=observe,cli=observe,plugin=observe",
 	}
-	if _, set := os.LookupEnv("JEV_SELECTION_MODE"); !set && agent != "fake" {
+	if *codexCompactLimit > 0 {
+		controlled["JEV_TRANSFORMS"] = "compact=off,filter=off,criteria=off"
+		controlled["JEV_SELECTION_MODE"] = "local"
+		controlled["JEV_CODEX_NATIVE_COMPACTION"] = "off"
+	}
+	if _, set := os.LookupEnv("JEV_SELECTION_MODE"); !set && agent != "fake" && *codexCompactLimit == 0 {
 		controlled["JEV_SELECTION_MODE"] = "jev"
 	}
 	restore := overrideBenchEnv(controlled)
@@ -326,7 +346,11 @@ func runCmd(args []string) int {
 		catalogNote = fmt.Sprintf(" (catalog: %d stub MCP tools)", *catalog)
 	}
 	fmt.Printf("%d run%s with %s%s; results in %s\n\n", len(plan), plural, agent, catalogNote, outDir)
-	fmt.Fprintln(os.Stderr, "Real agents spend real quota. Routing on rewrites; routing off is a metering baseline.")
+	if *codexCompactLimit > 0 {
+		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Comparing Codex native auto-compaction limits; Jev selection and replacement are off.")
+	} else {
+		fmt.Fprintln(os.Stderr, "Real agents spend real quota. Routing on rewrites; routing off is a metering baseline.")
+	}
 
 	var runs []RunRecord
 	var sandbox string
@@ -417,16 +441,20 @@ func runCmd(args []string) int {
 			}
 			gatewayEnv["JEV_CLAUDE_CLEAR_GATE"] = *claudeClearGate
 		}
+		gatewayMode := routingMode(step.mode == "on", *onMode)
+		if *codexCompactLimit > 0 {
+			gatewayMode = proxy.ModeBaseline
+		}
 		if step.mode == "direct" {
 			// No proxy is constructed for the native-host control.
 		} else if len(gatewayEnv) > 0 {
 			err = withEnv(gatewayEnv, func() error {
 				var startErr error
-				gw, startErr = startGateway(gatewayHost(agent), fmt.Sprintf("127.0.0.1:%d", port), routingMode(step.mode == "on", *onMode), label, logW, upstreamFor(agent))
+				gw, startErr = startGateway(gatewayHost(agent), fmt.Sprintf("127.0.0.1:%d", port), gatewayMode, label, logW, upstreamFor(agent))
 				return startErr
 			})
 		} else {
-			gw, err = startGateway(gatewayHost(agent), fmt.Sprintf("127.0.0.1:%d", port), routingMode(step.mode == "on", *onMode), label, logW, upstreamFor(agent))
+			gw, err = startGateway(gatewayHost(agent), fmt.Sprintf("127.0.0.1:%d", port), gatewayMode, label, logW, upstreamFor(agent))
 		}
 		if err != nil {
 			if logFile != nil {
@@ -464,6 +492,13 @@ func runCmd(args []string) int {
 				}
 				fmt.Fprintln(os.Stderr, err)
 				return 2
+			}
+			if *codexCompactLimit > 0 {
+				limit := *codexCompactLimit
+				if step.mode == "off" {
+					limit = *codexCompactBaselineLimit
+				}
+				cmd.Args = append([]string{"-c", "model_auto_compact_token_limit=" + strconv.Itoa(limit)}, cmd.Args...)
 			}
 			cmd.Env = append(cmd.Env, "TMPDIR="+scratch)
 			minutes := step.task.TimeoutMinutes
@@ -531,12 +566,17 @@ func runCmd(args []string) int {
 			isolation.CleanupFailed = cleaned.Failed
 		}
 		record := usage
+		if agent == "codex" && step.task.ID == "compact-facts" {
+			record.EvidenceComplete = codexCompactEvidence(agentLog, workspace)
+		}
 		record.Task = step.task.ID
 		record.Agent = agent
 		record.AgentModel = *model
 		record.AgentEffort = *effort
 		record.EffectMinPairs = *minPairs
 		record.EffectMinSavingsPct = *minSavingsPct
+		record.CodexCompactLimit = *codexCompactLimit
+		record.CodexCompactBaselineLimit = *codexCompactBaselineLimit
 		record.ApprovalMode = map[string]string{"claude": "acceptEdits", "codex": "approve-for-me", "grok": "bypassPermissions", "devin": "dangerous", "fake": "none"}[agent]
 		record.SourceRevision = sourceRevision()
 		// Why: Instead of clearing CLAUDE_CODE_SUBAGENT_MODEL, keep it and key on
@@ -551,7 +591,10 @@ func runCmd(args []string) int {
 			Approval: record.ApprovalMode, MinPairs: *minPairs, MinSavingsPct: *minSavingsPct,
 			UserTools: *userTools, NoHooks: *noHooks, Catalog: *catalog, Source: record.SourceRevision,
 			Selection: opt.SelectionMode, Reasoning: opt.Reasoning, Compaction: opt.Compaction,
-			Transforms: opt.Transforms, CostGate: opt.CostGateMax, KindModes: opt.KindModes,
+			CodexNativeCompaction:     opt.CodexNativeCompaction,
+			CodexCompactLimit:         *codexCompactLimit,
+			CodexCompactBaselineLimit: *codexCompactBaselineLimit,
+			Transforms:                opt.Transforms, CostGate: opt.CostGateMax, KindModes: opt.KindModes,
 			ApplicationPolicy: opt.ApplicationPolicy, Shadow: opt.Shadow,
 			ClaudeClear: *claudeClear, ClaudeClearTrigger: *claudeClearTrigger,
 			ClaudeClearAtLeast: *claudeClearAtLeast, ClaudeClearKeep: *claudeClearKeep,
@@ -761,12 +804,53 @@ type compareKeySettings struct {
 	// SubagentModel is omitted when empty so keys of runs without it stay stable.
 	SubagentModel                                           string `json:",omitempty"`
 	Selection, Reasoning, Compaction, ApplicationPolicy     string
+	CodexNativeCompaction                                   bool
+	CodexCompactLimit                                       int
+	CodexCompactBaselineLimit                               int
 	Transforms                                              proxy.TransformOptions
 	KindModes                                               map[string]string
 	ClaudeClear                                             bool
 	ClaudeClearTrigger, ClaudeClearAtLeast, ClaudeClearKeep int
 	ClaudeClearExclude, SandboxMethod                       string
 	ClaudeClearGate                                         string `json:",omitempty"`
+}
+
+func codexCompactEvidence(agentLog, workspace string) bool {
+	raw, err := os.ReadFile(agentLog)
+	if err != nil {
+		return false
+	}
+	stage := 1
+	for _, line := range strings.Split(string(raw), "\n") {
+		var event struct {
+			Type string `json:"type"`
+			Item struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Command string `json:"command"`
+				Output  string `json:"aggregated_output"`
+			} `json:"item"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil || event.Type != "item.completed" || event.Item.Type != "command_execution" || event.Item.Status != "completed" {
+			continue
+		}
+		if !strings.Contains(event.Item.Command, "logs/stage-") {
+			continue
+		}
+		if stage > 20 {
+			return false
+		}
+		name := fmt.Sprintf("logs/stage-%d.txt", stage)
+		if !strings.HasSuffix(event.Item.Command, "cat "+name+"'") {
+			return false
+		}
+		want, err := os.ReadFile(filepath.Join(workspace, name))
+		if err != nil || event.Item.Output != string(want) {
+			return false
+		}
+		stage++
+	}
+	return stage == 21
 }
 
 // computeCompareKey hashes compareKeySettings; two runs get the same

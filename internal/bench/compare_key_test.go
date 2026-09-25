@@ -35,3 +35,17 @@ func TestComputeCompareKeyClearGate(t *testing.T) {
 		t.Fatal("clear gate difference must change the compare key")
 	}
 }
+
+func TestComputeCompareKeyCodexCompactLimits(t *testing.T) {
+	base := compareKeySettings{Task: "compact-facts", Agent: "codex", CodexCompactLimit: 45000, CodexCompactBaselineLimit: 900000}
+	changed := base
+	changed.CodexCompactBaselineLimit = 800000
+	if computeCompareKey(base) == computeCompareKey(changed) {
+		t.Fatal("baseline auto-compact limit must distinguish benchmark series")
+	}
+	changed = base
+	changed.CodexNativeCompaction = true
+	if computeCompareKey(base) == computeCompareKey(changed) {
+		t.Fatal("Codex Jev replacement setting must distinguish benchmark series")
+	}
+}

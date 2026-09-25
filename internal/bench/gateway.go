@@ -179,9 +179,10 @@ type dashEvent struct {
 		OutputTokens *int    `json:"outputTokens"`
 		Cached       bool    `json:"cached"`
 	} `json:"jevAttempts"`
-	CompactApplied bool `json:"compactApplied"`
-	CompactDropped int  `json:"compactDropped"`
-	SavedTokens    *struct {
+	CompactApplied            bool `json:"compactApplied"`
+	NativeCompactionRequested bool `json:"nativeCompactionRequested"`
+	CompactDropped            int  `json:"compactDropped"`
+	SavedTokens               *struct {
 		CompactionInput int `json:"compactionInput"`
 	} `json:"savedTokens"`
 	ClearedToolUses    int `json:"clearedToolUses"`
@@ -336,6 +337,9 @@ func (g *gateway) meter(tasks ...string) (RunRecord, error) {
 		}
 		if event.CompactApplied {
 			out.CompactRequests++
+		}
+		if event.NativeCompactionRequested {
+			out.CompactRequested++
 		}
 		out.CompactDropped += event.CompactDropped
 		if event.SavedTokens != nil {

@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"crypto/sha256"
 	"embed"
 	"fmt"
 	"os"
@@ -118,6 +119,38 @@ func Tasks() ([]Task, error) {
 	return []Task{
 		xcellTask("xcell-module"),
 		xcellTask("xcell-locate"),
+		{
+			ID: "compact-facts", Title: "Recover early and late facts after reading staged logs", TimeoutMinutes: 10,
+			Prompt: "Read logs/stage-1.txt through logs/stage-20.txt in numerical order. Run `cat` once for each complete file, as separate tool calls; do not search or summarize the files with another command. After all twenty reads, write answer.json with integer keys first, last, and sum, using the first value from stage 1 and the last value from stage 20. Do not modify the logs.",
+			Setup: func(workspace string) error {
+				files := map[string]string{}
+				for stage := 1; stage <= 20; stage++ {
+					var log strings.Builder
+					if stage == 1 {
+						log.WriteString("first=37\n")
+					}
+					lines := 240
+					if stage == 1 || stage == 20 {
+						lines = 20
+					}
+					for line := 1; line <= lines; line++ {
+						payload := sha256.Sum256([]byte(fmt.Sprintf("%d/%d", stage, line)))
+						fmt.Fprintf(&log, "stage %d event %03d payload %x\n", stage, line, payload)
+					}
+					if stage == 20 {
+						log.WriteString("last=61\n")
+					}
+					files[fmt.Sprintf("logs/stage-%d.txt", stage)] = log.String()
+				}
+				return writeFiles(workspace, files)
+			},
+			Verify: func(workspace string) (verdict, error) {
+				return verifyAnswer(workspace, map[string]any{"first": float64(37), "last": float64(61), "sum": float64(98)})
+			},
+			Reference: func(workspace string) error {
+				return writeFiles(workspace, map[string]string{"answer.json": `{"first":37,"last":61,"sum":98}` + "\n"})
+			},
+		},
 		{
 			ID: "child-facts", Title: "Delegate one fact and combine two values", TimeoutMinutes: 6,
 			Prompt:           "Delegate reading left.txt to a child agent exactly once using this host's subagent tool. In the parent session, read right.txt yourself. Write answer.json with integer keys left, right, and sum. The sum must equal left + right. Do not change the fact files.",

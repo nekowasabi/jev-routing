@@ -345,7 +345,11 @@ func Summarize(all []RunRecord, prices *Prices) string {
 				without = append(without, run)
 			}
 		}
-		lines = append(lines, "## "+task, "", "| | Routing on | Routing off (baseline) |", "| --- | ---: | ---: |")
+		header := "| | Routing on | Routing off (baseline) |"
+		if len(with) > 0 && with[0].CodexCompactLimit > 0 {
+			header = fmt.Sprintf("| | Codex limit %d | Codex limit %d (baseline) |", with[0].CodexCompactLimit, with[0].CodexCompactBaselineLimit)
+		}
+		lines = append(lines, "## "+task, "", header, "| --- | ---: | ---: |")
 		var cacheWrites, reasoning bool
 		for _, run := range append(with, without...) {
 			spec := specOf(run.Agent)
@@ -413,7 +417,7 @@ func Summarize(all []RunRecord, prices *Prices) string {
 		}
 		lines = append(lines, fmt.Sprintf("Only %d run%s per cell: agents vary a lot from one run to the next, so treat differences here as anecdotes, not measurements. An effect decision requires at least six comparable pairs.", smallest, plural))
 	} else {
-		lines = append(lines, "Percentages in brackets compare the routing-on median with the baseline median.")
+		lines = append(lines, "Percentages in brackets compare the intervention median with the baseline median.")
 	}
 	return strings.Join(lines, "\n") + "\n"
 }

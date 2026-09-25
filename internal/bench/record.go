@@ -68,9 +68,12 @@ type RunRecord struct {
 	Isolation            *Isolation              `json:"isolation,omitempty"`
 	Workspace            string                  `json:"workspace,omitempty"`
 
-	CompactRequests    int `json:"compactRequests"`
-	CompactDropped     int `json:"compactDropped"`
-	CompactSavedTokens int `json:"compactSavedTokens"`
+	CompactRequests           int `json:"compactRequests"`
+	CompactRequested          int `json:"compactRequested,omitempty"`
+	CompactDropped            int `json:"compactDropped"`
+	CompactSavedTokens        int `json:"compactSavedTokens"`
+	CodexCompactLimit         int `json:"codexCompactLimit,omitempty"`
+	CodexCompactBaselineLimit int `json:"codexCompactBaselineLimit,omitempty"`
 
 	// ClaudeClear marks the Claude "on" condition as native context editing
 	// (clear_tool_uses_20250919) rather than JEV_CLAUDE_ADVISE; see --claude-clear.
