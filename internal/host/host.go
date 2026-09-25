@@ -128,6 +128,14 @@ func ChildEnv(h ID, listen string) []string {
 	case Claude:
 		drop["ANTHROPIC_API_KEY"] = true
 		drop["ANTHROPIC_AUTH_TOKEN"] = true
+		// Why: Instead of passing the whole environment, drop the variables that
+		// bind a Claude Code process to the session that launched it. Reason: run
+		// from inside Claude Code, the child CLI would otherwise inherit that
+		// session's id, messaging socket and entrypoint. CLAUDE_CODE_SUBAGENT_MODEL
+		// is kept: it is the user's real configuration (the bench records it).
+		for _, k := range []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH"} {
+			drop[k] = true
+		}
 		add["ANTHROPIC_BASE_URL"] = "http://" + listen
 	case Grok:
 		drop["XAI_API_KEY"] = true

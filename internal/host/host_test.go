@@ -148,3 +148,20 @@ func containsKVPrefix(env []string, prefix string) bool {
 	}
 	return false
 }
+
+func TestChildEnvClaudeDropsParentSession(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "parent")
+	t.Setenv("CLAUDE_CODE_MESSAGING_SOCKET", "/tmp/sock")
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "opus")
+	env := ChildEnv(Claude, "127.0.0.1:8787")
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "CLAUDE_CODE_SESSION_ID" || k == "CLAUDE_CODE_MESSAGING_SOCKET" || k == "CLAUDE_CODE_ENTRYPOINT" {
+			t.Fatalf("parent session variable leaked: %s", kv)
+		}
+	}
+	if !containsKV(env, "CLAUDE_CODE_SUBAGENT_MODEL=opus") || !containsKV(env, "ANTHROPIC_BASE_URL=http://127.0.0.1:8787") {
+		t.Fatalf("claude env lost user config or proxy url: %v", env)
+	}
+}

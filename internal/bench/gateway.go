@@ -395,7 +395,7 @@ func (g *gateway) meter(tasks ...string) (RunRecord, error) {
 		left, right := calls["bench_left_fact"], calls["bench_right_fact"]
 		out.EvidenceComplete = left != "" && right != "" && left != right
 	}
-	if len(tasks) > 0 && tasks[0] == "child-facts" {
+	if len(tasks) > 0 && (tasks[0] == "child-facts" || tasks[0] == "child-survey") {
 		out.EvidenceComplete = out.SubagentCalls > 0
 	}
 	for model := range models {

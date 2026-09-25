@@ -132,6 +132,7 @@ func Tasks() ([]Task, error) {
 				return writeFiles(workspace, map[string]string{"answer.json": `{"left":17,"right":23,"sum":40}` + "\n"})
 			},
 		},
+		xcellTask("child-survey"),
 		{
 			ID: "dual-facts", Title: "Combine two independent file facts", TimeoutMinutes: 5,
 			Prompt: "Call both bench MCP tools bench_left_fact and bench_right_fact. They hold separate values that are not in this workspace. Write answer.json with integer keys left, right, and sum. The sum must equal left + right.",

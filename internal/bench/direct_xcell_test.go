@@ -14,7 +14,7 @@ func TestDirectAgentCommandDoesNotRoute(t *testing.T) {
 	}
 	for _, agent := range []string{"claude", "codex", "grok", "devin"} {
 		t.Run(agent, func(t *testing.T) {
-			cmd, err := agentCommand(agent, "", "/tmp/work", "task", "", "medium", false, 0, false)
+			cmd, err := agentCommand(agent, "", "/tmp/work", "task", "", "medium", false, false, 0, false)
 			if err != nil {
 				t.Fatal(err)
 			}

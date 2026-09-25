@@ -96,14 +96,14 @@ func TestBenchEvidenceToolsReturnSeparateFacts(t *testing.T) {
 
 func TestAgentCommandCatalog(t *testing.T) {
 	for _, agent := range []string{"codex", "claude"} {
-		plain, err := agentCommand(agent, "127.0.0.1:1", "/w", "p", "", "medium", false, 0, false)
+		plain, err := agentCommand(agent, "127.0.0.1:1", "/w", "p", "", "medium", false, false, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(strings.Join(plain.Args, " "), "bench-mcp") {
 			t.Errorf("%s: catalog 0 must not add the stub: %q", agent, plain.Args)
 		}
-		with, err := agentCommand(agent, "127.0.0.1:1", "/w", "p", "", "medium", false, 40, false)
+		with, err := agentCommand(agent, "127.0.0.1:1", "/w", "p", "", "medium", false, false, 40, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,7 +122,28 @@ func TestAgentCommandCatalog(t *testing.T) {
 			t.Errorf("claude: mcp__bench should be allowed: %q", with.Args)
 		}
 	}
-	if _, err := agentCommand("grok", "127.0.0.1:1", "/w", "p", "", "", false, 40, false); err == nil {
+	if _, err := agentCommand("grok", "127.0.0.1:1", "/w", "p", "", "", false, false, 40, false); err == nil {
 		t.Error("grok with --catalog should fail")
+	}
+}
+
+func TestAgentCommandNoHooks(t *testing.T) {
+	has := func(noHooks bool) bool {
+		cmd, err := agentCommand("claude", "127.0.0.1:1", "/w", "p", "", "medium", true, noHooks, 0, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, a := range cmd.Args {
+			if a == "--settings" {
+				return i+1 < len(cmd.Args) && cmd.Args[i+1] == `{"disableAllHooks":true}`
+			}
+		}
+		return false
+	}
+	if !has(true) {
+		t.Error(`--no-hooks must add --settings {"disableAllHooks":true}`)
+	}
+	if has(false) {
+		t.Error("without --no-hooks there must be no --settings")
 	}
 }

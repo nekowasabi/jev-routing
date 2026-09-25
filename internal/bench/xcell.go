@@ -3,6 +3,9 @@ package bench
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +18,19 @@ var xcellDefinitions = map[string]string{
 	"applyCompactToMessages": "internal/proxy/rewrite.go",
 	"DefaultOptions":         "internal/proxy/options.go",
 	"DefaultUpstream":        "internal/proxy/proxy.go",
+}
+
+// childSurveyFiles are the real sources child-survey's child must read; about
+// 250KB, so the child's context passes a 60k-token clear trigger on tool results.
+var childSurveyFiles = []string{
+	"internal/proxy/rewrite.go",
+	"internal/proxy/proxy.go",
+	"internal/bench/run.go",
+	"internal/proxy/connect_devin.go",
+	"internal/plan/plan.go",
+	"internal/jev/jev.go",
+	"internal/proxy/native_compact.go",
+	"internal/bench/gateway.go",
 }
 
 func xcellSourceRoot() (string, error) {
@@ -43,8 +59,18 @@ func xcellTask(id string) Task {
 		prompt = "Find the definitions of RewriteWith, extractTools, applyCompactToMessages, DefaultOptions, and DefaultUpstream. For each name, make one separate search tool call for that name, wait for its result, then make one separate read tool call for its definition. Use at least ten distinct sequential tool calls; do not combine names in one search. Write answer.json with exactly those five names as keys and repo-relative path:definition-line as values. Do not change other files."
 		title = "Locate five source definitions"
 	}
+	timeout, subagent := 10, false
+	if id == "child-survey" {
+		files = childSurveyFiles
+		prompt = "Delegate exactly once, using this host's subagent tool, a survey of these 8 files to ONE child agent: " + strings.Join(childSurveyFiles, ", ") + ". " +
+			"The child must read each file completely with its file-reading tool, one file per call (if the tool truncates a file, continue that file with an offset until its end), and must not use shell, grep, or search tools. " +
+			"For each file the child reports the name of the last top-level func declaration in the file (for a method, just the method name) as last, and as last_line the 1-based line number, as shown by the file-reading tool's line numbering, of the line holding that declaration's func keyword (not its doc comment). " +
+			"Do not read these files in the parent session. Write answer.json as {\"<path>\": {\"last_line\": N, \"last\": \"Name\"}, ...} with exactly these 8 paths as keys. Do not change other files."
+		title = "Delegate an 8-file source survey"
+		timeout, subagent = 15, true
+	}
 	return Task{
-		ID: id, Title: title, TimeoutMinutes: 10, Prompt: prompt,
+		ID: id, Title: title, TimeoutMinutes: timeout, Prompt: prompt, RequiresSubagent: subagent,
 		Setup: func(workspace string) error {
 			root, err := xcellSourceRoot()
 			if err != nil {
@@ -96,10 +122,86 @@ func verifyXCell(id, workspace string, files []string) (verdict, error) {
 	if err != nil {
 		return verdict{}, err
 	}
+	if id == "child-survey" {
+		raw, err := os.ReadFile(filepath.Join(workspace, "answer.json"))
+		var got map[string]any
+		if err == nil {
+			_ = json.Unmarshal(raw, &got)
+		}
+		// One check per path and field, so a single miscount fails one of 16.
+		return scoreAnswer(flattenAnswer(got), flattenAnswer(want)), nil
+	}
 	return verifyAnswer(workspace, want)
 }
 
+// childSurveyEvidence reports whether the child session itself (a Claude
+// Code message with a parent_tool_use_id) issued Read calls covering all
+// child-survey files, so the measured context growth is the child's reading.
+func childSurveyEvidence(agentLog string) bool {
+	raw, err := os.ReadFile(agentLog)
+	if err != nil {
+		return false
+	}
+	read := map[string]bool{}
+	for _, turn := range parseClaudeTranscript(raw).turns {
+		for _, call := range turn.calls {
+			var input struct {
+				FilePath string `json:"file_path"`
+			}
+			if turn.parent == "" || call.name != "Read" || json.Unmarshal([]byte(call.input), &input) != nil {
+				continue
+			}
+			for _, name := range childSurveyFiles {
+				if strings.HasSuffix(filepath.ToSlash(input.FilePath), "/"+name) {
+					read[name] = true
+				}
+			}
+		}
+	}
+	return len(read) == len(childSurveyFiles)
+}
+
+// flattenAnswer turns {"path": {"field": v}} into {"path.field": v}.
+func flattenAnswer(m map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range m {
+		inner, ok := value.(map[string]any)
+		if !ok {
+			out[key] = value
+			continue
+		}
+		for field, v := range inner {
+			out[key+"."+field] = v
+		}
+	}
+	return out
+}
+
 func xcellExpected(id, workspace string) (map[string]any, error) {
+	if id == "child-survey" {
+		out := map[string]any{}
+		for _, name := range childSurveyFiles {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, filepath.Join(workspace, name), nil, parser.SkipObjectResolution)
+			if err != nil {
+				return nil, err
+			}
+			last, lastLine := "", 0
+			// Decls are in source order, so the last FuncDecl seen is the last by position.
+			// Why: last_line (the func keyword's line) instead of a func count or a
+			// file line count. Reason: children miscounted funcs, and a file's line
+			// count is ambiguous (Read shows an extra empty line after the final
+			// newline); the func keyword's line is shown unambiguously by Read.
+			for _, decl := range file.Decls {
+				if fn, ok := decl.(*ast.FuncDecl); ok {
+					last = fn.Name.Name
+					lastLine = fset.Position(fn.Type.Func).Line
+				}
+			}
+			out[name] = map[string]any{"last_line": float64(lastLine), "last": last}
+		}
+		return out, nil
+	}
 	if id == "xcell-locate" {
 		out := map[string]any{}
 		for symbol, name := range xcellDefinitions {

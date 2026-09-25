@@ -10,7 +10,7 @@ import (
 
 func TestDevinTranscriptIsIsolatedAndNumericOnly(t *testing.T) {
 	workspace := filepath.Join(t.TempDir(), "workspace")
-	cmd, err := agentCommand("devin", "", workspace, "read file", "gpt-5-6-terra-medium", "medium", false, 0, false)
+	cmd, err := agentCommand("devin", "", workspace, "read file", "gpt-5-6-terra-medium", "medium", false, false, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}

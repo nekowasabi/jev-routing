@@ -23,7 +23,7 @@ type agentCmd struct {
 
 // agentCommand builds the agent's command line. catalog > 0 adds the stub MCP
 // server (jev-routing bench-mcp N) so tool selection has a catalog to choose from.
-func agentCommand(agent, listen, workspace, prompt, model, effort string, userTools bool, catalog int, subagent bool) (agentCmd, error) {
+func agentCommand(agent, listen, workspace, prompt, model, effort string, userTools, noHooks bool, catalog int, subagent bool) (agentCmd, error) {
 	direct := listen == ""
 	childEnv := func(h host.ID) []string {
 		if !direct {
@@ -95,6 +95,10 @@ func agentCommand(agent, listen, workspace, prompt, model, effort string, userTo
 				tools += ",Agent"
 			}
 			args = append(args, "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands", "--tools", tools)
+		}
+		if noHooks {
+			// Keep the user's MCP servers/skills but never run their hooks.
+			args = append(args, "--settings", `{"disableAllHooks":true}`)
 		}
 		if catalog > 0 {
 			cfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"bench": map[string]any{"command": exe, "args": []string{"bench-mcp", strconv.Itoa(catalog)}}}})

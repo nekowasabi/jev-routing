@@ -39,6 +39,7 @@ Options:
   --model NAME                           model passed to the agent
   --effort low|medium|high                reasoning effort for Claude/Codex (default medium)
   --user-tools                           keep your MCP servers, plugins, skills and settings
+  --no-hooks                             Claude: disable the user's hooks (use with --user-tools)
   --catalog N                            add N bench MCP tools (first 2 return evidence; default 0)
   --tasks a,b                            task ids (default: chess suite)
   --modes on,off[,direct]                routing states to compare (default on,off)
@@ -46,9 +47,10 @@ Options:
   --claude-clear                         Claude "on": enable native context editing (clear_tool_uses_20250919)
                                           instead of JEV_CLAUDE_ADVISE, so the two are measured separately
   --claude-clear-trigger N               input_tokens trigger (default 100000)
-  --claude-clear-at-least N              input_tokens clear_at_least (default 20000)
+  --claude-clear-at-least N              input_tokens clear_at_least (default 40000)
   --claude-clear-keep N                  tool_uses keep (default 3)
   --claude-clear-exclude names           comma-separated tool names the edit must never clear
+  --claude-clear-gate off|jev            let Jev decide once per conversation whether to clear (default off)
   --reps N                               repetitions of every task in every mode (default 1)
   --min-pairs N                          paired repeats required for effect decision (default 6)
   --min-savings-pct P                    predeclared practical savings threshold (default 0)
@@ -61,6 +63,7 @@ Options:
 
 Tasks:
   child-facts    Delegate one fact to a child session (6 min)
+  child-survey   Delegate an 8-file source survey to one child session (15 min)
   dual-facts     Obtain two independent facts from bench MCP tools (5 min; --catalog 2)
   skill-proof    Apply a routed skill and prove its use (5 min; Claude Code)
   xcell-module   Read go.mod facts from this source tree (10 min)
@@ -113,6 +116,7 @@ func runCmd(args []string) int {
 	model := fs.String("model", "", "model")
 	effort := fs.String("effort", "medium", "reasoning effort")
 	userTools := fs.Bool("user-tools", false, "keep user tools")
+	noHooks := fs.Bool("no-hooks", false, "Claude: disable the user's hooks")
 	catalog := fs.Int("catalog", 0, "stub MCP tools")
 	taskIDs := fs.String("tasks", "", "task ids")
 	modeFlag := fs.String("modes", "on,off", "on,off")
@@ -122,6 +126,7 @@ func runCmd(args []string) int {
 	claudeClearAtLeast := fs.Int("claude-clear-at-least", proxy.DefaultOptions().ClaudeClearAtLeast, "input_tokens clear_at_least")
 	claudeClearKeep := fs.Int("claude-clear-keep", proxy.DefaultOptions().ClaudeClearKeep, "tool_uses keep")
 	claudeClearExclude := fs.String("claude-clear-exclude", "", "comma-separated tool names to exclude from clearing")
+	claudeClearGate := fs.String("claude-clear-gate", proxy.ClearGateOff, "off|jev: let Jev decide per conversation whether to clear (needs --claude-clear)")
 	repsFlag := fs.String("reps", "1", "repetitions")
 	minPairs := fs.Int("min-pairs", 6, "minimum paired repeats for an effect decision")
 	minSavingsPct := fs.Float64("min-savings-pct", 0, "minimum practical token savings percent")
@@ -165,6 +170,10 @@ func runCmd(args []string) int {
 			return 2
 		}
 	}
+	if *noHooks && agent != "claude" {
+		fmt.Fprintln(os.Stderr, "--no-hooks is supported for claude only")
+		return 2
+	}
 	if *effort != "low" && *effort != "medium" && *effort != "high" {
 		fmt.Fprintln(os.Stderr, "--effort must be low, medium, or high")
 		return 2
@@ -176,6 +185,16 @@ func runCmd(args []string) int {
 	if *onMode != proxy.ModeFilter && *onMode != proxy.ModeForced {
 		fmt.Fprintf(os.Stderr, "--on-mode must be filter or forced, not %q\n", *onMode)
 		return 2
+	}
+	if *claudeClearGate != proxy.ClearGateOff && (*claudeClearGate != proxy.ClearGateJev || !*claudeClear) {
+		fmt.Fprintf(os.Stderr, "--claude-clear-gate must be off, or jev together with --claude-clear, not %q\n", *claudeClearGate)
+		return 2
+	}
+	// Why: omit the gate from records and compare keys while off, so runs
+	// recorded before this flag existed keep pairing with new ones.
+	clearGate := ""
+	if *claudeClearGate != proxy.ClearGateOff {
+		clearGate = *claudeClearGate
 	}
 	tasks, err := Tasks()
 	if err != nil {
@@ -396,6 +415,7 @@ func runCmd(args []string) int {
 			if *claudeClearExclude != "" {
 				gatewayEnv["JEV_CLAUDE_CLEAR_EXCLUDE"] = *claudeClearExclude
 			}
+			gatewayEnv["JEV_CLAUDE_CLEAR_GATE"] = *claudeClearGate
 		}
 		if step.mode == "direct" {
 			// No proxy is constructed for the native-host control.
@@ -437,7 +457,7 @@ func runCmd(args []string) int {
 			if gw != nil {
 				listen = gw.addr()
 			}
-			cmd, err := agentCommand(agent, listen, workspace, step.task.Prompt, *model, *effort, *userTools, *catalog, step.task.RequiresSubagent)
+			cmd, err := agentCommand(agent, listen, workspace, step.task.Prompt, *model, *effort, *userTools, *noHooks, *catalog, step.task.RequiresSubagent)
 			if err != nil {
 				if gw != nil {
 					gw.Close()
@@ -519,22 +539,33 @@ func runCmd(args []string) int {
 		record.EffectMinSavingsPct = *minSavingsPct
 		record.ApprovalMode = map[string]string{"claude": "acceptEdits", "codex": "approve-for-me", "grok": "bypassPermissions", "devin": "dangerous", "fake": "none"}[agent]
 		record.SourceRevision = sourceRevision()
+		// Why: Instead of clearing CLAUDE_CODE_SUBAGENT_MODEL, keep it and key on
+		// it. Reason: it is the user's real setting, and a child on another model
+		// changes the measured tokens, so such runs must never pair.
+		subagentModel := ""
+		if agent == "claude" {
+			subagentModel = os.Getenv("CLAUDE_CODE_SUBAGENT_MODEL")
+		}
 		record.CompareKey = computeCompareKey(compareKeySettings{
 			Task: step.task.ID, Agent: agent, Model: *model, Effort: *effort,
 			Approval: record.ApprovalMode, MinPairs: *minPairs, MinSavingsPct: *minSavingsPct,
-			UserTools: *userTools, Catalog: *catalog, Source: record.SourceRevision,
+			UserTools: *userTools, NoHooks: *noHooks, Catalog: *catalog, Source: record.SourceRevision,
 			Selection: opt.SelectionMode, Reasoning: opt.Reasoning, Compaction: opt.Compaction,
 			Transforms: opt.Transforms, CostGate: opt.CostGateMax, KindModes: opt.KindModes,
 			ApplicationPolicy: opt.ApplicationPolicy, Shadow: opt.Shadow,
 			ClaudeClear: *claudeClear, ClaudeClearTrigger: *claudeClearTrigger,
 			ClaudeClearAtLeast: *claudeClearAtLeast, ClaudeClearKeep: *claudeClearKeep,
 			ClaudeClearExclude: *claudeClearExclude,
+			ClaudeClearGate:    clearGate,
+			SubagentModel:      subagentModel,
 			// Why: bwrap and the fallback give different isolation
 			// guarantees; mixing their runs into one comparison would
 			// average over that difference instead of reporting it.
 			SandboxMethod: sandboxMethod,
 		})
+		record.SubagentModel = subagentModel
 		record.UserTools = *userTools
+		record.NoHooks = *noHooks
 		record.Catalog = *catalog
 		if agent == "claude" && *claudeClear {
 			record.ClaudeClear = true
@@ -542,6 +573,7 @@ func runCmd(args []string) int {
 			record.ClaudeClearAtLeast = *claudeClearAtLeast
 			record.ClaudeClearKeep = *claudeClearKeep
 			record.ClaudeClearExclude = *claudeClearExclude
+			record.ClaudeClearGate = clearGate
 		}
 		record.Mode = step.mode
 		record.Rep = step.rep
@@ -567,34 +599,8 @@ func runCmd(args []string) int {
 			}
 		}
 		if step.mode != "direct" && (agent == "claude" || agent == "codex") {
-			if mainKey, err := matchHostSession(record, agentLog); err != nil {
-				if step.task.RequiresSubagent && record.EvidenceComplete && record.SubagentCalls == 1 {
-					partition := func() ([]int64, []int64, int, error) {
-						if agent == "codex" {
-							return codexChildAttribution(agentLog, gw.snapshot)
-						}
-						return partitionHostRequests(agent, agentLog, gw.snapshot)
-					}
-					parent, child, tokens, partitionErr := partition()
-					if partitionErr == nil {
-						record.HostUsageVerified = true
-						record.ParentChildVerified = true
-						record.ChildSessions = record.SubagentCalls
-						record.ChildTokens = tokens
-						record.ParentRequestSeqs = parent
-						record.ChildRequestSeqs = child
-						record.AttributionMethod = "usage_partition"
-					} else {
-						err = partitionErr
-					}
-				}
-				if !record.HostUsageVerified {
-					if record.MeterError != "" {
-						record.MeterError += "; "
-					}
-					record.MeterError += err.Error()
-				}
-			} else {
+			mainKey, err := matchHostSession(record, agentLog)
+			if err == nil {
 				record.HostUsageVerified = true
 				classifySessions(&record, mainKey)
 				if step.task.RequiresSubagent && record.ChildSessions != record.SubagentCalls {
@@ -603,6 +609,46 @@ func runCmd(args []string) int {
 				if record.ParentChildVerified {
 					record.AttributionMethod = "session_key"
 				}
+			}
+			// Why: Instead of partitioning only when session matching fails, also
+			// partition a Claude run whose session keys found no child. Reason:
+			// Claude Code's child shares the parent's key, and when the child runs
+			// on another model (CLAUDE_CODE_SUBAGENT_MODEL) the parent-only CLI
+			// usage still matches the main model, so session matching succeeds
+			// without ever separating the child.
+			if step.task.RequiresSubagent && !record.ParentChildVerified && record.EvidenceComplete && record.SubagentCalls == 1 && (err != nil || agent == "claude") {
+				partition := func() ([]int64, []int64, int, error) {
+					if agent == "codex" {
+						return codexChildAttribution(agentLog, gw.snapshot)
+					}
+					parent, child, tokens, err := claudeChildAttribution(agentLog, gw.snapshot)
+					if err == nil {
+						return parent, child, tokens, nil
+					}
+					// Keep the subset search that verified short runs before.
+					if parent, child, tokens, fallbackErr := partitionHostRequests(agent, agentLog, gw.snapshot); fallbackErr == nil {
+						return parent, child, tokens, nil
+					}
+					return nil, nil, 0, err
+				}
+				parent, child, tokens, partitionErr := partition()
+				if partitionErr == nil {
+					record.HostUsageVerified = true
+					record.ParentChildVerified = true
+					record.ChildSessions = record.SubagentCalls
+					record.ChildTokens = tokens
+					record.ParentRequestSeqs = parent
+					record.ChildRequestSeqs = child
+					record.AttributionMethod = "usage_partition"
+				} else if err != nil {
+					err = partitionErr
+				}
+			}
+			if !record.HostUsageVerified {
+				if record.MeterError != "" {
+					record.MeterError += "; "
+				}
+				record.MeterError += err.Error()
 			}
 		}
 		if step.mode != "direct" && agent == "grok" && step.task.RequiresSubagent {
@@ -637,6 +683,9 @@ func runCmd(args []string) int {
 		}
 		if step.task.ID == "xcell-locate" && agent != "fake" {
 			record.EvidenceComplete = xcellLocateEvidence(agent, agentLog, workspace)
+		}
+		if step.task.ID == "child-survey" && agent == "claude" {
+			record.EvidenceComplete = record.EvidenceComplete && childSurveyEvidence(agentLog)
 		}
 		assignTaskUsage(&record)
 		applyClearNet(outDir, &record)
@@ -705,16 +754,19 @@ func overrideBenchEnv(values map[string]string) func() {
 // them to be considered the same condition (see BuildComparisons in
 // comparison.go, which rejects pairs whose CompareKey differs).
 type compareKeySettings struct {
-	Task, Agent, Model, Effort, Approval, Source            string
-	MinPairs, Catalog, CostGate                             int
-	MinSavingsPct                                           float64
-	UserTools, Shadow                                       bool
+	Task, Agent, Model, Effort, Approval, Source string
+	MinPairs, Catalog, CostGate                  int
+	MinSavingsPct                                float64
+	UserTools, NoHooks, Shadow                   bool
+	// SubagentModel is omitted when empty so keys of runs without it stay stable.
+	SubagentModel                                           string `json:",omitempty"`
 	Selection, Reasoning, Compaction, ApplicationPolicy     string
 	Transforms                                              proxy.TransformOptions
 	KindModes                                               map[string]string
 	ClaudeClear                                             bool
 	ClaudeClearTrigger, ClaudeClearAtLeast, ClaudeClearKeep int
 	ClaudeClearExclude, SandboxMethod                       string
+	ClaudeClearGate                                         string `json:",omitempty"`
 }
 
 // computeCompareKey hashes compareKeySettings; two runs get the same

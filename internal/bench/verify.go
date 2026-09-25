@@ -108,6 +108,10 @@ func verifyAnswer(workspace string, expected map[string]any) (verdict, error) {
 	if err == nil {
 		_ = json.Unmarshal(raw, &got)
 	}
+	return scoreAnswer(got, expected), nil
+}
+
+func scoreAnswer(got, expected map[string]any) verdict {
 	v := verdict{Total: len(expected)}
 	keys := make([]string, 0, len(expected))
 	for key := range expected {
@@ -124,5 +128,5 @@ func verifyAnswer(workspace string, expected map[string]any) (verdict, error) {
 	}
 	v.Score = float64(v.Passed) / float64(v.Total)
 	v.Solved = v.Passed == v.Total
-	return v, nil
+	return v
 }

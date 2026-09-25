@@ -13,6 +13,7 @@ type RunRecord struct {
 	EffectMinSavingsPct  float64                 `json:"effectMinSavingsPct,omitempty"`
 	SourceRevision       string                  `json:"sourceRevision,omitempty"`
 	UserTools            bool                    `json:"userTools"`
+	NoHooks              bool                    `json:"noHooks,omitempty"`
 	Catalog              int                     `json:"catalog,omitempty"`
 	Mode                 string                  `json:"mode"`
 	Rep                  int                     `json:"rep"`
@@ -51,6 +52,7 @@ type RunRecord struct {
 	ChildTokens          int                     `json:"childTokens"`
 	ParentChildVerified  bool                    `json:"parentChildVerified"`
 	AttributionMethod    string                  `json:"attributionMethod,omitempty"`
+	SubagentModel        string                  `json:"subagentModel,omitempty"`
 	ParentRequestSeqs    []int64                 `json:"parentRequestSeqs,omitempty"`
 	ChildRequestSeqs     []int64                 `json:"childRequestSeqs,omitempty"`
 	SubagentCalls        int                     `json:"subagentCalls"`
@@ -79,6 +81,9 @@ type RunRecord struct {
 	// ClaudeClearExclude is the raw --claude-clear-exclude value (comma-
 	// separated tool names); see internal/proxy Options.ClaudeClearExclude.
 	ClaudeClearExclude string `json:"claudeClearExclude,omitempty"`
+	// ClaudeClearGate is --claude-clear-gate when not "off" (see
+	// internal/proxy Options.ClaudeClearGate).
+	ClaudeClearGate    string `json:"claudeClearGate,omitempty"`
 	ClearedToolUses    int    `json:"clearedToolUses,omitempty"`
 	ClearedInputTokens int    `json:"clearedInputTokens,omitempty"`
 

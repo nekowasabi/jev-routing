@@ -32,12 +32,27 @@ func writeClearNetRun(t *testing.T, eventsJSON, agentLog string) (dir string, ru
 }
 
 func clearEvent(seq, input, output, cacheWrite, cleared int) string {
-	return fmt.Sprintf(`{"seq":%d,"usage":{"inputTokens":%d,"outputTokens":%d,"cachedTokens":0,"cacheWriteTokens":%d},"clearedInputTokens":%d}`,
-		seq, input, output, cacheWrite, cleared)
+	return clearEventUses(seq, input, output, cacheWrite, cleared, 0)
+}
+
+func clearEventUses(seq, input, output, cacheWrite, cleared, clearedUses int) string {
+	return fmt.Sprintf(`{"seq":%d,"usage":{"inputTokens":%d,"outputTokens":%d,"cachedTokens":0,"cacheWriteTokens":%d},"clearedInputTokens":%d,"clearedToolUses":%d}`,
+		seq, input, output, cacheWrite, cleared, clearedUses)
 }
 
 func assistantTurn(fileArg string) string {
 	return fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"%s"}}]}}`, fileArg)
+}
+
+// toolTurn is one assistant turn with a single tool_use (id, name, raw JSON
+// input) followed by the user line carrying its tool_result text. A result of
+// "<none>" means no tool_result line is written.
+func toolTurn(id, name, input, result string) string {
+	line := fmt.Sprintf(`{"type":"assistant","message":{"id":"m-%s","content":[{"type":"tool_use","id":"%s","name":"%s","input":%s}]}}`, id, id, name, input) + "\n"
+	if result != "<none>" {
+		line += fmt.Sprintf(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"%s","content":%q}]}}`, id, result) + "\n"
+	}
+	return line
 }
 
 // TestApplyClearNetFixedEvents hand-computes saved/extra/rework/net for a
@@ -46,9 +61,10 @@ func assistantTurn(fileArg string) string {
 // req1: ctx=150 (in100+cw50), out20, cleared0
 // req2: ctx=150 (in100+cw50), out20, cleared0
 // req3: ctx=180 (in100+cw80), out20, cleared40  <- clear fires here
-// req4: ctx=160 (in100+cw60), out25, cleared0, and its tool call repeats
+// req4: ctx=160 (in100+cw60), out25, cleared0, clearedToolUses=1 (req1's
 //
-//	req1's (now older than keep=1) call -> rework
+//	call, ordinal 0, is cleared in its context), and its tool call repeats
+//	req1's Read("fileA") with an identical tool_result -> rework
 //
 // saved  = 0+0+40+0 = 40
 // extra  = req3 only: expected=cf3-cf2=(180+40)-150=70; cw3=80 -> extra=10
@@ -60,13 +76,13 @@ func TestApplyClearNetFixedEvents(t *testing.T) {
 	events := `{"events":[` +
 		clearEvent(1, 100, 20, 50, 0) + "," +
 		clearEvent(2, 100, 20, 50, 0) + "," +
-		clearEvent(3, 100, 20, 80, 40) + "," +
-		clearEvent(4, 100, 25, 60, 0) +
+		clearEventUses(3, 100, 20, 80, 40, 1) + "," +
+		clearEventUses(4, 100, 25, 60, 0, 1) +
 		`]}`
-	log := assistantTurn("fileA") + "\n" +
-		assistantTurn("fileB") + "\n" +
-		assistantTurn("fileC") + "\n" +
-		assistantTurn("fileA") + "\n"
+	log := toolTurn("t1", "Read", `{"file_path":"fileA"}`, "A body") +
+		toolTurn("t2", "Read", `{"file_path":"fileB"}`, "B body") +
+		toolTurn("t3", "Read", `{"file_path":"fileC"}`, "C body") +
+		toolTurn("t4", "Read", `{"file_path":"fileA"}`, "A body")
 	dir, run := writeClearNetRun(t, events, log)
 	applyClearNet(dir, &run)
 
@@ -87,6 +103,107 @@ func TestApplyClearNetFixedEvents(t *testing.T) {
 		t.Fatalf("netPct = %v, want %v", derefTestPtr(run.ClearNetPct), wantPct)
 	}
 }
+
+// reworkOf runs applyClearNet on a 4-request run where req3 clears 40 input
+// tokens and req4 (ctx 160 + out 25 = 185) carries clearedUses, and returns
+// the rework pointer.
+func reworkOf(t *testing.T, clearedUses int, exclude, log string) *int {
+	t.Helper()
+	events := `{"events":[` +
+		clearEvent(1, 100, 20, 50, 0) + "," +
+		clearEvent(2, 100, 20, 50, 0) + "," +
+		clearEventUses(3, 100, 20, 80, 40, clearedUses) + "," +
+		clearEventUses(4, 100, 25, 60, 0, clearedUses) +
+		`]}`
+	dir, run := writeClearNetRun(t, events, log)
+	run.ClaudeClearExclude = exclude
+	applyClearNet(dir, &run)
+	return run.ClearReworkTokens
+}
+
+func TestClearReworkDefinition(t *testing.T) {
+	npm := `{"command":"npm test"}`
+	cases := []struct {
+		name        string
+		clearedUses int
+		exclude     string
+		log         string
+		want        *int
+	}{
+		{
+			// A cleared test re-run that returns new output is not caused by
+			// the clear.
+			name:        "rerun with different result",
+			clearedUses: 1,
+			log: toolTurn("t1", "Bash", npm, "1 failing") +
+				toolTurn("t2", "Read", `{"file_path":"b"}`, "B") +
+				toolTurn("t3", "Edit", `{"file_path":"b"}`, "ok") +
+				toolTurn("t4", "Bash", npm, "all passing"),
+			want: ptr(0),
+		},
+		{
+			// req2's Read("b") is older than keep=1 at req4 but only ordinal
+			// 0 (req1) was cleared.
+			name:        "older than keep but not cleared",
+			clearedUses: 1,
+			log: toolTurn("t1", "Read", `{"file_path":"a"}`, "A") +
+				toolTurn("t2", "Read", `{"file_path":"b"}`, "B") +
+				toolTurn("t3", "Read", `{"file_path":"c"}`, "C") +
+				toolTurn("t4", "Read", `{"file_path":"b"}`, "B"),
+			want: ptr(0),
+		},
+		{
+			// Bash is excluded, so req2's Read("b") is ordinal 0 and cleared.
+			name:        "excluded tool skipped in ordinals",
+			clearedUses: 1,
+			exclude:     "Bash, Grep",
+			log: toolTurn("t1", "Bash", npm, "ok") +
+				toolTurn("t2", "Read", `{"file_path":"b"}`, "B") +
+				toolTurn("t3", "Read", `{"file_path":"c"}`, "C") +
+				toolTurn("t4", "Read", `{"file_path":"b"}`, "B"),
+			want: ptr(185),
+		},
+		{
+			// Same run without the exclusion: ordinal 0 is the Bash call, so
+			// Read("b") (ordinal 1) is not cleared.
+			name:        "same run without exclusion",
+			clearedUses: 1,
+			log: toolTurn("t1", "Bash", npm, "ok") +
+				toolTurn("t2", "Read", `{"file_path":"b"}`, "B") +
+				toolTurn("t3", "Read", `{"file_path":"c"}`, "C") +
+				toolTurn("t4", "Read", `{"file_path":"b"}`, "B"),
+			want: ptr(0),
+		},
+		{
+			name:        "missing tool_result is unverified",
+			clearedUses: 1,
+			log: toolTurn("t1", "Read", `{"file_path":"a"}`, "<none>") +
+				toolTurn("t2", "Read", `{"file_path":"b"}`, "B") +
+				toolTurn("t3", "Read", `{"file_path":"c"}`, "C") +
+				toolTurn("t4", "Read", `{"file_path":"a"}`, "A"),
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reworkOf(t, tc.clearedUses, tc.exclude, tc.log)
+			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Fatalf("rework = %v, want %v", derefTestPtr(got), derefTestPtr(tc.want))
+			}
+		})
+	}
+}
+
+// TestParseClaudeTranscriptListContent checks that list-form tool_result
+// content concatenates its text blocks.
+func TestParseClaudeTranscriptListContent(t *testing.T) {
+	raw := `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"x","content":[{"type":"text","text":"a"},{"type":"image"},{"type":"text","text":"b"}]}]}}`
+	if got := parseClaudeTranscript([]byte(raw)).results["x"]; got != "ab" {
+		t.Fatalf("result = %q, want %q", got, "ab")
+	}
+}
+
+func ptr(n int) *int { return &n }
 
 // TestApplyClearNetNoClearIsZeroNotMissing checks that an "on" run where
 // --claude-clear never actually fired reports net=0 (a valid result), not a

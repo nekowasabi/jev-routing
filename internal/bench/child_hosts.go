@@ -46,6 +46,72 @@ func codexChildAttribution(agentLog string, snapshot []byte) (parent, child []in
 	return parent, child, childTokens, nil
 }
 
+// claudeChildAttribution splits a Claude Code run whose Agent-tool child
+// shares the parent's session key. Claude Code prints every assistant message
+// with parent_tool_use_id (empty for the parent) and the message's input
+// usage, which names exactly one proxy request; the parent's matched requests
+// must then sum to the CLI's parent-only result usage. Requests no message
+// names (the child's final report is not printed) go to the child.
+//
+// Why: Instead of partitionHostRequests' subset search, match each printed
+// message to its request. Reason: the subset search is exponential and caps
+// at 16 requests; a file-reading child makes more than that.
+func claudeChildAttribution(agentLog string, snapshot []byte) (parent, child []int64, childTokens int, err error) {
+	want, err := reportedHostUsage("claude", agentLog)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	requests, err := hostRequests(snapshot)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	raw, err := os.ReadFile(agentLog)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	isParent := make([]bool, len(requests))
+	used := make([]bool, len(requests))
+	var sum ModelUsage
+	for _, turn := range parseClaudeTranscript(raw).turns {
+		match := -1
+		for i, event := range requests {
+			if turn.hasUsage && turn.key == (usageKey{deref(event.Usage.InputTokens), deref(event.Usage.CachedTokens), deref(event.Usage.CacheWriteTokens)}) {
+				if match >= 0 {
+					return nil, nil, 0, fmt.Errorf("Claude message usage matches several requests")
+				}
+				match = i
+			}
+		}
+		if match < 0 || used[match] {
+			return nil, nil, 0, fmt.Errorf("Claude message usage matches no unique request")
+		}
+		used[match] = true
+		if turn.parent == "" {
+			isParent[match] = true
+			event := requests[match]
+			sum.Input += deref(event.Usage.InputTokens)
+			sum.Cached += deref(event.Usage.CachedTokens)
+			sum.CacheWrite += deref(event.Usage.CacheWriteTokens)
+			sum.Output += deref(event.Usage.OutputTokens)
+		}
+	}
+	if sum != want {
+		return nil, nil, 0, fmt.Errorf("Claude parent messages differ from CLI parent usage")
+	}
+	for i, event := range requests {
+		if isParent[i] {
+			parent = append(parent, event.Seq)
+			continue
+		}
+		child = append(child, event.Seq)
+		childTokens += hostRequestTokens("claude", event)
+	}
+	if len(child) == 0 || childTokens <= 0 {
+		return nil, nil, 0, fmt.Errorf("Claude child has no independently metered request")
+	}
+	return parent, child, childTokens, nil
+}
+
 // grokChildAttribution matches the headless CLI's parent-only model usage to
 // individual proxy requests. Grok's final JSON does not include child totals.
 func grokChildAttribution(agentLog string, snapshot []byte) (parent, child []int64, childTokens int, err error) {

@@ -164,10 +164,11 @@ func BuildComparisons(runs []RunRecord) ComparisonFile {
 			if k.task == "xcell-locate" && (!p.off.EvidenceComplete || !p.on.EvidenceComplete) {
 				row.Reasons = append(row.Reasons, "tool_sequence_unverified")
 			}
-			if k.task == "child-facts" && (!p.off.EvidenceComplete || !p.on.EvidenceComplete || !p.off.ParentChildVerified || !p.on.ParentChildVerified || p.off.ChildSessions < 1 || p.on.ChildSessions < 1) {
+			childTask := k.task == "child-facts" || k.task == "child-survey"
+			if childTask && (!p.off.EvidenceComplete || !p.on.EvidenceComplete || !p.off.ParentChildVerified || !p.on.ParentChildVerified || p.off.ChildSessions < 1 || p.on.ChildSessions < 1) {
 				row.Reasons = append(row.Reasons, "child_session_unverified")
 			}
-			if k.task != "child-facts" && ((p.off.SubagentCalls > 0 && !p.off.ParentChildVerified) || (p.on.SubagentCalls > 0 && !p.on.ParentChildVerified)) {
+			if !childTask && ((p.off.SubagentCalls > 0 && !p.off.ParentChildVerified) || (p.on.SubagentCalls > 0 && !p.on.ParentChildVerified)) {
 				row.Reasons = append(row.Reasons, "child_session_unverified")
 			}
 			if !baselineOK || !selectionOK {
