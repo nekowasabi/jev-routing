@@ -132,7 +132,7 @@ Agents are `codex`, `claude`, `grok`, `devin`, and `fake`. Real agents spend rea
 
 `--prices` takes `in,cached,out[,cachewrite]` in USD per million tokens; cache write defaults to 1.25× input and applies only to `claude`. Input totals include cache: for `claude` that adds the cache reads and cache writes Anthropic reports apart from input; for `codex` and `grok` cached tokens are already inside input.
 
-Results land in `results/<timestamp>/` (`runs.jsonl`, `comparison.json`, `summary.md`, and a directory per run). `comparison.json` records total tokens and savings only for pairs with matching settings, successful quality checks, required application or task evidence when applicable, and complete usage. Codex `compact-facts` compares the host's context limits with Jev selection and replacement disabled; it checks full reads of 20 files and scores the answer. A run without an explicit compact request still counts in that setting comparison, with request counts reported separately. Other incomparable pairs carry reasons and no savings number. Claude Code and Codex main-model usage is reconciled against their CLI totals; a child-session task additionally requires unique parent/child attribution. Additional model calls such as Codex auto-review remain in the proxy total. Grok's complete headless CLI usage can reconcile a canceled response without assigning it a fabricated per-request zero. Devin's validated ATIF step totals can supply a session total when the Connect responses omit usage. Child runs remain incomparable unless every child's usage and model are attributable. Per-run `proxy-events.json` is a local diagnostic record. `bench audit` re-reads agent logs.
+Results land in `results/<timestamp>/` (`runs.jsonl`, `comparison.json`, `summary.md`, and a directory per run). `comparison.json` records total tokens and savings only for pairs with matching settings, successful quality checks, required application or task evidence when applicable, and complete usage. Total tokens (`baselineTokens`/`selectionTokens`/`savedTokens`, and `summary.md`'s "Total tokens (upstream), median") counts only the parent/child agent CLI's upstream input (including cache) plus upstream output; Jev's own input/output (`jevInput`/`jevOutput`) is recorded separately and excluded from this total and from the effect decision, and a gap in Jev's own usage no longer makes a pair incomparable. Codex `compact-facts` compares the host's context limits with Jev selection and replacement disabled; it checks full reads of 20 files and scores the answer. A run without an explicit compact request still counts in that setting comparison, with request counts reported separately. Other incomparable pairs carry reasons and no savings number. Claude Code and Codex main-model usage is reconciled against their CLI totals; a child-session task additionally requires unique parent/child attribution. Additional model calls such as Codex auto-review remain in the proxy total. Grok's complete headless CLI usage can reconcile a canceled response without assigning it a fabricated per-request zero. Devin's validated ATIF step totals can supply a session total when the Connect responses omit usage. Child runs remain incomparable unless every child's usage and model are attributable. Per-run `proxy-events.json` is a local diagnostic record. `bench audit` re-reads agent logs.
 
 ### How to measure
 
@@ -378,3 +378,35 @@ Price-weighted (cache read 0.1, 1h cache write 2.0) the recommended setting is a
 - The "clear" path has not been verified live at the default 100000 trigger; bench contexts do not reach it.
 - The same-path metric assumes the path would be unchanged without clearing.
 - Rework counts only identical re-fetches, so it is a lower bound.
+
+## Codex
+
+Launch with `jev-routing run codex`. The only reduction enabled by default for Codex is truncating large tool results; `JEV_CODEX_TOOL_OUTPUT_TRUNCATE=off` disables it. Tool selection and Jev-based compaction replacement do not reduce tokens by default, for the reasons below. Details of every experiment are in [docs/MEMO.md](docs/MEMO.md).
+
+### Tool-result truncation (enabled by default)
+
+Any tool result in a Codex request (`function_call_output`, etc.) over 20,000 bytes is replaced with the first 10,000 bytes, the last 10,000 bytes, and an omission note. The note nudges the model to re-fetch the omitted part with `sed -n` or `rg` if it is needed. Because Codex resends the full history on every request, the same rule is applied to every entry in the history each time, not just the newest result, so the prompt cache prefix survives. It does not call Jev.
+
+- **Rationale**: Of 2,301 tool results sent in recent real sessions, 13% were over 20,000 bytes, but they accounted for 54% of the bytes. Codex on `gpt-5.6-terra` truncates tool results at 10,000 tokens, and the model chooses `max_output_tokens` on each call. Large results occur when the model chooses a large limit.
+- **Bench**: Task `large-facts` (recover facts near the start, middle, and end of six ~32KB logs), `gpt-5.6-terra`/`medium`, 6 pre-registered pairs. Quality was perfect across all 12 runs; median total-token reduction +8.19% (range −39.25% to +27.69%, 4 improved, 2 worse). Non-cached input fell in all 6 pairs (median 109,494→78,900). On the other hand, re-fetches of the omitted parts increased, request counts rose in 5 pairs, and median elapsed time grew from 48.0s to 61.1s. Because the interval crosses zero, the bench's effect verdict is `hold`.
+- This task is a stress test for when the model asks for large output (the task prompt instructs it to set `max_output_tokens` to 12,000 or more). The reduction rate for real work as a whole is unverified.
+
+```bash
+jev-routing bench --agent codex --model gpt-5.6-terra --effort medium \
+  --tasks large-facts --modes off,on --reps 6 --codex-tool-output-truncate
+```
+
+### Approaches not adopted
+
+| Investigation | Method | Result |
+|---|---|---|
+| Tool selection (default) | Standard Codex, `dual-facts --catalog 4` | Local candidates were 3, so the cost gate (`JEV_COST_GATE_MAX=3`) stopped it and Jev was never called. The added MCP tool is an external namespace and excluded from narrowing. Effect not computable |
+| Tool selection (Jev forced) | `JEV_COST_GATE_MAX=0`, `dual-facts`, 3 pairs | About 13k Jev tokens per run. The candidate list changed, and the first request's cache read went 24,320→0. Total differences swung between +81,082/−118,050/−17,826; kept as diagnosis only |
+| Jev-based compaction replacement | Replace Codex's compaction request with a Jev summary | Runs with 0/3 quality, bloated request bodies, and mismatches between CLI and upstream usage occurred. Disabled by default |
+| Lowering the compaction threshold | Standard Codex compaction, threshold 900000 vs. 55000, `compact-facts`, 6 pre-registered pairs | Median reduction −0.75% (range −11.70% to +16.77%). Not adopted |
+
+### Limitations
+
+- The bench covers one truncation task and one model (`gpt-5.6-terra`, `medium`).
+- The truncation effect is a stress-test figure; the reduction rate for real work and the extent of latency worsened by re-fetches are unverified.
+- The real-session analysis relies on local Codex records (`~/.codex/sessions`).
