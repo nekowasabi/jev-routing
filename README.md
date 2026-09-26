@@ -1,5 +1,52 @@
 # jev-routing
 
+> **This repository is archived (2026-09-26).** Based on our findings, we concluded that Jev-based tool selection and steering does not generically reduce AI agent token usage, and we ended development. It remains here to share the conclusions and the trial-and-error record. For the full history and data, see [RESEARCH.md](RESEARCH.md).
+
+## Conclusion
+
+**Goal**: reduce upstream tokens (parent + child input and output) used by AI agents such as Claude Code and Codex, while preserving quality. Jev (TypeSafe) usage is cheap and is not included in this metric.
+
+**Jev-based tool selection and steering did not become a generic reduction method.** The effect depends heavily on the model, and the same approach can swing in the opposite direction.
+
+| Target | Approach | Preregistered 6-pair reduction (median) | Verdict |
+|---|---|---:|---|
+| Codex `gpt-5.6-sol` | Force `tool_choice` while keeping the tool list (port of the jev-gateway approach) | **+19.30%** | Effective |
+| Codex `gpt-5.6-terra` | Same | −37.08% (increase) | Not adopted |
+| Codex `gpt-6-luna` | Same | −50.78% (increase) | Not adopted |
+| Claude Code `claude-opus-5-5` | Advice on the next tool (`advise`) | +1.67% | Not adopted |
+| Claude Code `claude-sonnet-5` | Same | Upstream difference ~0 | Not adopted |
+
+On the models that increased, forcing the tool roughly doubled the number of upstream requests at most.
+
+**The approach that did show an effect was shrinking context.**
+
+| Target | Approach | Effect | Default |
+|---|---|---|---|
+| Claude Code | Anthropic-native context editing (`clear_tool_uses_20250919`) + Jev's clearing gate | Median net reduction of 11.1% on the same path in runs where clearing occurred. Estimated upper bound in real sessions is about 6.3% overall | Off (enable with `JEV_CLAUDE_CLEAR_TOOL_USES=on`) |
+| Codex | Deterministic truncation of large tool results (omit the middle of anything over 20,000 bytes) | Median +8.19% under load testing (interval crosses zero) | On (disable with `JEV_CODEX_TOOL_OUTPUT_TRUNCATE=off`) |
+
+---
+**Measured token volumes (upstream input + output, excluding Jev. Each series is the preregistered 6 pairs, on the `chess-bugfix` task. Tool-result truncation only, `large-facts`)**
+
+| Series | Baseline total | Intervention total | Change in total | Per-run median baseline→intervention | Median per-pair reduction | Improved/worse |
+|---|---:|---:|---:|---|---:|---|
+| Codex `gpt-5.6-sol` · tool steering | 15,127,871 | 11,509,869 | **−23.92%** | 2,339,036 → 1,912,187 | +19.30% | 4/2 |
+| Codex `gpt-5.6-terra` · tool steering | 6,194,181 | 8,266,032 | +33.45% (increase) | 968,075 → 1,286,876 | −37.08% | 1/5 |
+| Codex `gpt-6-luna` · tool steering | 3,371,403 | 5,510,014 | +63.43% (increase) | 497,227 → 812,886 | −50.78% | 1/5 |
+| Claude Code `claude-opus-5-5` · advice | 701,885 | 680,083 | −3.11% | 118,671 → 119,439 | +1.67% | 3/3 |
+| Codex `gpt-5.6-terra` · tool-result truncation | 4,179,472 | 3,959,848 | **−5.25%** | 666,336 → 646,678 | +8.19% | 4/2 |
+
+"Change in total" compares the baseline and intervention sums across the 6 pairs (negative is a reduction). "Reduction" is the median of the per-pair `100×(baseline−intervention)/baseline` (positive is a reduction). Claude Code's context editing was evaluated by net reduction on the same path (median 11.1%), not by the total across runs, because the path differs sharply depending on whether clearing occurred.
+---
+
+**What showed no effect**: Jev-based replacement of `Read`, Jev-free deterministic synthesis of tool calls, and replacing or changing the threshold of Codex's compaction (compaction rarely occurs in real sessions, with an upper bound of 0.1–0.3%).
+
+**A measurement lesson**: even under identical conditions, total token differences between runs vary widely (−271% to +90% for Claude Code). Single comparisons or unpaired medians cannot support a judgment. Preregistering the verdict criteria before seeing results, and comparing in pairs, was essential.
+
+---
+(Everything below is the README as it was before archiving.)
+---
+
 [日本語版はこちら](README_ja.md)
 
 ## What this is
