@@ -41,7 +41,14 @@ On the models that increased, forcing the tool roughly doubled the number of ups
 
 **What showed no effect**: Jev-based replacement of `Read`, Jev-free deterministic synthesis of tool calls, and replacing or changing the threshold of Codex's compaction (compaction rarely occurs in real sessions, with an upper bound of 0.1–0.3%).
 
-**A measurement lesson**: even under identical conditions, total token differences between runs vary widely (−271% to +90% for Claude Code). Single comparisons or unpaired medians cannot support a judgment. Preregistering the verdict criteria before seeing results, and comparing in pairs, was essential.
+**Lessons learned** (details in [RESEARCH.md § 2](RESEARCH.md#2-lessons-learned)):
+
+- **Estimate the ceiling on real sessions before building.** Codex compaction, Jev `Read` replacement, and deterministic tool-call synthesis were built or tuned before an offline replay showed ceilings of 0.1–0.3%, below zero, and 0.28%.
+- **Find where the cost is.** Most cost is re-reading context every turn. Choosing the next tool changes neither turn count nor context size, so tool advice cannot save tokens.
+- **Read the host/API contract first.** Anthropic rejects forced `tool_choice` on Opus 5.5 and under manual extended thinking, and changing tools or `tool_choice` drops prompt-cache entries; some hosts report no usage at all. We learned these after implementing.
+- **A bench is not real work, and one model is not another.** Real sessions carry a ~80k-token fixed prefix that the bench did not, and the same steering saved 19% on one model while adding 37–51% on two others.
+- **Test the meter, then pre-register and pair.** Most early "effects" were measurement bugs (zero-filled missing usage, miscounted requests and subagents). Identical runs varied from −271% to +90%, so only pre-registered, paired comparisons held up.
+- **What worked was shrinking context** with native or deterministic mechanisms, not replacing the agent's decisions.
 
 ---
 (Everything below is the README as it was before archiving.)
@@ -377,7 +384,7 @@ jev-routing bench --agent claude --tasks chess-bugfix --modes off,on --reps 6 \
 
 ### Why tool-call replacement was abandoned for Claude Code
 
-Claude Code runs with extended thinking on, and the Anthropic API refuses `tool_choice` forcing while thinking; changing the tool list or `tool_choice` also breaks the prompt cache. That leaves only advising the next tool, not steering it, and advice cannot narrow the upstream request or history size — only the per-turn Jev judgment cost, which stacks every turn.
+Anthropic rejects forced `tool_choice` under manual extended thinking and, on Claude Opus 5.5, under every thinking mode (adaptive thinking on other models such as Sonnet 5 allows it). Changing the tool list invalidates the whole prompt cache, and changing `tool_choice` invalidates the cached message blocks, that is, the conversation history. That leaves only advising the next tool, not steering it, and advice cannot narrow the upstream request or history size — only the per-turn Jev judgment cost, which stacks every turn.
 
 | Investigation | Method | Result |
 |---|---|---|
@@ -432,7 +439,7 @@ Launch with `jev-routing run codex`. The only reduction enabled by default for C
 
 ### Tool-result truncation (enabled by default)
 
-Any tool result in a Codex request (`function_call_output`, etc.) over 20,000 bytes is replaced with the first 10,000 bytes, the last 10,000 bytes, and an omission note. The note nudges the model to re-fetch the omitted part with `sed -n` or `rg` if it is needed. Because Codex resends the full history on every request, the same rule is applied to every entry in the history each time, not just the newest result, so the prompt cache prefix survives. It does not call Jev.
+Any tool result in a Codex request (`function_call_output`, etc.) over 20,000 bytes is replaced with the first 10,000 bytes, the last 10,000 bytes, and an omission note. The note nudges the model to re-fetch the omitted part with `sed -n` or `rg` if it is needed. Because Codex resends the full history on every request, the same rule is applied to every entry in the history each time, not just the newest result, so the prompt cache prefix survives. (This is what we observed through this proxy in September 2026; current openai/codex can send only new items with `previous_response_id` over its WebSocket transport.) It does not call Jev.
 
 - **Rationale**: Of 2,301 tool results sent in recent real sessions, 13% were over 20,000 bytes, but they accounted for 54% of the bytes. Codex on `gpt-5.6-terra` truncates tool results at 10,000 tokens, and the model chooses `max_output_tokens` on each call. Large results occur when the model chooses a large limit.
 - **Bench**: Task `large-facts` (recover facts near the start, middle, and end of six ~32KB logs), `gpt-5.6-terra`/`medium`, 6 pre-registered pairs. Quality was perfect across all 12 runs; median total-token reduction +8.19% (range −39.25% to +27.69%, 4 improved, 2 worse). Non-cached input fell in all 6 pairs (median 109,494→78,900). On the other hand, re-fetches of the omitted parts increased, request counts rose in 5 pairs, and median elapsed time grew from 48.0s to 61.1s. Because the interval crosses zero, the bench's effect verdict is `hold`.
